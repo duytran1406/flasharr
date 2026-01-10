@@ -4,8 +4,26 @@
 
 {% block content %}
 <div class="downloads-container">
-    <!-- Toolbar -->
-    <div class="downloads-toolbar" style="justify-content: flex-end;">
+    <!-- Functional Toolbar -->
+    <div class="downloads-toolbar"
+        style="justify-content: space-between; background: var(--bg-card); padding: 0.75rem 1rem; border-radius: 12px; border: 1px solid var(--border-color); backdrop-filter: blur(10px);">
+        <div style="display: flex; gap: 0.75rem;">
+            <button class="btn-primary" onclick="bridge.startAllDownloads()" title="Start All"
+                style="background: rgba(16, 185, 129, 0.2); color: #10b981; border-color: rgba(16, 185, 129, 0.3);">
+                <span class="material-icons">play_arrow</span>
+                Start All
+            </button>
+            <button class="btn-primary" onclick="bridge.pauseAllDownloads()" title="Pause All"
+                style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; border-color: rgba(245, 158, 11, 0.3);">
+                <span class="material-icons">pause</span>
+                Pause All
+            </button>
+            <button class="btn-primary" onclick="bridge.stopAllDownloads()" title="Stop All"
+                style="background: rgba(239, 68, 68, 0.2); color: #ef4444; border-color: rgba(239, 68, 68, 0.3);">
+                <span class="material-icons">stop</span>
+                Stop All
+            </button>
+        </div>
         <button class="btn-primary" onclick="alert('Add links functionality coming soon')"
             style="display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 1.25rem; border-radius: 8px;">
             <span class="material-icons">queue</span>
@@ -23,12 +41,22 @@
                             NAME <span class="material-icons" id="sort-icon-name"
                                 style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
                         </th>
+                        <th onclick="bridge.sortDownloads('category')" style="cursor: pointer;">
+                            CATEGORY <span class="material-icons" id="sort-icon-category"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
                         <th onclick="bridge.sortDownloads('size')" style="cursor: pointer;">
                             SIZE <span class="material-icons" id="sort-icon-size"
                                 style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
                         </th>
-                        <th style="width: 200px;">PROGRESS</th>
-                        <th>STATUS</th>
+                        <th onclick="bridge.sortDownloads('progress')" style="cursor: pointer; width: 180px;">
+                            PROGRESS <span class="material-icons" id="sort-icon-progress"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
+                        <th onclick="bridge.sortDownloads('status')" style="cursor: pointer;">
+                            STATUS <span class="material-icons" id="sort-icon-status"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
                         <th onclick="bridge.sortDownloads('speed')" style="cursor: pointer;">
                             SPEED <span class="material-icons" id="sort-icon-speed"
                                 style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
@@ -37,12 +65,12 @@
                             ETA <span class="material-icons" id="sort-icon-eta"
                                 style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
                         </th>
-                        <th style="text-align: center;">ACTIONS</th>
+                        <th style="text-align: right; padding-right: 1.5rem;">ACTIONS</th>
                     </tr>
                 </thead>
                 <tbody id="downloads-full-list">
                     <tr>
-                        <td colspan="7" style="text-align: center; padding: 5rem; color: var(--text-muted);">
+                        <td colspan="8" style="text-align: center; padding: 5rem; color: var(--text-muted);">
                             <div style="display: flex; flex-direction: column; align-items: center; gap: 1rem;">
                                 <span class="material-icons"
                                     style="font-size: 3rem; opacity: 0.2;">cloud_download</span>
@@ -53,21 +81,38 @@
                 </tbody>
             </table>
         </div>
+
+        <!-- Pagination -->
+        <div id="downloads-pagination" class="pagination-container"
+            style="display: flex; align-items: center; justify-content: flex-end; gap: 1rem; padding: 1rem 1.5rem; border-top: 1px solid var(--border-color);">
+            <span id="pagination-info" style="font-size: 0.85rem; color: var(--text-muted);">Showing 0-0 of 0</span>
+            <div style="display: flex; gap: 0.5rem;">
+                <button id="prev-page" class="icon-btn" onclick="bridge.changePage(-1)"
+                    style="border: 1px solid var(--border-color); border-radius: 6px; padding: 4px;">
+                    <span class="material-icons" style="font-size: 18px;">chevron_left</span>
+                </button>
+                <button id="next-page" class="icon-btn" onclick="bridge.changePage(1)"
+                    style="border: 1px solid var(--border-color); border-radius: 6px; padding: 4px;">
+                    <span class="material-icons" style="font-size: 18px;">chevron_right</span>
+                </button>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-    // Downloads page specific initialization
     document.addEventListener('DOMContentLoaded', () => {
-        // Initial load
-        if (bridge) bridge.loadDownloads();
+        if (bridge) {
+            bridge.currentPage = 1;
+            bridge.itemsPerPage = 8;
+            bridge.loadDownloads();
+        }
 
-        // Frequent refresh for the dedicated page
         setInterval(() => {
             if (bridge) bridge.loadDownloads();
-        }, 2000);
+        }, 5000);
     });
 </script>
 {% endblock %}

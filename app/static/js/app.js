@@ -316,7 +316,7 @@ class FshareBridge {
             if (data.downloads) {
                 this.downloads = data.downloads;
 
-                // Keep current sort
+                // Re-apply sort if active
                 if (this.sortColumn) {
                     const col = this.sortColumn;
                     const dir = this.sortDirection;
@@ -325,10 +325,12 @@ class FshareBridge {
                         let aVal, bVal;
                         switch (col) {
                             case 'name': aVal = a.name.toLowerCase(); bVal = b.name.toLowerCase(); break;
+                            case 'category': aVal = (a.category || '').toLowerCase(); bVal = (b.category || '').toLowerCase(); break;
                             case 'size': aVal = a.size_bytes || 0; bVal = b.size_bytes || 0; break;
                             case 'speed': aVal = a.speed_raw || 0; bVal = b.speed_raw || 0; break;
                             case 'eta': aVal = a.eta_seconds || 0; bVal = b.eta_seconds || 0; break;
                             case 'status': aVal = a.status.toLowerCase(); bVal = b.status.toLowerCase(); break;
+                            case 'progress': aVal = a.progress || 0; bVal = b.progress || 0; break;
                             default: return 0;
                         }
                         if (aVal < bVal) return dir === 'asc' ? -1 : 1;
@@ -344,10 +346,12 @@ class FshareBridge {
                     this.renderDashboardDownloads(this.downloads.slice(0, 5));
                 }
 
-                // If we are on the downloads page, show all and handle search
+                // If we are on the downloads page, show all and handle search/pagination
                 const downloadsPageContainer = document.getElementById('downloads-full-list');
                 if (downloadsPageContainer) {
-                    this.renderFullDownloads(this.getFilteredDownloads());
+                    const filtered = this.getFilteredDownloads();
+                    this.updatePagination(filtered.length);
+                    this.renderFullDownloads(this.getPagedDownloads(filtered));
                 }
             }
         } catch (error) {
@@ -359,6 +363,38 @@ class FshareBridge {
         const query = (document.getElementById('downloads-search-input')?.value || '').toLowerCase();
         if (!query) return this.downloads;
         return this.downloads.filter(d => d.name.toLowerCase().includes(query));
+    }
+
+    getPagedDownloads(downloads) {
+        if (!this.currentPage) this.currentPage = 1;
+        if (!this.itemsPerPage) this.itemsPerPage = 8;
+
+        const start = (this.currentPage - 1) * this.itemsPerPage;
+        const end = start + this.itemsPerPage;
+        return downloads.slice(start, end);
+    }
+
+    updatePagination(totalItems) {
+        const info = document.getElementById('pagination-info');
+        if (!info) return;
+
+        const totalPages = Math.ceil(totalItems / this.itemsPerPage) || 1;
+        if (this.currentPage > totalPages) this.currentPage = totalPages;
+
+        const start = totalItems === 0 ? 0 : (this.currentPage - 1) * this.itemsPerPage + 1;
+        const end = Math.min(this.currentPage * this.itemsPerPage, totalItems);
+
+        info.textContent = `Showing ${start}-${end} of ${totalItems}`;
+
+        const prevBtn = document.getElementById('prev-page');
+        const nextBtn = document.getElementById('next-page');
+        if (prevBtn) prevBtn.disabled = this.currentPage === 1;
+        if (nextBtn) nextBtn.disabled = this.currentPage === totalPages;
+    }
+
+    changePage(delta) {
+        this.currentPage += delta;
+        this.loadDownloads();
     }
 
     renderDashboardDownloads(downloads) {
@@ -378,7 +414,7 @@ class FshareBridge {
         if (!container) return;
 
         if (downloads.length === 0) {
-            container.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 5rem; color: var(--text-muted);">No downloads found</td></tr>`;
+            container.innerHTML = `<tr><td colspan="8" style="text-align: center; padding: 5rem; color: var(--text-muted);">No downloads found</td></tr>`;
             return;
         }
 
@@ -400,28 +436,14 @@ class FshareBridge {
         this.downloads.sort((a, b) => {
             let aVal, bVal;
             switch (column) {
-                case 'name':
-                    aVal = a.name.toLowerCase();
-                    bVal = b.name.toLowerCase();
-                    break;
-                case 'size':
-                    aVal = a.size_bytes || 0;
-                    bVal = b.size_bytes || 0;
-                    break;
-                case 'speed':
-                    aVal = a.speed_raw || 0;
-                    bVal = b.speed_raw || 0;
-                    break;
-                case 'eta':
-                    aVal = a.eta_seconds || 0;
-                    bVal = b.eta_seconds || 0;
-                    break;
-                case 'status':
-                    aVal = a.status.toLowerCase();
-                    bVal = b.status.toLowerCase();
-                    break;
-                default:
-                    return 0;
+                case 'name': aVal = a.name.toLowerCase(); bVal = b.name.toLowerCase(); break;
+                case 'category': aVal = (a.category || '').toLowerCase(); bVal = (b.category || '').toLowerCase(); break;
+                case 'size': aVal = a.size_bytes || 0; bVal = b.size_bytes || 0; break;
+                case 'speed': aVal = a.speed_raw || 0; bVal = b.speed_raw || 0; break;
+                case 'eta': aVal = a.eta_seconds || 0; bVal = b.eta_seconds || 0; break;
+                case 'status': aVal = a.status.toLowerCase(); bVal = b.status.toLowerCase(); break;
+                case 'progress': aVal = a.progress || 0; bVal = b.progress || 0; break;
+                default: return 0;
             }
 
             if (aVal < bVal) return this.sortDirection === 'asc' ? -1 : 1;
@@ -433,7 +455,9 @@ class FshareBridge {
 
         // Immediate re-render
         if (document.getElementById('downloads-full-list')) {
-            this.renderFullDownloads(this.getFilteredDownloads());
+            const filtered = this.getFilteredDownloads();
+            this.updatePagination(filtered.length);
+            this.renderFullDownloads(this.getPagedDownloads(filtered));
         }
         if (document.getElementById('download-manager-list')) {
             this.renderDashboardDownloads(this.downloads.slice(0, 5));
@@ -472,12 +496,12 @@ class FshareBridge {
                 <td><span class="status-badge ${statusClass}">${d.status.toUpperCase()}</span></td>
                 <td>${d.speed}</td>
                 <td>
-                    <div class="progress-bar" style="width: 100px;">
+                    <div class="progress-bar" style="width: 80px;">
                         <div class="progress-fill" style="width: ${d.progress}%"></div>
                     </div>
                 </td>
-                <td>
-                    <div class="download-controls">
+                <td style="text-align: right; padding-right: 1rem;">
+                    <div class="download-controls" style="justify-content: flex-end;">
                         <button class="icon-btn" onclick="bridge.toggleDownload(${d.fid})">${d.status === 'Running' ? '<span class="material-icons" style="font-size: 18px">pause</span>' : '<span class="material-icons" style="font-size: 18px">play_arrow</span>'}</button>
                     </div>
                 </td>
@@ -493,6 +517,7 @@ class FshareBridge {
         return `
              <tr>
                 <td><div class="download-name" title="${this.escapeHtml(d.name)}">${this.escapeHtml(d.name)}</div></td>
+                <td style="color: var(--text-muted); font-size: 0.85rem;">${d.category || 'Default'}</td>
                 <td>${d.size}</td>
                 <td>
                     <div style="display: flex; align-items: center; gap: 0.75rem;">
@@ -505,8 +530,8 @@ class FshareBridge {
                 <td><span class="status-badge ${statusClass}">${d.status.toUpperCase()}</span></td>
                 <td>${d.speed}</td>
                 <td>${d.eta}</td>
-                <td>
-                    <div class="download-controls">
+                <td style="text-align: right; padding-right: 1.5rem;">
+                    <div class="download-controls" style="justify-content: flex-end;">
                         <button class="icon-btn" title="Toggle" onclick="bridge.toggleDownload(${d.fid})">
                             <span class="material-icons" style="font-size: 20px">${d.status === 'Running' ? 'pause' : 'play_arrow'}</span>
                         </button>
@@ -517,6 +542,28 @@ class FshareBridge {
                 </td>
             </tr>
         `;
+    }
+
+    // Global Action Logic
+    async startAllDownloads() {
+        if (confirm('Resume all paused downloads?')) {
+            const resp = await fetch('/api/downloads/start_all', { method: 'POST' });
+            if ((await resp.json()).success) this.loadDownloads();
+        }
+    }
+
+    async pauseAllDownloads() {
+        if (confirm('Pause all active downloads?')) {
+            const resp = await fetch('/api/downloads/pause_all', { method: 'POST' });
+            if ((await resp.json()).success) this.loadDownloads();
+        }
+    }
+
+    async stopAllDownloads() {
+        if (confirm('Stop all active downloads?')) {
+            const resp = await fetch('/api/downloads/stop_all', { method: 'POST' });
+            if ((await resp.json()).success) this.loadDownloads();
+        }
     }
 
     createDownloadRow(d) {

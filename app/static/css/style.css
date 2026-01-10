@@ -194,6 +194,41 @@ body {
   background: rgba(30, 41, 59, 0.9);
 }
 
+.downloads-toolbar {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  align-items: center;
+}
+
+.pagination-container {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1.5rem;
+  color: var(--text-muted);
+}
+
+.pagination-container button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  width: 32px;
+  height: 32px;
+  transition: all 0.2s;
+}
+
+.pagination-container button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+  color: white;
+}
+
+.pagination-container button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
 /* Sidebar Nav */
 .sidebar-nav {
   flex: 1;

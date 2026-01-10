@@ -335,5 +335,32 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
         except Exception as e:
             logger.error(f"Delete download error: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
+
+    @web_ui_bp.route('/api/downloads/start_all', methods=['POST'])
+    def api_start_all():
+        """Unpause pyLoad server - resumes all downloads"""
+        try:
+            response = pyload_client.session.get(f"{pyload_client.base_url}/api/unpause", timeout=5)
+            return jsonify({'success': response.status_code == 200})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @web_ui_bp.route('/api/downloads/pause_all', methods=['POST'])
+    def api_pause_all():
+        """Pause pyLoad server - pauses all downloads"""
+        try:
+            response = pyload_client.session.get(f"{pyload_client.base_url}/api/pause", timeout=5)
+            return jsonify({'success': response.status_code == 200})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
+
+    @web_ui_bp.route('/api/downloads/stop_all', methods=['POST'])
+    def api_stop_all():
+        """Stop all active downloads"""
+        try:
+            response = pyload_client.session.get(f"{pyload_client.base_url}/api/stop_all_downloads", timeout=5)
+            return jsonify({'success': response.status_code == 200})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)}), 500
     
     return web_ui_bp

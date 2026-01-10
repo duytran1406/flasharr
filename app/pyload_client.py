@@ -135,7 +135,8 @@ class PyLoadClient:
                         "speed_raw": speed_raw,
                         "size": link.get('format_size', '0 B'),
                         "size_bytes": link.get('size', 0),
-                        "progress": progress
+                        "progress": progress,
+                        "category": package.get('category', 'Default')
                     })
             
             return formatted_queue

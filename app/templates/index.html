@@ -110,8 +110,11 @@
                         SPEED <span class="material-icons" id="dash-sort-icon-speed"
                             style="font-size: 14px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
                     </th>
-                    <th style="width: 100px;">PROGRESS</th>
-                    <th style="text-align: center;">ACTIONS</th>
+                    <th onclick="bridge.sortDownloads('progress')" style="cursor: pointer; width: 100px;">
+                        PROGRESS <span class="material-icons" id="dash-sort-icon-progress"
+                            style="font-size: 14px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                    </th>
+                    <th style="text-align: right; padding-right: 1.5rem;">ACTIONS</th>
                 </tr>
             </thead>
             <tbody id="download-manager-list">
