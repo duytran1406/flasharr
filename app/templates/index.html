@@ -1,181 +1,123 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard - Fshare-Arr Bridge{% endblock %}
+{% block title %}Dashboard - Fshare Nexus{% endblock %}
 
 {% block content %}
-<h1 class="page-title">Dashboard</h1>
-
-<!-- Status Widgets Row -->
+<!-- Status Grid -->
 <div class="dashboard-grid">
-    <!-- Network Graph -->
-    <div class="widget">
-        <div class="widget-header">
-            <div class="widget-title">
-                <span class="widget-icon">📈</span>
-                1. Network Usage
+    <!-- Network Graph Card -->
+    <div class="service-card">
+        <div class="service-header">
+            <div class="service-icon">
+                <img src="{{ url_for('static', filename='images/network-icon.png') }}" onerror="this.onerror=null; this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwb2x5bGluZSBwb2ludHM9IjIyIDEyIDE4IDEyIDE1IDIx 
+OSAzIDYgMTIgMiAxMiIvPjwvc3ZnPg=='" alt="Network" style="width: 24px; height: 24px;">
             </div>
-            <div class="widget-status online" id="network-status-indicator"></div>
+            <div class="service-title">Network Traffic</div>
+            <div class="service-status">
+                <span class="status-badge running" id="network-status-text">ONLINE</span>
+            </div>
         </div>
-        <div class="widget-content" style="padding: 0;">
-            <div class="network-graph-container">
-                <canvas id="network-graph" width="800" height="200"></canvas>
-                <div class="graph-overlay">
-                    <div class="graph-stats">
-                        <div class="stat-item">
-                            <span class="stat-label">CURRENT</span>
-                            <span class="stat-value" id="current-speed">0 B/s</span>
-                        </div>
-                        <div class="stat-item">
-                            <span class="stat-label">PEAK</span>
-                            <span class="stat-value" id="peak-speed">0 B/s</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
+
+        <div class="stat-row">
+            <span class="stat-label">CURRENT SPEED</span>
+            <span class="stat-value" id="current-speed">0 B/s</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">PEAK SPEED</span>
+            <span class="stat-value" id="peak-speed">0 B/s</span>
+        </div>
+
+        <div class="network-graph-container">
+            <canvas id="network-graph" height="150"></canvas>
         </div>
     </div>
 
-    <!-- Downloader Status -->
-    <div class="widget">
-        <div class="widget-header">
-            <div class="widget-title">
-                <span class="widget-icon">⚡</span>
-                2. Downloader
+    <!-- Downloader Card -->
+    <div class="service-card">
+        <div class="service-header">
+            <div class="service-icon">
+                <img src="{{ url_for('static', filename='images/download-icon.png') }}"
+                    onerror="this.onerror=null; this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0yMSAxNXY0YTIgMiAwIDAgMS0yIDJIMUM1YTIgMiAwIDAgMS0yLTJ2LTRtNy0xMGw1IDUgNS01bS01IDVWMiIvPjwvc3ZnPg=='"
+                    alt="Download" style="width: 24px; height: 24px;">
             </div>
-            <div class="widget-status online" id="pyload-status-indicator"></div>
+            <div class="service-title">Fshare Downloader</div>
+            <div class="service-status">
+                <div class="widget-status online" id="pyload-status-indicator"></div>
+            </div>
         </div>
-        <div class="widget-content">
-            <div class="widget-metric">
-                <span class="metric-label">Fshare Account</span>
-                <span class="status-badge success" id="fshare-account-status">PREMIUM</span>
-            </div>
-            <div class="widget-metric">
-                <span class="metric-label">Active Downloads</span>
-                <span class="metric-value accent-cyan" id="active-downloads-count">08</span>
-            </div>
-            <div class="widget-metric">
-                <span class="metric-label">Queue Count</span>
-                <span class="metric-value accent-cyan" id="queue-count">154</span>
-            </div>
+
+        <div class="stat-row">
+            <span class="stat-label">ACCOUNT STATUS</span>
+            <span class="status-badge success" id="fshare-account-status">CHECKING...</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">ACTIVE DOWNLOADS</span>
+            <span class="stat-value" id="active-downloads-count">0</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">QUEUE SIZE</span>
+            <span class="stat-value" id="queue-count">0</span>
         </div>
     </div>
 
-    <!-- Search Engine -->
-    <div class="widget">
-        <div class="widget-header">
-            <div class="widget-title">
-                <span class="widget-icon">🔍</span>
-                3. Search Engine
+    <!-- Search Engine Card -->
+    <div class="service-card">
+        <div class="service-header">
+            <div class="service-icon">
+                <img src="{{ url_for('static', filename='images/search-icon.png') }}"
+                    onerror="this.onerror=null; this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxjaXJjbGUgY3g9IjExIiBjeT0iMTEiIHI9IjgiLz48bGluZSB4MT0iMjEiIHkxPSIyMSIgeDI9IjE2LjY1IiB5Mj0iMTYuNjUiLz48L3N2Zz4='"
+                    alt="Search" style="width: 24px; height: 24px;">
             </div>
-            <div class="widget-status online" id="timfshare-status-indicator"></div>
+            <div class="service-title">TimFshare Indexer</div>
         </div>
-        <div class="widget-content">
-            <div class="widget-metric">
-                <span class="metric-label">TimFshare API</span>
-                <span class="status-badge success" id="timfshare-status">ONLINE</span>
-            </div>
-            <div class="widget-metric">
-                <span class="metric-label">Health Check</span>
-                <span class="metric-value accent-green" id="api-health">100%</span>
-            </div>
-            <div class="widget-metric">
-                <span class="metric-label">Response Time</span>
-                <span class="metric-value" id="api-ping">45ms</span>
-            </div>
+
+        <div class="stat-row">
+            <span class="stat-label">API STATUS</span>
+            <span class="status-badge success" id="timfshare-status">ONLINE</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">HEALTH</span>
+            <span class="stat-value" id="api-health">100%</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">LATENCY</span>
+            <span class="stat-value" id="api-ping">--ms</span>
         </div>
     </div>
 </div>
 
-
 <!-- Download Manager -->
-<div class="widget">
-    <div class="widget-header">
-        <div class="widget-title">
-            <span class="widget-icon">📥</span>
-            5. Download Manager
-            <span style="font-size: 0.7rem; color: var(--text-muted); font-weight: 400; margin-left: 0.5rem;">
-                LATEST ACTIVE PROCESSING PIPELINE
-            </span>
+<div class="service-card" style="margin-top: 1.5rem;">
+    <div class="service-header">
+        <div class="service-icon">
+            <img src="{{ url_for('static', filename='images/manager-icon.png') }}"
+                onerror="this.onerror=null; this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0xNCAySDZhMiAyIDAgMCAwLTIgMnYxNmEyIDIgMCAwIDAgMiAyaDEyYTIgMiAwIDAgMCAyLTJWOHoiLz48cG9seWxpbmUgcG9pbnRzPSIxNCAyIDE0IDggMjAgOCIvPjxsaW5lIHgxPSIxNiIgeTE9IjEzIiB4Mj0iOCIgeTI9IjEzIi8+PGxpbmUgeDE9IjE2IiB5MT0iMTciIHgyPSI4IiB5Mj0iMTciLz48cG9seWxpbmUgcG9pbnRzPSIxMCA5IDkgOSA4IDkiLz48L3N2Zz4='"
+                alt="Manager" style="width: 24px; height: 24px;">
         </div>
+        <div class="service-title">Active Downloads</div>
     </div>
-    <div class="widget-content" style="padding: 0; margin-top: 1rem;">
+
+    <div style="overflow-x: auto;">
         <table class="download-table">
             <thead>
                 <tr>
-                    <th>
-                        <div class="sortable-header" onclick="bridge.sortDownloads('name')">
-                            NAME <span class="sort-arrow" id="sort-arrow-name">↕</span>
-                        </div>
-                    </th>
-                    <th>
-                        <div class="sortable-header" onclick="bridge.sortDownloads('size')">
-                            SIZE <span class="sort-arrow" id="sort-arrow-size">↕</span>
-                        </div>
-                    </th>
-                    <th>
-                        <div class="sortable-header" onclick="bridge.sortDownloads('status')">
-                            STATUS <span class="sort-arrow" id="sort-arrow-status">↕</span>
-                        </div>
-                    </th>
-                    <th>
-                        <div class="sortable-header" onclick="bridge.sortDownloads('speed')">
-                            SPEED <span class="sort-arrow" id="sort-arrow-speed">↕</span>
-                        </div>
-                    </th>
-                    <th>
-                        <div class="sortable-header" onclick="bridge.sortDownloads('progress')">
-                            PROGRESS <span class="sort-arrow" id="sort-arrow-progress">↕</span>
-                        </div>
-                    </th>
-                    <th>CONTROL</th>
+                    <th onclick="bridge.sortDownloads('name')" style="cursor: pointer">NAME <span
+                            id="sort-arrow-name">↕</span></th>
+                    <th onclick="bridge.sortDownloads('size')" style="cursor: pointer">SIZE <span
+                            id="sort-arrow-size">↕</span></th>
+                    <th onclick="bridge.sortDownloads('status')" style="cursor: pointer">STATUS <span
+                            id="sort-arrow-status">↕</span></th>
+                    <th onclick="bridge.sortDownloads('speed')" style="cursor: pointer">SPEED <span
+                            id="sort-arrow-speed">↕</span></th>
+                    <th onclick="bridge.sortDownloads('progress')" style="cursor: pointer">PROGRESS <span
+                            id="sort-arrow-progress">↕</span></th>
+                    <th>ACTIONS</th>
                 </tr>
             </thead>
             <tbody id="download-manager-list">
                 <tr>
-                    <td>
-                        <div class="download-name">Arcane.S02E02.2160p.NOR.mkv</div>
-                        <div style="font-size: 0.7rem; color: var(--text-muted);">ARCANE | 2160p-NOR-01</div>
-                    </td>
-                    <td class="download-size">8.62 GB</td>
-                    <td><span class="status-badge info">DOWNLOADING</span></td>
-                    <td>
-                        <div class="download-progress">
-                            <div class="progress-bar" style="width: 120px;">
-                                <div class="progress-fill" style="width: 78%"></div>
-                            </div>
-                            <span class="progress-text">78.5%</span>
-                            <span style="font-size: 0.7rem; color: var(--text-muted);">12.3 MB/s</span>
-                        </div>
-                    </td>
-                    <td>
-                        <div class="download-controls">
-                            <button class="icon-btn" title="Pause">⏸</button>
-                            <button class="icon-btn delete-btn" title="Delete">🗑</button>
-                        </div>
-                    </td>
-                </tr>
-                <tr>
-                    <td>
-                        <div class="download-name">Linux.Kernel.v6.11.Stable.tar.gz</div>
-                        <div style="font-size: 0.7rem; color: var(--text-muted);">COMPLETED | 13m AGO</div>
-                    </td>
-                    <td class="download-size">214.5 MB</td>
-                    <td><span class="status-badge success">SUCCESS</span></td>
-                    <td>
-                        <div class="download-progress">
-                            <div class="progress-bar" style="width: 120px;">
-                                <div class="progress-fill" style="width: 100%; background: var(--accent-green);"></div>
-                            </div>
-                            <span class="progress-text">100%</span>
-                            <span style="font-size: 0.7rem; color: var(--accent-green);">VERIFIED</span>
-                        </div>
-                    </td>
-                    <td>
-                        <div class="download-controls">
-                            <button class="icon-btn" title="Replay">↻</button>
-                            <button class="icon-btn delete-btn" title="Delete">🗑</button>
-                        </div>
-                    </td>
+                    <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">Loading
+                        downloads...</td>
                 </tr>
             </tbody>
         </table>
@@ -183,33 +125,19 @@
 </div>
 
 <!-- System Log -->
-<div class="widget" style="margin-top: 1.5rem;">
-    <div class="widget-header">
-        <div class="widget-title">
-            <span class="widget-icon">📋</span>
-            4. System Log
+<div class="service-card" style="margin-top: 1.5rem;">
+    <div class="service-header">
+        <div class="service-icon">
+            <img src="{{ url_for('static', filename='images/log-icon.png') }}"
+                onerror="this.onerror=null; this.src='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0yMSA4djEzSDdWOGwtMS0xaDE3bC0xIDF6bS03IDE3bC0yLTJoMm0tMiAyVjkiLz48L3N2Zz4='"
+                alt="Log" style="width: 24px; height: 24px;">
         </div>
-        <a href="#" class="status-badge info" style="text-decoration: none;">VIEW STREAM</a>
+        <div class="service-title">System Log</div>
     </div>
-    <div class="widget-content">
-        <div class="log-list" id="system-log">
-            <div class="log-entry info">
-                <span class="log-time">[Loading...]</span>
-                <span class="log-message">Fetching container logs...</span>
-            </div>
-        </div>
+
+    <div id="system-log"
+        style="font-family: 'Courier New', monospace; font-size: 0.8rem; max-height: 200px; overflow-y: auto; color: var(--text-muted);">
+        <!-- Logs will be injected here -->
     </div>
 </div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-    // Auto-refresh dashboard data
-    setInterval(() => {
-        if (bridge) {
-            bridge.loadDashboardData();
-            bridge.loadDownloads();
-        }
-    }, 5000);
-</script>
 {% endblock %}

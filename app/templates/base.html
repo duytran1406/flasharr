@@ -5,92 +5,39 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Fshare-Arr Bridge{% endblock %}</title>
+    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.png') }}">
 </head>
 
 <body>
     <div class="app-container">
-        <!-- Sidebar -->
-        <aside class="sidebar">
-            <div class="sidebar-brand">
-                <div class="brand-icon">
-                    <img src="{{ url_for('static', filename='images/fshare.png') }}" alt="Fshare">
-                </div>
-                <div class="brand-name">Fshare Nexus</div>
+        <!-- Header -->
+        <header class="header">
+            <div class="brand">
+                <img src="{{ url_for('static', filename='images/fshare.png') }}" alt="Icon">
+                <span>Fshare Nexus</span>
             </div>
 
-            <nav class="sidebar-nav">
-                <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">
-                    <span class="nav-icon">📊</span>
-                    <span>Dashboard</span>
-                </a>
-                <a href="/search" class="nav-item {% if request.path == '/search' %}active{% endif %}">
-                    <span class="nav-icon">🔍</span>
-                    <span>Search</span>
-                </a>
-                <a href="/downloads" class="nav-item {% if request.path == '/downloads' %}active{% endif %}">
-                    <span class="nav-icon">📥</span>
-                    <span>Manager</span>
-                </a>
-                <a href="/settings" class="nav-item {% if request.path == '/settings' %}active{% endif %}">
-                    <span class="nav-icon">⚙️</span>
-                    <span>Settings</span>
-                </a>
-            </nav>
-
-            <div class="sidebar-footer">
-                <div class="user-profile">
-                    <div class="user-avatar">A</div>
-                    <div class="user-info">
-                        <div class="user-name">Admin Console</div>
-                        <div class="user-role">MASTER #032</div>
-                    </div>
-                </div>
+            <div class="search-container">
+                <input type="text" class="search-input" placeholder="Search Fshare..." id="header-search-input"
+                    autocomplete="off">
+                <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
             </div>
-        </aside>
+        </header>
 
         <!-- Main Content -->
-        <div class="main-content">
-            <!-- Header -->
-            <header class="header">
-                <div class="header-search">
-                    <input type="text" class="search-input" placeholder="Quick search..." id="header-search-input"
-                        autocomplete="off">
-                    <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
-                </div>
-
-                <div class="header-stats">
-                    <div class="header-stat">
-                        <div class="stat-label">Net Speed</div>
-                        <div class="stat-value accent" id="header-speed">0 Mbps</div>
-                    </div>
-                    <div class="header-stat">
-                        <div class="stat-label">Active</div>
-                        <div class="stat-value" id="header-active">0</div>
-                    </div>
-                    <div class="header-stat">
-                        <div class="stat-label">Uptime</div>
-                        <div class="stat-value" id="header-uptime">0s</div>
-                    </div>
-                </div>
-            </header>
-
-            <!-- Content -->
-            <div class="content">
-                {% block content %}{% endblock %}
-            </div>
-        </div>
+        {% block content %}{% endblock %}
     </div>
 
+    <!-- Scripts -->
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     <script>
-        // Header clock removed - elements don't exist in current template
-
-        // Header search
+        // Header search functionality
         document.getElementById('header-search-input').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 const query = e.target.value;
