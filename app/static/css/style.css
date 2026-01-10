@@ -117,8 +117,10 @@ body {
 }
 
 .sidebar.collapsed .toggle-btn {
-  display: none;
-  /* Hide toggle in header when collapsed, simpler logic for now or move it properly */
+  display: flex;
+  /* Ensure it stays visible */
+  margin: 0 auto;
+  /* Center it if needed */
 }
 
 /* Actually, let's keep toggle visible or handle it better. 
@@ -178,6 +180,7 @@ body {
 
 .nav-icon {
   font-size: 24px;
+  line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
