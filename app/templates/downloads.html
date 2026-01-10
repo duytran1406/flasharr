@@ -4,15 +4,11 @@
 
 {% block content %}
 <div class="downloads-container">
-    <!-- Toolbar with Search -->
-    <div class="downloads-toolbar">
-        <div class="downloads-search">
-            <span class="material-icons">search</span>
-            <input type="text" id="downloads-search-input" class="downloads-search-input"
-                placeholder="Filter downloads by title..." oninput="bridge.loadDownloads()">
-        </div>
-        <button class="btn-primary" onclick="alert('Add links functionality coming soon')">
-            <span class="material-icons">add</span>
+    <!-- Toolbar -->
+    <div class="downloads-toolbar" style="justify-content: flex-end;">
+        <button class="btn-primary" onclick="alert('Add links functionality coming soon')"
+            style="display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 1.25rem; border-radius: 8px;">
+            <span class="material-icons">queue</span>
             Add Links
         </button>
     </div>
@@ -23,12 +19,24 @@
             <table class="download-table">
                 <thead>
                     <tr>
-                        <th>NAME</th>
-                        <th>SIZE</th>
+                        <th onclick="bridge.sortDownloads('name')" style="cursor: pointer;">
+                            NAME <span class="material-icons" id="sort-icon-name"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
+                        <th onclick="bridge.sortDownloads('size')" style="cursor: pointer;">
+                            SIZE <span class="material-icons" id="sort-icon-size"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
                         <th style="width: 200px;">PROGRESS</th>
                         <th>STATUS</th>
-                        <th>SPEED</th>
-                        <th>ETA</th>
+                        <th onclick="bridge.sortDownloads('speed')" style="cursor: pointer;">
+                            SPEED <span class="material-icons" id="sort-icon-speed"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
+                        <th onclick="bridge.sortDownloads('eta')" style="cursor: pointer;">
+                            ETA <span class="material-icons" id="sort-icon-eta"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
                         <th style="text-align: center;">ACTIONS</th>
                     </tr>
                 </thead>

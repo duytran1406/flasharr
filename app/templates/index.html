@@ -94,17 +94,24 @@
         <table class="download-table">
             <thead>
                 <tr>
-                    <th onclick="bridge.sortDownloads('name')" style="cursor: pointer">NAME <span
-                            id="sort-arrow-name">↕</span></th>
-                    <th onclick="bridge.sortDownloads('size')" style="cursor: pointer">SIZE <span
-                            id="sort-arrow-size">↕</span></th>
-                    <th onclick="bridge.sortDownloads('status')" style="cursor: pointer">STATUS <span
-                            id="sort-arrow-status">↕</span></th>
-                    <th onclick="bridge.sortDownloads('speed')" style="cursor: pointer">SPEED <span
-                            id="sort-arrow-speed">↕</span></th>
-                    <th onclick="bridge.sortDownloads('progress')" style="cursor: pointer">PROGRESS <span
-                            id="sort-arrow-progress">↕</span></th>
-                    <th>ACTIONS</th>
+                    <th onclick="bridge.sortDownloads('name')" style="cursor: pointer">
+                        NAME <span class="material-icons" id="dash-sort-icon-name"
+                            style="font-size: 14px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                    </th>
+                    <th onclick="bridge.sortDownloads('size')" style="cursor: pointer">
+                        SIZE <span class="material-icons" id="dash-sort-icon-size"
+                            style="font-size: 14px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                    </th>
+                    <th onclick="bridge.sortDownloads('status')" style="cursor: pointer">
+                        STATUS <span class="material-icons" id="dash-sort-icon-status"
+                            style="font-size: 14px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                    </th>
+                    <th onclick="bridge.sortDownloads('speed')" style="cursor: pointer">
+                        SPEED <span class="material-icons" id="dash-sort-icon-speed"
+                            style="font-size: 14px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                    </th>
+                    <th style="width: 100px;">PROGRESS</th>
+                    <th style="text-align: center;">ACTIONS</th>
                 </tr>
             </thead>
             <tbody id="download-manager-list">

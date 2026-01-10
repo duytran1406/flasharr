@@ -88,9 +88,17 @@ class PyLoadClient:
                     status_msg = link.get('statusmsg', 'unknown').capitalize()
                     if active:
                         status_text = "Running"
-                        eta = active.get('format_eta', '-')
                         speed_raw = active.get('speed', 0)
                         speed_text = self.format_speed(speed_raw)
+                        
+                        # ETA Logic
+                        eta_seconds = active.get('eta', 0)
+                        if speed_raw == 0:
+                            eta = "∞"
+                            eta_seconds = 999999999 # Large value for sorting
+                        else:
+                            eta = active.get('format_eta', '-')
+                            
                         info = f"{eta} @{speed_text}"
                         progress = active.get('percent', 0)
                         # Cache the progress for this file
@@ -103,7 +111,8 @@ class PyLoadClient:
                         else:
                             status_text = "Queue"
                         
-                        eta = "-"
+                        eta = "∞" if status_text != "Finished" else "-"
+                        eta_seconds = 999999999 if status_text != "Finished" else 0
                         speed_text = "-"
                         speed_raw = 0
                         info = status_msg
@@ -121,6 +130,7 @@ class PyLoadClient:
                         "status": status_text,
                         "info": info,
                         "eta": eta,
+                        "eta_seconds": eta_seconds,
                         "speed": speed_text,
                         "speed_raw": speed_raw,
                         "size": link.get('format_size', '0 B'),

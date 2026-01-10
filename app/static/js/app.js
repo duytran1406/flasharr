@@ -316,6 +316,28 @@ class FshareBridge {
             if (data.downloads) {
                 this.downloads = data.downloads;
 
+                // Keep current sort
+                if (this.sortColumn) {
+                    const col = this.sortColumn;
+                    const dir = this.sortDirection;
+                    // Directly apply the sort without toggling
+                    this.downloads.sort((a, b) => {
+                        let aVal, bVal;
+                        switch (col) {
+                            case 'name': aVal = a.name.toLowerCase(); bVal = b.name.toLowerCase(); break;
+                            case 'size': aVal = a.size_bytes || 0; bVal = b.size_bytes || 0; break;
+                            case 'speed': aVal = a.speed_raw || 0; bVal = b.speed_raw || 0; break;
+                            case 'eta': aVal = a.eta_seconds || 0; bVal = b.eta_seconds || 0; break;
+                            case 'status': aVal = a.status.toLowerCase(); bVal = b.status.toLowerCase(); break;
+                            default: return 0;
+                        }
+                        if (aVal < bVal) return dir === 'asc' ? -1 : 1;
+                        if (aVal > bVal) return dir === 'asc' ? 1 : -1;
+                        return 0;
+                    });
+                    this.updateSortIcons(col);
+                }
+
                 // If we are on the dashboard, only show top 5
                 const dashboardContainer = document.getElementById('download-manager-list');
                 if (dashboardContainer) {
@@ -361,6 +383,81 @@ class FshareBridge {
         }
 
         container.innerHTML = downloads.map(d => this.createFullDownloadRow(d)).join('');
+    }
+
+    sortDownloads(column) {
+        if (!this.downloads || this.downloads.length === 0) return;
+
+        // Toggle sort direction
+        if (this.sortColumn === column) {
+            this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+            this.sortColumn = column;
+            this.sortDirection = 'asc';
+        }
+
+        // Apply sort
+        this.downloads.sort((a, b) => {
+            let aVal, bVal;
+            switch (column) {
+                case 'name':
+                    aVal = a.name.toLowerCase();
+                    bVal = b.name.toLowerCase();
+                    break;
+                case 'size':
+                    aVal = a.size_bytes || 0;
+                    bVal = b.size_bytes || 0;
+                    break;
+                case 'speed':
+                    aVal = a.speed_raw || 0;
+                    bVal = b.speed_raw || 0;
+                    break;
+                case 'eta':
+                    aVal = a.eta_seconds || 0;
+                    bVal = b.eta_seconds || 0;
+                    break;
+                case 'status':
+                    aVal = a.status.toLowerCase();
+                    bVal = b.status.toLowerCase();
+                    break;
+                default:
+                    return 0;
+            }
+
+            if (aVal < bVal) return this.sortDirection === 'asc' ? -1 : 1;
+            if (aVal > bVal) return this.sortDirection === 'asc' ? 1 : -1;
+            return 0;
+        });
+
+        this.updateSortIcons(column);
+
+        // Immediate re-render
+        if (document.getElementById('downloads-full-list')) {
+            this.renderFullDownloads(this.getFilteredDownloads());
+        }
+        if (document.getElementById('download-manager-list')) {
+            this.renderDashboardDownloads(this.downloads.slice(0, 5));
+        }
+    }
+
+    updateSortIcons(column) {
+        // Reset all icons
+        document.querySelectorAll('.material-icons[id*="sort-icon"]').forEach(icon => {
+            icon.textContent = 'swap_vert';
+            icon.style.opacity = '0.5';
+            icon.style.color = 'inherit';
+        });
+
+        // Set active icon
+        const prefixes = ['sort-icon-', 'dash-sort-icon-'];
+        prefixes.forEach(prefix => {
+            const icon = document.getElementById(prefix + column);
+            if (icon) {
+                icon.textContent = this.sortDirection === 'asc' ? 'expand_less' : 'expand_more';
+                icon.style.opacity = '1';
+                icon.style.color = 'rgb(var(--accent-500))';
+            }
+        });
     }
 
     createDashboardDownloadRow(d) {
