@@ -141,7 +141,10 @@ class FshareBridge {
         this.networkGraph = new NetworkGraph('network-graph');
         this.loadDashboardData();
         this.loadDownloads();
+        this.loadDashboardData();
+        this.loadDownloads();
         this.loadSystemLogs();
+        this.initSidebar();
 
         // Auto-refresh stats every 10s
         setInterval(() => this.loadDashboardData(), 10000);
@@ -663,12 +666,35 @@ class FshareBridge {
             });
         }
 
+        // Sidebar Toggle
+        const sidebarToggle = document.getElementById('sidebar-toggle');
+        if (sidebarToggle) {
+            sidebarToggle.addEventListener('click', () => this.toggleSidebar());
+        }
+
         // Search page search input
         const searchInput = document.getElementById('search-input');
         if (searchInput) {
             searchInput.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') this.search(searchInput.value);
             });
+        }
+    }
+
+    initSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        const isCollapsed = localStorage.getItem('sidebar-collapsed') === 'true';
+        if (sidebar && isCollapsed) {
+            sidebar.classList.add('collapsed');
+        }
+    }
+
+    toggleSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        if (sidebar) {
+            sidebar.classList.toggle('collapsed');
+            const isCollapsed = sidebar.classList.contains('collapsed');
+            localStorage.setItem('sidebar-collapsed', isCollapsed);
         }
     }
 }
