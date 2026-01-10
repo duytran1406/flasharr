@@ -4,12 +4,12 @@ A complete integration solution for using Fshare.vn with Sonarr/Radarr and pyLoa
 
 ## Features
 
-- 🔍 **Prowlarr Indexer**: Search Fshare content from Prowlarr/Sonarr/Radarr
+- 🔍 **TimFshare Search Integration**: Search Fshare content using TimFshare.com API
 - 📥 **SABnzbd-Compatible API**: Acts as a download client for *arr suite
 - 🔄 **Automatic Filename Normalization**: Fixes non-standard Fshare filenames for *arr compatibility
-- 🎯 **pyLoad Integration**: Sends downloads to pyLoad automatically
+- 🎯 **pyLoad with Fshare Plugins**: Integrated pyLoad with FshareVn and FshareVnFolder plugins
 - 🌏 **Vietnamese Media Support**: Handles Vietnamese naming conventions and special characters
-- 🐳 **Docker Ready**: Single container solution with all dependencies
+- 🐳 **Complete Docker Solution**: Single-command deployment with all services included
 
 ## Architecture
 
@@ -18,10 +18,22 @@ Sonarr/Radarr
     ↓
 Prowlarr (searches via Fshare Indexer)
     ↓
-Fshare-Arr Bridge (this app)
+Fshare-Arr Bridge
+    ├─ TimFshare API (search)
+    ├─ Filename Normalizer
+    └─ SABnzbd API (download client)
     ↓
-pyLoad (downloads from Fshare)
+pyLoad (with Fshare plugins)
+    ↓
+Fshare.vn (download)
 ```
+
+## What's Included
+
+- **Fshare-Arr Bridge**: Prowlarr indexer + SABnzbd download client API
+- **pyLoad**: Download manager with FshareVn and FshareVnFolder plugins pre-configured
+- **TimFshare Integration**: Uses timfshare.com API for searching (no Fshare API key needed for search)
+- **Automatic Setup**: One-command deployment with all dependencies
 
 ## The Problem This Solves
 

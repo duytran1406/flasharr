@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # Fshare-Arr Bridge - Main integration service
   fshare-arr-bridge:
     build: .
     container_name: fshare-arr-bridge
@@ -8,21 +9,23 @@ services:
     ports:
       - "8484:8484"
     environment:
-      # Fshare credentials
-      FSHARE_EMAIL: ${FSHARE_EMAIL}
-      FSHARE_PASSWORD: ${FSHARE_PASSWORD}
-
-      # pyLoad connection
-      PYLOAD_HOST: ${PYLOAD_HOST:-192.168.1.112}
-      PYLOAD_PORT: ${PYLOAD_PORT:-8000}
+      # pyLoad connection (running in same compose)
+      PYLOAD_HOST: pyload
+      PYLOAD_PORT: 8000
       PYLOAD_USERNAME: ${PYLOAD_USERNAME:-admin}
       PYLOAD_PASSWORD: ${PYLOAD_PASSWORD}
 
+      # Fshare credentials (for pyLoad plugins)
+      FSHARE_EMAIL: ${FSHARE_EMAIL}
+      FSHARE_PASSWORD: ${FSHARE_PASSWORD}
+
       # Server configuration
-      INDEXER_PORT: ${INDEXER_PORT:-8484}
+      INDEXER_PORT: 8484
       DEBUG: ${DEBUG:-false}
     networks:
-      - arr-network
+      - fshare-network
+    depends_on:
+      - pyload
     healthcheck:
       test: [ "CMD", "python", "-c", "import requests; requests.get('http://localhost:8484/health')" ]
       interval: 30s
@@ -30,6 +33,29 @@ services:
       retries: 3
       start_period: 10s
 
+  # pyLoad - Download manager with Fshare plugins
+  pyload:
+    image: lscr.io/linuxserver/pyload-ng:latest
+    container_name: fshare-pyload
+    restart: unless-stopped
+    ports:
+      - "8100:8000" # Web UI
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Asia/Ho_Chi_Minh
+    volumes:
+      - ./pyload/config:/config
+      - ./pyload/downloads:/downloads
+      - ./pyload/plugins:/config/pyload/userplugins # Custom Fshare plugins
+    networks:
+      - fshare-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 networks:
-  arr-network:
-    external: true
+  fshare-network:
+    driver: bridge
