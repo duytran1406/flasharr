@@ -283,14 +283,35 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     
     @web_ui_bp.route('/api/download/toggle/<int:fid>', methods=['POST'])
     def api_toggle_download(fid):
-        """Toggle (restart) a download in pyLoad"""
+        """Toggle (pause/resume) a download in pyLoad"""
         try:
-            response = pyload_client.session.post(
-                f"{pyload_client.base_url}/api/restart_package/{fid}",
+            # First check if the download is currently running
+            status_response = pyload_client.session.get(
+                f"{pyload_client.base_url}/api/status_downloads",
                 timeout=5
             )
+            
+            is_running = False
+            if status_response.status_code == 200:
+                active_downloads = status_response.json()
+                is_running = any(d.get('fid') == fid for d in active_downloads)
+            
+            if is_running:
+                # Stop/Pause the download
+                response = pyload_client.session.post(
+                    f"{pyload_client.base_url}/api/stop_downloads",
+                    json={'file_ids': [fid]},
+                    timeout=5
+                )
+            else:
+                # Resume the download
+                response = pyload_client.session.post(
+                    f"{pyload_client.base_url}/api/restart_file/{fid}",
+                    timeout=5
+                )
+            
             if response.status_code == 200:
-                return jsonify({'success': True})
+                return jsonify({'success': True, 'action': 'stopped' if is_running else 'resumed'})
             else:
                 return jsonify({'success': False, 'error': 'pyLoad API failed'}), 500
         except Exception as e:
