@@ -367,7 +367,7 @@ class FshareBridge {
 
     getPagedDownloads(downloads) {
         if (!this.currentPage) this.currentPage = 1;
-        if (!this.itemsPerPage) this.itemsPerPage = 8;
+        if (!this.itemsPerPage) this.itemsPerPage = 6;
 
         const start = (this.currentPage - 1) * this.itemsPerPage;
         const end = start + this.itemsPerPage;

@@ -53,17 +53,17 @@
 
         <!-- Main Content Wrapper -->
         <main class="main-content">
-            <!-- Header (Search only now, brand moved to sidebar) -->
+            <!-- Header -->
             <header class="header">
+                {% if request.path == '/' %}
                 <div class="search-container">
-                    {% if request.path == '/downloads' %}
-                    <!-- Search moved to local toolbar for elegance -->
-                    {% else %}
                     <input type="text" class="search-input" placeholder="Search Fshare..." id="header-search-input"
                         autocomplete="off">
-                    {% endif %}
                     <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
                 </div>
+                {% elif request.path == '/downloads' %}
+                {% block custom_header %}{% endblock %}
+                {% endif %}
             </header>
 
             <!-- Page Content -->
@@ -77,14 +77,17 @@
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     <script>
         // Header search functionality
-        document.getElementById('header-search-input').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                const query = e.target.value;
-                if (query) {
-                    window.location.href = `/search?q=${encodeURIComponent(query)}`;
+        const headerSearch = document.getElementById('header-search-input');
+        if (headerSearch) {
+            headerSearch.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    const query = e.target.value;
+                    if (query) {
+                        window.location.href = `/search?q=${encodeURIComponent(query)}`;
+                    }
                 }
-            }
-        });
+            });
+        }
     </script>
     {% block scripts %}{% endblock %}
 </body>
