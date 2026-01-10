@@ -157,14 +157,43 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     def api_stats():
         """Get statistics for the homepage-style dashboard"""
         try:
-            # Refresh speedtest if older than 1 hour
-            if time.time() - speedtest_cache['last_updated'] > 3600:
-                threading.Thread(target=run_speedtest, daemon=True).start()
+            # Get speedtest from LXC 109 Speedtest Tracker
+            speedtest_speed = "0 Mbps"
+            try:
+                import requests as req
+                response = req.get('http://192.168.1.109:8080/api/speedtest/latest', timeout=2)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data and 'data' in data:
+                        download_mbps = data['data'].get('download', 0)
+                        speedtest_speed = f"{download_mbps:.1f} Mbps"
+            except Exception as e:
+                logger.warning(f"Failed to get speedtest from LXC 109: {e}")
+                speedtest_speed = f"{speedtest_cache['download']} Mbps"  # Fallback to local
+
+            # Get container uptime from Docker
+            container_uptime = "0s"
+            try:
+                import subprocess
+                from datetime import datetime
+                result = subprocess.run(
+                    ['docker', 'inspect', '-f', '{{.State.StartedAt}}', 'fshare-arr-bridge'],
+                    capture_output=True, text=True, timeout=2
+                )
+                if result.returncode == 0:
+                    started_at = result.stdout.strip()
+                    start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                    uptime_seconds = int((datetime.now(start_time.tzinfo) - start_time).total_seconds())
+                    container_uptime = str(uptime_seconds)
+            except Exception as e:
+                logger.warning(f"Failed to get container uptime: {e}")
+                container_uptime = str(int(time.time() - boot_time))  # Fallback
 
             # pyLoad stats
             active_downloads = 0
             speed = "0 B/s"
             total_downloads = 0
+            fshare_account = {'valid': False, 'premium': False}
             
             status = pyload_client.get_status()
             if status:
@@ -172,16 +201,35 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
                 speed = status.get('speed_format', "0 B/s")
                 total_downloads = status.get('total', 0)
             
+            # Get Fshare account status from pyLoad
+            try:
+                accounts_response = pyload_client.session.get(
+                    f"{pyload_client.base_url}/api/get_accounts",
+                    timeout=5
+                )
+                if accounts_response.status_code == 200:
+                    accounts = accounts_response.json()
+                    for account in accounts:
+                        if account.get('type', '').lower() == 'fsharevn':
+                            fshare_account = {
+                                'valid': account.get('valid', False),
+                                'premium': account.get('premium', False)
+                            }
+                            break
+            except Exception as e:
+                logger.warning(f"Failed to get Fshare account status: {e}")
+            
             return jsonify({
                 'system': {
-                    'uptime': str(int(time.time() - boot_time)),
-                    'speedtest': f"{speedtest_cache['download']} Mbps"
+                    'uptime': container_uptime,
+                    'speedtest': speedtest_speed
                 },
                 'pyload': {
                     'active': active_downloads,
                     'speed': speed,
                     'total': total_downloads,
-                    'connected': pyload_client.logged_in if hasattr(pyload_client, 'logged_in') else False
+                    'connected': pyload_client.logged_in if hasattr(pyload_client, 'logged_in') else False,
+                    'fshare_account': fshare_account
                 },
                 'bridge': {
                     'searches': 42,
@@ -191,5 +239,83 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
         except Exception as e:
             logger.error(f"Stats API error: {e}")
             return jsonify({'error': str(e)}), 500
+    
+    @web_ui_bp.route('/api/logs')
+    def api_logs():
+        """Get recent container logs"""
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['docker', 'logs', '--tail', '10', 'fshare-arr-bridge'],
+                capture_output=True, text=True, timeout=5
+            )
+            
+            logs = []
+            if result.returncode == 0:
+                lines = result.stdout.strip().split('\n')
+                for line in lines[-5:]:  # Last 5 lines
+                    if not line.strip():
+                        continue
+                    
+                    # Parse log level
+                    level = 'info'
+                    if 'ERROR' in line or '❌' in line:
+                        level = 'error'
+                    elif 'WARNING' in line or 'WARN' in line:
+                        level = 'warning'
+                    elif 'SUCCESS' in line or '✅' in line:
+                        level = 'success'
+                    
+                    # Extract timestamp if present
+                    timestamp = '[Recent]'
+                    if line.startswith('2026-'):
+                        parts = line.split(' ', 2)
+                        if len(parts) >= 2:
+                            timestamp = f"[{parts[1].split(',')[0]}]"
+                            line = parts[2] if len(parts) > 2 else line
+                    
+                    logs.append({
+                        'time': timestamp,
+                        'message': line[:100],  # Truncate long messages
+                        'level': level
+                    })
+            
+            return jsonify({'logs': logs})
+        except Exception as e:
+            logger.error(f"Logs API error: {e}")
+            return jsonify({'logs': []})
+    
+    @web_ui_bp.route('/api/download/toggle/<int:fid>', methods=['POST'])
+    def api_toggle_download(fid):
+        """Toggle (restart) a download in pyLoad"""
+        try:
+            response = pyload_client.session.post(
+                f"{pyload_client.base_url}/api/restart_package/{fid}",
+                timeout=5
+            )
+            if response.status_code == 200:
+                return jsonify({'success': True})
+            else:
+                return jsonify({'success': False, 'error': 'pyLoad API failed'}), 500
+        except Exception as e:
+            logger.error(f"Toggle download error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
+    
+    @web_ui_bp.route('/api/download/delete/<int:fid>', methods=['DELETE'])
+    def api_delete_download(fid):
+        """Delete a download from pyLoad"""
+        try:
+            response = pyload_client.session.post(
+                f"{pyload_client.base_url}/api/delete_packages",
+                json=[fid],
+                timeout=5
+            )
+            if response.status_code == 200:
+                return jsonify({'success': True})
+            else:
+                return jsonify({'success': False, 'error': 'pyLoad API failed'}), 500
+        except Exception as e:
+            logger.error(f"Delete download error: {e}")
+            return jsonify({'success': False, 'error': str(e)}), 500
     
     return web_ui_bp

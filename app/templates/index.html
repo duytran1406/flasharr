@@ -79,36 +79,6 @@
     </div>
 </div>
 
-<!-- System Log -->
-<div class="widget" style="margin-bottom: 1.5rem;">
-    <div class="widget-header">
-        <div class="widget-title">
-            <span class="widget-icon">📋</span>
-            4. System Log
-        </div>
-        <a href="#" class="status-badge info" style="text-decoration: none;">VIEW STREAM</a>
-    </div>
-    <div class="widget-content">
-        <div class="log-list" id="system-log">
-            <div class="log-entry info">
-                <span class="log-time">[23:45:12]</span>
-                <span class="log-message">SYSTEM: Initialized UI v2.0</span>
-            </div>
-            <div class="log-entry success">
-                <span class="log-time">[23:43:01]</span>
-                <span class="log-message">SUCCESS: pyLoad Access Verified</span>
-            </div>
-            <div class="log-entry info">
-                <span class="log-time">[23:42:45]</span>
-                <span class="log-message">INFO: INITIALIZED IN v2.0</span>
-            </div>
-            <div class="log-entry warning">
-                <span class="log-time">[23:12:11]</span>
-                <span class="log-message">WARN: Rate Limit at 92%</span>
-            </div>
-        </div>
-    </div>
-</div>
 
 <!-- Download Manager -->
 <div class="widget">
@@ -119,11 +89,6 @@
             <span style="font-size: 0.7rem; color: var(--text-muted); font-weight: 400; margin-left: 0.5rem;">
                 LATEST ACTIVE PROCESSING PIPELINE
             </span>
-        </div>
-        <div style="display: flex; gap: 0.5rem;">
-            <button class="icon-btn" title="Sort">☰</button>
-            <button class="icon-btn" title="Refresh">🔄</button>
-            <button class="btn-primary">VIEW ALL</button>
         </div>
     </div>
     <div class="widget-content" style="padding: 0; margin-top: 1rem;">
@@ -186,6 +151,25 @@
                 </tr>
             </tbody>
         </table>
+    </div>
+</div>
+
+<!-- System Log -->
+<div class="widget" style="margin-top: 1.5rem;">
+    <div class="widget-header">
+        <div class="widget-title">
+            <span class="widget-icon">📋</span>
+            4. System Log
+        </div>
+        <a href="#" class="status-badge info" style="text-decoration: none;">VIEW STREAM</a>
+    </div>
+    <div class="widget-content">
+        <div class="log-list" id="system-log">
+            <div class="log-entry info">
+                <span class="log-time">[Loading...]</span>
+                <span class="log-message">Fetching container logs...</span>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}

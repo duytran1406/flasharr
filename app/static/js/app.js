@@ -10,10 +10,12 @@ class FshareBridge {
         this.setupEventListeners();
         this.loadDashboardData();
         this.loadDownloads();
+        this.loadSystemLogs();
 
         // Auto-refresh stats every 10s
         setInterval(() => this.loadDashboardData(), 10000);
         setInterval(() => this.loadDownloads(), 5000);
+        setInterval(() => this.loadSystemLogs(), 15000);
     }
 
     // Dashboard Data & Stats
@@ -207,14 +209,70 @@ class FshareBridge {
     }
 
     async toggleDownload(fid) {
-        // TODO: Implement pyLoad pause/resume API call
-        console.log('Toggle download:', fid);
+        try {
+            const response = await fetch(`/api/download/toggle/${fid}`, {
+                method: 'POST'
+            });
+
+            const data = await response.json();
+            if (data.success) {
+                console.log('Download toggled:', fid);
+                this.loadDownloads();
+            } else {
+                console.error('Failed to toggle download:', data.error);
+            }
+        } catch (error) {
+            console.error('Toggle download error:', error);
+        }
     }
 
     async deleteDownload(fid) {
         if (!confirm('Are you sure you want to delete this download?')) return;
-        // TODO: Implement pyLoad delete API call
-        console.log('Delete download:', fid);
+
+        try {
+            const response = await fetch(`/api/download/delete/${fid}`, {
+                method: 'DELETE'
+            });
+
+            const data = await response.json();
+            if (data.success) {
+                console.log('Download deleted:', fid);
+                this.loadDownloads();
+            } else {
+                console.error('Failed to delete download:', data.error);
+            }
+        } catch (error) {
+            console.error('Delete download error:', error);
+        }
+    }
+
+    // System Logs
+    async loadSystemLogs() {
+        const container = document.getElementById('system-log');
+        if (!container) return;
+
+        try {
+            const response = await fetch('/api/logs');
+            const data = await response.json();
+
+            if (data.logs && data.logs.length > 0) {
+                container.innerHTML = data.logs.map(log => `
+                    <div class="log-entry ${log.level}">
+                        <span class="log-time">${this.escapeHtml(log.time)}</span>
+                        <span class="log-message">${this.escapeHtml(log.message)}</span>
+                    </div>
+                `).join('');
+            } else {
+                container.innerHTML = `
+                    <div class="log-entry info">
+                        <span class="log-time">[--:--:--]</span>
+                        <span class="log-message">No recent logs available</span>
+                    </div>
+                `;
+            }
+        } catch (error) {
+            console.error('Load logs error:', error);
+        }
     }
 
     // Search Operations

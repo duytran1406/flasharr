@@ -107,6 +107,7 @@ class PyLoadClient:
                         progress = 100 if status_msg == "Finished" else 0
 
                     formatted_queue.append({
+                        "fid": fid,
                         "name": link.get('name'),
                         "status": status_text,
                         "info": info,
