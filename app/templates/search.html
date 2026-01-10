@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}Search - Fshare-Arr Bridge{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Search Fshare</h2>
+    </div>
+
+    <div class="search-container">
+        <div class="search-box">
+            <input type="text" id="search-input" class="search-input" placeholder="Search for movies or TV shows..."
+                autocomplete="off" autofocus>
+            <div id="search-suggestions" class="search-suggestions" style="display: none;"></div>
+        </div>
+    </div>
+
+    <div id="search-results"></div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">How Scoring Works</h2>
+    </div>
+    <div class="result-meta">
+        <span class="badge">Keyword Match: +10 points each</span>
+        <span class="badge">Year Match: +20 points</span>
+        <span class="badge resolution">Quality (1080p+): +10 points</span>
+        <span class="badge vietnamese">Vietnamese Content: +15 points</span>
+    </div>
+    <p style="margin-top: 1rem; color: var(--text-secondary);">
+        Results are automatically scored and ranked by relevance. Higher scores indicate better matches to your search
+        query.
+    </p>
+</div>
+{% endblock %}

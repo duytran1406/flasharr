@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block title %}Downloads - Fshare-Arr Bridge{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Download Queue</h2>
+        <button class="btn btn-secondary" onclick="bridge.loadDownloads()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                style="vertical-align: middle;">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+            </svg>
+            Refresh
+        </button>
+    </div>
+
+    <div id="downloads-list">
+        <p class="text-secondary">Loading downloads...</p>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Filename Normalization</h2>
+    </div>
+    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+        All filenames are automatically normalized to ensure compatibility with Sonarr/Radarr:
+    </p>
+    <div class="result-card">
+        <div class="result-header">
+            <h3 class="result-title">Example</h3>
+        </div>
+        <div class="download-info">
+            <p class="filename">Ling Cage 2019 4K HDR 10Bit S1E14 SP TVP TMPĐ_kimngonx5 (2019) 2160p</p>
+            <p class="normalized">Ling Cage S01E14 2019 4K HDR 10Bit SP TVP TMPĐ kimngonx5 2160p</p>
+        </div>
+        <p style="margin-top: 1rem; color: var(--text-secondary); font-size: 0.875rem;">
+            Quality markers are moved <strong>after</strong> the episode identifier, allowing *arr to correctly identify
+            the series and episode.
+        </p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Load downloads on page load
+    document.addEventListener('DOMContentLoaded', () => {
+        bridge.loadDownloads();
+    });
+
+    // Auto-refresh every 5 seconds
+    setInterval(() => {
+        bridge.loadDownloads();
+    }, 5000);
+</script>
+{% endblock %}
