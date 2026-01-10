@@ -1,33 +1,49 @@
 {% extends "base.html" %}
 
-{% block title %}Downloads - Fshare-Arr Bridge{% endblock %}
+{% block title %}Downloads - Fshare Nexus{% endblock %}
 
 {% block content %}
-<div class="group">
-    <h2 class="group-title">pyLoad Queue</h2>
-
-    <div id="downloads-list" class="card" style="padding: 0;">
-        <div style="text-align: center; padding: 5rem; opacity: 0.5;">
-            <p>Loading download queue...</p>
+<div class="downloads-container">
+    <!-- Toolbar with Search -->
+    <div class="downloads-toolbar">
+        <div class="downloads-search">
+            <span class="material-icons">search</span>
+            <input type="text" id="downloads-search-input" class="downloads-search-input"
+                placeholder="Filter downloads by title..." oninput="bridge.loadDownloads()">
         </div>
+        <button class="btn-primary" onclick="alert('Add links functionality coming soon')">
+            <span class="material-icons">add</span>
+            Add Links
+        </button>
     </div>
-</div>
 
-<div class="group">
-    <h2 class="group-title">Normalization Example</h2>
-    <div class="card">
-        <div class="card-top">
-            <div class="card-title">How name normalization works</div>
-        </div>
-        <div class="card-content">
-            <p class="card-subtitle" style="margin-bottom: 1rem;">The bridge automatically fixes Fshare filenames for
-                *arr suite compatibility.</p>
-            <div
-                style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 0.5rem; font-family: monospace; font-size: 0.9rem;">
-                <div style="color: var(--danger-color); margin-bottom: 0.5rem;">Original:
-                    Ling.Cage.S01E01.1080p.Vietsub.mkv</div>
-                <div style="color: var(--success-color);">Fixed: Ling Cage - S01E01 - 1080p - Vietsub.mkv</div>
-            </div>
+    <!-- Main List Card -->
+    <div class="service-card" style="padding: 0; overflow: visible;">
+        <div style="overflow-x: auto;">
+            <table class="download-table">
+                <thead>
+                    <tr>
+                        <th>NAME</th>
+                        <th>SIZE</th>
+                        <th style="width: 200px;">PROGRESS</th>
+                        <th>STATUS</th>
+                        <th>SPEED</th>
+                        <th>ETA</th>
+                        <th style="text-align: center;">ACTIONS</th>
+                    </tr>
+                </thead>
+                <tbody id="downloads-full-list">
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 5rem; color: var(--text-muted);">
+                            <div style="display: flex; flex-direction: column; align-items: center; gap: 1rem;">
+                                <span class="material-icons"
+                                    style="font-size: 3rem; opacity: 0.2;">cloud_download</span>
+                                <div>Loading your download queue...</div>
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
         </div>
     </div>
 </div>
@@ -35,14 +51,15 @@
 
 {% block scripts %}
 <script>
-    // Auto-refresh downloads every 5 seconds
-    setInterval(() => {
-        if (bridge) bridge.loadDownloads();
-    }, 5000);
-
-    // Initial load override for search (since app.js does it globally, but downloads page might need more)
+    // Downloads page specific initialization
     document.addEventListener('DOMContentLoaded', () => {
+        // Initial load
         if (bridge) bridge.loadDownloads();
+
+        // Frequent refresh for the dedicated page
+        setInterval(() => {
+            if (bridge) bridge.loadDownloads();
+        }, 2000);
     });
 </script>
 {% endblock %}

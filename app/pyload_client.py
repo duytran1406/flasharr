@@ -88,26 +88,29 @@ class PyLoadClient:
                     status_msg = link.get('statusmsg', 'unknown').capitalize()
                     if active:
                         status_text = "Running"
-                        info = f"{active.get('format_eta')} @{self.format_speed(active.get('speed', 0))}"
+                        eta = active.get('format_eta', '-')
+                        speed_raw = active.get('speed', 0)
+                        speed_text = self.format_speed(speed_raw)
+                        info = f"{eta} @{speed_text}"
                         progress = active.get('percent', 0)
                         # Cache the progress for this file
                         self.progress_cache[fid] = progress
                     else:
-                        if status_msg == "Aborted":
-                            status_text = "Stop"
-                        elif status_msg == "Finished":
+                        if status_msg == "Finished":
                             status_text = "Finished"
-                        elif status_msg == "Failed":
+                        elif status_msg in ["Aborted", "Failed", "Offline"]:
                             status_text = "Stop"
                         else:
                             status_text = "Queue"
                         
+                        eta = "-"
+                        speed_text = "-"
+                        speed_raw = 0
                         info = status_msg
-                        # Use cached progress if available, otherwise use 100 for finished or 0
+                        
                         if status_msg == "Finished":
                             progress = 100
                         elif fid in self.progress_cache:
-                            # Preserve last known progress for stopped downloads
                             progress = self.progress_cache[fid]
                         else:
                             progress = 0
@@ -117,7 +120,11 @@ class PyLoadClient:
                         "name": link.get('name'),
                         "status": status_text,
                         "info": info,
+                        "eta": eta,
+                        "speed": speed_text,
+                        "speed_raw": speed_raw,
                         "size": link.get('format_size', '0 B'),
+                        "size_bytes": link.get('size', 0),
                         "progress": progress
                     })
             

@@ -149,6 +149,51 @@ body {
   display: none !important;
 }
 
+/* Downloads Page Specific */
+.downloads-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.downloads-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.downloads-search {
+  position: relative;
+  flex: 1;
+}
+
+.downloads-search .material-icons {
+  position: absolute;
+  left: 1rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: 1.25rem;
+}
+
+.downloads-search-input {
+  width: 100%;
+  padding: 0.75rem 1rem 0.75rem 3rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: white;
+  font-size: 0.95rem;
+  transition: all 0.2s;
+}
+
+.downloads-search-input:focus {
+  outline: none;
+  border-color: rgb(var(--accent-500));
+  background: rgba(30, 41, 59, 0.9);
+}
+
 /* Sidebar Nav */
 .sidebar-nav {
   flex: 1;

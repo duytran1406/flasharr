@@ -309,113 +309,117 @@ class FshareBridge {
 
     // Download Manager
     async loadDownloads() {
-        const container = document.getElementById('download-manager-list');
-        if (!container) return;
-
         try {
             const response = await fetch('/api/downloads');
             const data = await response.json();
 
-            if (data.downloads && data.downloads.length > 0) {
-                this.downloads = data.downloads.slice(0, 5);
-                this.renderDownloads();
-            } else {
-                container.innerHTML = `
-                    <tr>
-                        <td colspan="6" style="text-align: center; padding: 3rem; color: var(--text-muted);">
-                            No active downloads in queue
-                        </td>
-                    </tr>
-                `;
+            if (data.downloads) {
+                this.downloads = data.downloads;
+
+                // If we are on the dashboard, only show top 5
+                const dashboardContainer = document.getElementById('download-manager-list');
+                if (dashboardContainer) {
+                    this.renderDashboardDownloads(this.downloads.slice(0, 5));
+                }
+
+                // If we are on the downloads page, show all and handle search
+                const downloadsPageContainer = document.getElementById('downloads-full-list');
+                if (downloadsPageContainer) {
+                    this.renderFullDownloads(this.getFilteredDownloads());
+                }
             }
         } catch (error) {
             console.error('Load downloads error:', error);
         }
     }
 
-    sortDownloads(column) {
-        if (!this.downloads || this.downloads.length === 0) return;
-
-        // Toggle sort direction
-        if (this.sortColumn === column) {
-            this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
-        } else {
-            this.sortColumn = column;
-            this.sortDirection = 'asc';
-        }
-
-        // Sort the downloads array
-        this.downloads.sort((a, b) => {
-            let aVal, bVal;
-
-            switch (column) {
-                case 'name':
-                    aVal = a.name.toLowerCase();
-                    bVal = b.name.toLowerCase();
-                    break;
-                case 'size':
-                    aVal = this.parseSizeToBytes(a.size);
-                    bVal = this.parseSizeToBytes(b.size);
-                    break;
-                case 'status':
-                    aVal = a.status;
-                    bVal = b.status;
-                    break;
-                case 'speed':
-                    aVal = this.parseSpeedToBytes(a.info);
-                    bVal = this.parseSpeedToBytes(b.info);
-                    break;
-                case 'progress':
-                    aVal = a.progress;
-                    bVal = b.progress;
-                    break;
-                default:
-                    return 0;
-            }
-
-            if (aVal < bVal) return this.sortDirection === 'asc' ? -1 : 1;
-            if (aVal > bVal) return this.sortDirection === 'asc' ? 1 : -1;
-            return 0;
-        });
-
-        // Update arrow indicators
-        document.querySelectorAll('.sort-arrow').forEach(arrow => {
-            arrow.textContent = '↕';
-            arrow.classList.remove('active');
-        });
-
-        const activeArrow = document.getElementById(`sort-arrow-${column}`);
-        if (activeArrow) {
-            activeArrow.textContent = this.sortDirection === 'asc' ? '↑' : '↓';
-            activeArrow.classList.add('active');
-        }
-
-        this.renderDownloads();
+    getFilteredDownloads() {
+        const query = (document.getElementById('downloads-search-input')?.value || '').toLowerCase();
+        if (!query) return this.downloads;
+        return this.downloads.filter(d => d.name.toLowerCase().includes(query));
     }
 
-    parseSizeToBytes(sizeStr) {
-        const match = sizeStr.match(/^([\d.]+)\s*([KMGT]?B)$/i);
-        if (!match) return 0;
-        const value = parseFloat(match[1]);
-        const unit = match[2].toUpperCase();
-        const multipliers = { 'B': 1, 'KB': 1024, 'MB': 1024 ** 2, 'GB': 1024 ** 3, 'TB': 1024 ** 4 };
-        return value * (multipliers[unit] || 1);
-    }
-
-    parseSpeedToBytes(infoStr) {
-        // Extract speed from info string like "00:05:35 @9.3MB/s"
-        const match = infoStr.match(/@([\d.]+)\s*([KMGT]?B\/s)/i);
-        if (!match) return 0;
-        const value = parseFloat(match[1]);
-        const unit = match[2].toUpperCase().replace('/S', '');
-        const multipliers = { 'B': 1, 'KB': 1024, 'MB': 1024 ** 2, 'GB': 1024 ** 3 };
-        return value * (multipliers[unit] || 1);
-    }
-
-    renderDownloads() {
+    renderDashboardDownloads(downloads) {
         const container = document.getElementById('download-manager-list');
-        if (!container || !this.downloads) return;
-        container.innerHTML = this.downloads.map(d => this.createDownloadRow(d)).join('');
+        if (!container) return;
+
+        if (downloads.length === 0) {
+            container.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 2rem; color: var(--text-muted);">No active downloads</td></tr>`;
+            return;
+        }
+
+        container.innerHTML = downloads.map(d => this.createDashboardDownloadRow(d)).join('');
+    }
+
+    renderFullDownloads(downloads) {
+        const container = document.getElementById('downloads-full-list');
+        if (!container) return;
+
+        if (downloads.length === 0) {
+            container.innerHTML = `<tr><td colspan="7" style="text-align: center; padding: 5rem; color: var(--text-muted);">No downloads found</td></tr>`;
+            return;
+        }
+
+        container.innerHTML = downloads.map(d => this.createFullDownloadRow(d)).join('');
+    }
+
+    createDashboardDownloadRow(d) {
+        const statusClass = d.status === 'Running' ? 'info' :
+            d.status === 'Finished' ? 'success' :
+                d.status === 'Stop' ? 'error' : 'warning';
+
+        return `
+            <tr>
+                <td><div class="download-name">${this.escapeHtml(d.name)}</div></td>
+                <td class="download-size">${d.size}</td>
+                <td><span class="status-badge ${statusClass}">${d.status.toUpperCase()}</span></td>
+                <td>${d.speed}</td>
+                <td>
+                    <div class="progress-bar" style="width: 100px;">
+                        <div class="progress-fill" style="width: ${d.progress}%"></div>
+                    </div>
+                </td>
+                <td>
+                    <div class="download-controls">
+                        <button class="icon-btn" onclick="bridge.toggleDownload(${d.fid})">${d.status === 'Running' ? '<span class="material-icons" style="font-size: 18px">pause</span>' : '<span class="material-icons" style="font-size: 18px">play_arrow</span>'}</button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }
+
+    createFullDownloadRow(d) {
+        const statusClass = d.status === 'Running' ? 'running' :
+            d.status === 'Finished' ? 'success' :
+                d.status === 'Stop' ? 'error' : 'warning';
+
+        return `
+             <tr>
+                <td><div class="download-name" title="${this.escapeHtml(d.name)}">${this.escapeHtml(d.name)}</div></td>
+                <td>${d.size}</td>
+                <td>
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <div class="progress-bar" style="flex: 1; min-width: 100px;">
+                            <div class="progress-fill" style="width: ${d.progress}%"></div>
+                        </div>
+                        <span style="font-size: 0.8rem; font-weight: 600; min-width: 40px;">${d.progress}%</span>
+                    </div>
+                </td>
+                <td><span class="status-badge ${statusClass}">${d.status.toUpperCase()}</span></td>
+                <td>${d.speed}</td>
+                <td>${d.eta}</td>
+                <td>
+                    <div class="download-controls">
+                        <button class="icon-btn" title="Toggle" onclick="bridge.toggleDownload(${d.fid})">
+                            <span class="material-icons" style="font-size: 20px">${d.status === 'Running' ? 'pause' : 'play_arrow'}</span>
+                        </button>
+                        <button class="icon-btn delete-btn" title="Delete" onclick="bridge.deleteDownload(${d.fid})">
+                            <span class="material-icons" style="font-size: 20px">delete_outline</span>
+                        </button>
+                    </div>
+                </td>
+            </tr>
+        `;
     }
 
     createDownloadRow(d) {
@@ -660,10 +664,16 @@ class FshareBridge {
 
             // Hide autocomplete when clicking outside
             document.addEventListener('click', (e) => {
-                if (!e.target.closest('.header-search')) {
+                if (!e.target.closest('.search-container')) {
                     this.hideAutocomplete();
                 }
             });
+        }
+
+        // Downloads page local search
+        const downloadsSearch = document.getElementById('downloads-search-input');
+        if (downloadsSearch) {
+            // Re-render on input is already handled in HTML with oninput="bridge.loadDownloads()"
         }
 
         // Sidebar Toggle via Button
