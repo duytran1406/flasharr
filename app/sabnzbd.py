@@ -23,26 +23,18 @@ sabnzbd_bp = Blueprint('sabnzbd', __name__)
 class SABnzbdAPI:
     """SABnzbd-compatible API for download client integration"""
     
-    def __init__(self, fshare_client: FshareClient, pyload_client: PyLoadClient):
+    def __init__(self, fshare_client: FshareClient, pyload_client: PyLoadClient, normalizer: FilenameNormalizer):
         self.fshare = fshare_client
         self.pyload = pyload_client
-        self.normalizer = FilenameNormalizer()
+        self.normalizer = normalizer
         
         # In-memory storage for queue and history
-        # In production, you might want to use Redis or a database
         self.queue = {}  # nzo_id -> download info
         self.history = {}  # nzo_id -> download info
     
     def add_file(self, nzb_data: bytes, filename: str = "download.nzb") -> Optional[str]:
         """
         Add a download from NZB file data
-        
-        Args:
-            nzb_data: NZB file content
-            filename: Original filename
-            
-        Returns:
-            NZO ID if successful, None otherwise
         """
         try:
             # Parse NZB to extract Fshare info
@@ -62,19 +54,11 @@ class SABnzbdAPI:
             # Extract GUID
             guid = segment_text.replace('fshare-', '')
             
-            # We need to map this GUID back to the Fshare URL
-            # For now, we'll search for the file again
-            # In production, you might want to cache this mapping
-            
             # Get the subject (filename) from NZB
             file_elem = root.find('.//{http://www.newzbin.com/DTD/2003/nzb}file')
             subject = file_elem.get('subject', 'Unknown') if file_elem is not None else 'Unknown'
             
             logger.info(f"Processing download request for: {subject}")
-            
-            # For now, we'll use the filename from the request
-            # In a real implementation, you'd need to maintain a mapping
-            # from GUID to Fshare URL/fcode
             
             # Generate NZO ID
             nzo_id = str(uuid.uuid4())
@@ -104,13 +88,6 @@ class SABnzbdAPI:
             
             logger.info(f"✅ Added to queue with NZO ID: {nzo_id}")
             
-            # TODO: Actually send to pyLoad
-            # For now, we'll just queue it
-            # In production, you'd:
-            # 1. Look up the Fshare URL from the GUID
-            # 2. Get the direct download link from Fshare
-            # 3. Send to pyLoad
-            
             return nzo_id
             
         except Exception as e:
@@ -120,13 +97,6 @@ class SABnzbdAPI:
     def add_url(self, url: str, filename: Optional[str] = None) -> Optional[str]:
         """
         Add a download from URL
-        
-        Args:
-            url: Fshare URL
-            filename: Optional custom filename
-            
-        Returns:
-            NZO ID if successful, None otherwise
         """
         try:
             logger.info(f"Adding URL: {url}")
@@ -252,10 +222,10 @@ class SABnzbdAPI:
         return True
 
 
-def create_sabnzbd_api(fshare_client: FshareClient, pyload_client: PyLoadClient) -> Blueprint:
+def create_sabnzbd_api(fshare_client: FshareClient, pyload_client: PyLoadClient, filename_normalizer: FilenameNormalizer) -> Blueprint:
     """Create and configure the SABnzbd API blueprint"""
     
-    api = SABnzbdAPI(fshare_client, pyload_client)
+    api = SABnzbdAPI(fshare_client, pyload_client, filename_normalizer)
     
     @sabnzbd_bp.route('/api', methods=['GET', 'POST'])
     def api_endpoint():

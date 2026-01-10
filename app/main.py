@@ -7,6 +7,7 @@ import logging
 import os
 from dotenv import load_dotenv
 
+from .fshare_client import FshareClient
 from .timfshare_client import TimFshareClient
 from .pyload_client import PyLoadClient
 from .filename_parser import FilenameNormalizer
@@ -38,6 +39,12 @@ def create_app():
     logger.info("Initializing TimFshare client...")
     timfshare_client = TimFshareClient()
     
+    logger.info("Initializing Fshare client...")
+    fshare_client = FshareClient(
+        email=os.getenv('FSHARE_EMAIL'),
+        password=os.getenv('FSHARE_PASSWORD')
+    )
+    
     logger.info("Initializing pyLoad client...")
     pyload_client = PyLoadClient(
         host=os.getenv('PYLOAD_HOST', 'localhost'),
@@ -50,13 +57,22 @@ def create_app():
     logger.info("Initializing filename normalizer...")
     filename_normalizer = FilenameNormalizer()
     
+    # Login to Fshare (required for downloading/link generation)
+    if not fshare_client.login():
+        logger.error("Failed to login to Fshare! Check your credentials.")
+    
     # Login to pyLoad
     if not pyload_client.login():
         logger.warning("Failed to login to pyLoad! Downloads may not work.")
     
     # Register blueprints
+    # Indexer uses TimFshare for searching
     indexer_bp = create_indexer_api(timfshare_client, filename_normalizer)
-    sabnzbd_bp = create_sabnzbd_api(timfshare_client, pyload_client, filename_normalizer)
+    
+    # SABnzbd uses FshareClient for link resolution and PyLoad for downloading
+    sabnzbd_bp = create_sabnzbd_api(fshare_client, pyload_client, filename_normalizer)
+    
+    # Web UI uses TimFshare for search and PyLoad for queue
     web_ui_bp = create_web_ui(timfshare_client, pyload_client, filename_normalizer)
     
     app.register_blueprint(indexer_bp, url_prefix='/indexer')
@@ -69,6 +85,7 @@ def create_app():
         return {
             'status': 'healthy',
             'timfshare': 'connected',
+            'fshare': 'connected' if fshare_client.token else 'disconnected',
             'pyload': 'connected' if pyload_client.logged_in else 'disconnected'
         }
     

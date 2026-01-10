@@ -3,62 +3,165 @@
 {% block title %}Dashboard - Fshare-Arr Bridge{% endblock %}
 
 {% block content %}
-<div class="stats-grid">
-    <div class="stat-card">
-        <div class="stat-value" id="total-searches">0</div>
-        <div class="stat-label">Total Searches</div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-value" id="active-downloads">0</div>
-        <div class="stat-label">Active Downloads</div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-value" id="success-rate">0%</div>
-        <div class="stat-label">Success Rate</div>
-    </div>
-</div>
+<div class="group">
+    <h2 class="group-title">Management</h2>
+    <div class="grid">
+        <!-- System Status Widget -->
+        <div class="card widget-status">
+            <div class="card-top">
+                <div class="card-title-group">
+                    <div class="card-icon">⚙️</div>
+                    <div class="card-info">
+                        <div class="card-title">System Status</div>
+                        <div class="card-subtitle">Fshare-Arr Bridge</div>
+                    </div>
+                </div>
+                <div class="badge badge-success">Online</div>
+            </div>
+            <div class="card-content">
+                <p class="card-subtitle">All services operational</p>
+            </div>
+            <div class="card-stats">
+                <div class="mini-stat">
+                    <div class="mini-stat-label">Indexer</div>
+                    <div class="mini-stat-value">OK</div>
+                </div>
+                <div class="mini-stat">
+                    <div class="mini-stat-label">SABnzbd</div>
+                    <div class="mini-stat-value">OK</div>
+                </div>
+                <div class="mini-stat">
+                    <div class="mini-stat-label">Uptime</div>
+                    <div class="mini-stat-value">99.9%</div>
+                </div>
+            </div>
+        </div>
 
-<div class="card">
-    <div class="card-header">
-        <h2 class="card-title">Quick Search</h2>
-    </div>
-    <div class="search-container">
-        <div class="search-box">
-            <input type="text" id="search-input" class="search-input" placeholder="Search for movies or TV shows..."
-                autocomplete="off">
-            <div id="search-suggestions" class="search-suggestions" style="display: none;"></div>
+        <!-- pyLoad Integration Widget -->
+        <div class="card widget-pyload">
+            <div class="card-top">
+                <div class="card-title-group">
+                    <div class="card-icon">⏬</div>
+                    <div class="card-info">
+                        <div class="card-title">pyLoad</div>
+                        <div class="card-subtitle">Download Manager</div>
+                    </div>
+                </div>
+                <div id="pyload-status-badge" class="badge badge-success">Connected</div>
+            </div>
+            <div class="card-content">
+                <p class="card-subtitle" id="pyload-active-desc">0 active downloads</p>
+            </div>
+            <div class="card-stats">
+                <div class="mini-stat">
+                    <div class="mini-stat-label">Queue</div>
+                    <div class="mini-stat-value" id="stats-active-count">0</div>
+                </div>
+                <div class="mini-stat">
+                    <div class="mini-stat-label">Speed</div>
+                    <div class="mini-stat-value" id="stats-speed">0 B/s</div>
+                </div>
+                <div class="mini-stat">
+                    <div class="mini-stat-label">Total</div>
+                    <div class="mini-stat-value" id="stats-total-count">0</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TimFshare Search Widget -->
+        <div class="card widget-fshare">
+            <div class="card-top">
+                <div class="card-title-group">
+                    <div class="card-icon">🔍</div>
+                    <div class="card-info">
+                        <div class="card-title">TimFshare</div>
+                        <div class="card-subtitle">Search Engine</div>
+                    </div>
+                </div>
+                <div class="badge badge-success">Ready</div>
+            </div>
+            <div class="card-content">
+                <p class="card-subtitle">Fshare search with smart scoring</p>
+            </div>
+            <div class="card-stats">
+                <div class="mini-stat">
+                    <div class="mini-stat-label">Searches</div>
+                    <div class="mini-stat-value" id="stats-search-count">0</div>
+                </div>
+                <div class="mini-stat">
+                    <div class="mini-stat-label">Success</div>
+                    <div class="mini-stat-value" id="stats-success-rate">0%</div>
+                </div>
+            </div>
         </div>
     </div>
-    <div id="search-results"></div>
 </div>
 
-<div class="card">
-    <div class="card-header">
-        <h2 class="card-title">Recent Downloads</h2>
-        <a href="/downloads" class="btn btn-secondary">View All</a>
-    </div>
-    <div id="downloads-list">
-        <p class="text-secondary">No recent downloads</p>
-    </div>
-</div>
+<div class="group">
+    <h2 class="group-title">Search & Utilities</h2>
 
-<div class="card">
-    <div class="card-header">
-        <h2 class="card-title">System Status</h2>
+    <div class="search-overlay">
+        <div class="search-input-group">
+            <span style="padding-left: 1rem; display: flex; align-items: center;">🔍</span>
+            <input type="text" id="search-input" placeholder="Quick search Fshare..." autocomplete="off">
+            <button class="btn btn-primary"
+                onclick="window.location.href='/search?q=' + document.getElementById('search-input').value">Search</button>
+        </div>
+        <div id="search-suggestions" class="search-suggestions" style="display: none;"></div>
     </div>
-    <div class="result-meta">
-        <span class="badge resolution">TimFshare: Connected</span>
-        <span class="badge">pyLoad: {{ 'Connected' if pyload_status else 'Disconnected' }}</span>
-        <span class="badge vietnamese">Filename Normalizer: Active</span>
+
+    <div class="grid">
+        <div class="card" style="grid-column: span 2;">
+            <div class="card-top">
+                <div class="card-title-group">
+                    <div class="card-icon">📜</div>
+                    <div class="card-info">
+                        <div class="card-title">Recent Downloads</div>
+                        <div class="card-subtitle">Last few items added to queue</div>
+                    </div>
+                </div>
+                <a href="/downloads" class="btn btn-secondary">View History</a>
+            </div>
+            <div class="card-content" id="downloads-list" style="margin-top: 1rem;">
+                <p class="text-secondary">Loading activity...</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-top">
+                <div class="card-title-group">
+                    <div class="card-icon">🔧</div>
+                    <div class="card-info">
+                        <div class="card-title">Tools</div>
+                        <div class="card-subtitle">Quick Actions</div>
+                    </div>
+                </div>
+            </div>
+            <div class="card-content" style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 1rem;">
+                <button class="btn btn-secondary" style="width: 100%; justify-content: center;">Restart Bridge</button>
+                <button class="btn btn-secondary" style="width: 100%; justify-content: center;">Clear Search
+                    Cache</button>
+                <button class="btn btn-secondary" style="width: 100%; justify-content: center;">Scan pyLoad
+                    Plugins</button>
+            </div>
+        </div>
     </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+    // Refresh stats every 30 seconds
+    function refreshStats() {
+        if (bridge) bridge.loadStats();
+    }
+
     // Auto-refresh downloads every 5 seconds
     setInterval(() => {
         if (bridge) bridge.loadDownloads();
     }, 5000);
+
+    setInterval(refreshStats, 30000);
+    refreshStats();
 </script>
 {% endblock %}

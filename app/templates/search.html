@@ -3,35 +3,25 @@
 {% block title %}Search - Fshare-Arr Bridge{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div class="card-header">
-        <h2 class="card-title">Search Fshare</h2>
+<div class="group">
+    <h2 class="group-title">Fshare Search</h2>
+
+    <div class="search-overlay">
+        <div class="search-input-group">
+            <span style="padding-left: 1rem; display: flex; align-items: center;">🔍</span>
+            <input type="text" id="search-input" placeholder="Search movies, TV shows, or filenames..."
+                autocomplete="off">
+            <button class="btn btn-primary"
+                onclick="bridge.search(document.getElementById('search-input').value)">Search</button>
+        </div>
+        <div id="search-suggestions" class="search-suggestions"
+            style="display: none; position: absolute; width: calc(100% - 3rem);"></div>
     </div>
 
-    <div class="search-container">
-        <div class="search-box">
-            <input type="text" id="search-input" class="search-input" placeholder="Search for movies or TV shows..."
-                autocomplete="off" autofocus>
-            <div id="search-suggestions" class="search-suggestions" style="display: none;"></div>
+    <div id="search-results" class="grid">
+        <div style="grid-column: 1/-1; text-align: center; padding: 5rem; opacity: 0.5;">
+            <p>Enter a query to begin searching</p>
         </div>
     </div>
-
-    <div id="search-results"></div>
-</div>
-
-<div class="card">
-    <div class="card-header">
-        <h2 class="card-title">How Scoring Works</h2>
-    </div>
-    <div class="result-meta">
-        <span class="badge">Keyword Match: +10 points each</span>
-        <span class="badge">Year Match: +20 points</span>
-        <span class="badge resolution">Quality (1080p+): +10 points</span>
-        <span class="badge vietnamese">Vietnamese Content: +15 points</span>
-    </div>
-    <p style="margin-top: 1rem; color: var(--text-secondary);">
-        Results are automatically scored and ranked by relevance. Higher scores indicate better matches to your search
-        query.
-    </p>
 </div>
 {% endblock %}

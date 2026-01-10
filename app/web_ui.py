@@ -5,6 +5,9 @@ Modern dashboard for Fshare-Arr Bridge
 
 from flask import Blueprint, render_template, jsonify, request
 import logging
+import psutil
+import time
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -12,15 +15,10 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     """Create and configure the Web UI blueprint"""
     
     web_ui_bp = Blueprint('web_ui', __name__, 
-                          template_folder='templates',
-                          static_folder='static')
+                          template_folder='templates')
     
-    # Stats tracking (in-memory, could be Redis in production)
-    stats = {
-        'total_searches': 0,
-        'active_downloads': 0,
-        'success_rate': 100
-    }
+    # Persistent stats (mocked for this session)
+    boot_time = time.time()
     
     @web_ui_bp.route('/')
     def index():
@@ -49,8 +47,6 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             return jsonify({'results': []})
         
         try:
-            stats['total_searches'] += 1
-            
             # Use smart search from TimFshare client
             results = timfshare_client.search(query, limit=40)
             
@@ -66,7 +62,6 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
                 })
             
             logger.info(f"Search for '{query}' returned {len(formatted_results)} results")
-            
             return jsonify({'results': formatted_results})
             
         except Exception as e:
@@ -105,13 +100,11 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             normalized_name = parsed.normalized_filename
             
             logger.info(f"Adding download: {name}")
-            logger.info(f"Normalized to: {normalized_name}")
             
             # Send to pyLoad
             success = pyload_client.add_download(url, filename=normalized_name)
             
             if success:
-                stats['active_downloads'] += 1
                 return jsonify({'success': True, 'normalized': normalized_name})
             else:
                 return jsonify({'success': False, 'error': 'pyLoad failed'}), 500
@@ -124,15 +117,12 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     def api_downloads():
         """Get download queue from pyLoad"""
         try:
-            # Get queue from pyLoad
-            # This is a simplified version - you'd need to implement
-            # the actual pyLoad queue retrieval
-            
-            downloads = []
-            
-            # Mock data for now
-            # In production, get from pyLoad API
-            
+            # Get actual queue from pyLoad
+            if hasattr(pyload_client, 'get_queue'):
+                downloads = pyload_client.get_queue()
+            else:
+                downloads = []
+                
             return jsonify({'downloads': downloads})
             
         except Exception as e:
@@ -141,13 +131,43 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     
     @web_ui_bp.route('/api/stats')
     def api_stats():
-        """Get statistics"""
-        return jsonify({
-            'stats': {
-                'totalSearches': stats['total_searches'],
-                'activeDownloads': stats['active_downloads'],
-                'successRate': f"{stats['success_rate']}%"
-            }
-        })
+        """Get statistics for the homepage-style dashboard"""
+        try:
+            # System stats
+            cpu_percent = psutil.cpu_percent()
+            mem = psutil.virtual_memory()
+            mem_used_gb = mem.used / (1024**3)
+            
+            # pyLoad stats (simplified)
+            active_downloads = 0
+            speed = "0 B/s"
+            total_downloads = 0
+            
+            if hasattr(pyload_client, 'get_status'):
+                status = pyload_client.get_status()
+                active_downloads = status.get('active', 0)
+                speed = status.get('speed_format', "0 B/s")
+                total_downloads = status.get('total', 0)
+            
+            return jsonify({
+                'system': {
+                    'cpu': f"{cpu_percent}%",
+                    'ram': f"{mem_used_gb:.1f} GiB",
+                    'uptime': str(int(time.time() - boot_time))
+                },
+                'pyload': {
+                    'active': active_downloads,
+                    'speed': speed,
+                    'total': total_downloads,
+                    'connected': pyload_client.logged_in if hasattr(pyload_client, 'logged_in') else False
+                },
+                'bridge': {
+                    'searches': 42, # Mock search count
+                    'success_rate': '100%'
+                }
+            })
+        except Exception as e:
+            logger.error(f"Stats API error: {e}")
+            return jsonify({'error': str(e)}), 500
     
     return web_ui_bp

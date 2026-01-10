@@ -3,57 +3,46 @@
 {% block title %}Downloads - Fshare-Arr Bridge{% endblock %}
 
 {% block content %}
-<div class="card">
-    <div class="card-header">
-        <h2 class="card-title">Download Queue</h2>
-        <button class="btn btn-secondary" onclick="bridge.loadDownloads()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                style="vertical-align: middle;">
-                <polyline points="23 4 23 10 17 10"></polyline>
-                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
-            </svg>
-            Refresh
-        </button>
-    </div>
+<div class="group">
+    <h2 class="group-title">pyLoad Queue</h2>
 
-    <div id="downloads-list">
-        <p class="text-secondary">Loading downloads...</p>
+    <div id="downloads-list" class="grid">
+        <div style="grid-column: 1/-1; text-align: center; padding: 5rem; opacity: 0.5;">
+            <p>Loading download queue...</p>
+        </div>
     </div>
 </div>
 
-<div class="card">
-    <div class="card-header">
-        <h2 class="card-title">Filename Normalization</h2>
-    </div>
-    <p style="color: var(--text-secondary); margin-bottom: 1rem;">
-        All filenames are automatically normalized to ensure compatibility with Sonarr/Radarr:
-    </p>
-    <div class="result-card">
-        <div class="result-header">
-            <h3 class="result-title">Example</h3>
+<div class="group">
+    <h2 class="group-title">Normalization Example</h2>
+    <div class="card">
+        <div class="card-top">
+            <div class="card-title">How name normalization works</div>
         </div>
-        <div class="download-info">
-            <p class="filename">Ling Cage 2019 4K HDR 10Bit S1E14 SP TVP TMPĐ_kimngonx5 (2019) 2160p</p>
-            <p class="normalized">Ling Cage S01E14 2019 4K HDR 10Bit SP TVP TMPĐ kimngonx5 2160p</p>
+        <div class="card-content">
+            <p class="card-subtitle" style="margin-bottom: 1rem;">The bridge automatically fixes Fshare filenames for
+                *arr suite compatibility.</p>
+            <div
+                style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: 0.5rem; font-family: monospace; font-size: 0.9rem;">
+                <div style="color: var(--danger-color); margin-bottom: 0.5rem;">Original:
+                    Ling.Cage.S01E01.1080p.Vietsub.mkv</div>
+                <div style="color: var(--success-color);">Fixed: Ling Cage - S01E01 - 1080p - Vietsub.mkv</div>
+            </div>
         </div>
-        <p style="margin-top: 1rem; color: var(--text-secondary); font-size: 0.875rem;">
-            Quality markers are moved <strong>after</strong> the episode identifier, allowing *arr to correctly identify
-            the series and episode.
-        </p>
     </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-    // Load downloads on page load
-    document.addEventListener('DOMContentLoaded', () => {
-        bridge.loadDownloads();
-    });
-
-    // Auto-refresh every 5 seconds
+    // Auto-refresh downloads every 5 seconds
     setInterval(() => {
-        bridge.loadDownloads();
+        if (bridge) bridge.loadDownloads();
     }, 5000);
+
+    // Initial load override for search (since app.js does it globally, but downloads page might need more)
+    document.addEventListener('DOMContentLoaded', () => {
+        if (bridge) bridge.loadDownloads();
+    });
 </script>
 {% endblock %}

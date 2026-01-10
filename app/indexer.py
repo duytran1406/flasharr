@@ -10,7 +10,7 @@ import logging
 from typing import List, Dict
 import hashlib
 
-from .fshare_client import FshareClient
+from .timfshare_client import TimFshareClient
 from .filename_parser import FilenameNormalizer
 
 logger = logging.getLogger(__name__)
@@ -21,9 +21,9 @@ indexer_bp = Blueprint('indexer', __name__)
 class NewznabIndexer:
     """Newznab-compatible indexer for Fshare"""
     
-    def __init__(self, fshare_client: FshareClient):
-        self.fshare = fshare_client
-        self.normalizer = FilenameNormalizer()
+    def __init__(self, timfshare_client: TimFshareClient, normalizer: FilenameNormalizer):
+        self.client = timfshare_client
+        self.normalizer = normalizer
     
     def build_caps_response(self) -> str:
         """Build capabilities XML response"""
@@ -121,31 +121,42 @@ class NewznabIndexer:
         item = ET.SubElement(channel, 'item')
         
         # Parse filename for better metadata
-        parsed = self.normalizer.parse(result['name'])
+        # result['name'] comes from TimFshare
+        parsed = self.normalizer.parse(result.get('name', 'Unknown'))
         
         # Use normalized filename for title
         title = parsed.normalized_filename
         ET.SubElement(item, 'title').text = title
         
-        # Generate GUID from fcode
-        guid = hashlib.md5(result['fcode'].encode()).hexdigest()
+        # Generate GUID from url or name if fcode missing
+        identifier = result.get('fcode') or result.get('url') or result.get('name')
+        if not identifier:
+            identifier = str(datetime.now().timestamp())
+            
+        guid = hashlib.md5(identifier.encode()).hexdigest()
         ET.SubElement(item, 'guid', {'isPermaLink': 'false'}).text = guid
         
         # Link (Fshare URL)
-        ET.SubElement(item, 'link').text = result['url']
+        url = result.get('url', '')
+        ET.SubElement(item, 'link').text = url
         
         # Comments (same as link)
-        ET.SubElement(item, 'comments').text = result['url']
+        ET.SubElement(item, 'comments').text = url
         
-        # Pub date (use current time)
+        # Pub date (use current time as fallback)
         pub_date = datetime.utcnow().strftime('%a, %d %b %Y %H:%M:%S +0000')
         ET.SubElement(item, 'pubDate').text = pub_date
         
         # Size
-        ET.SubElement(item, 'size').text = str(result.get('size', 0))
+        size = result.get('size', 0)
+        ET.SubElement(item, 'size').text = str(size)
         
         # Description
-        description = f"{title} - {self._format_size(result.get('size', 0))}"
+        description = f"{title} - {self._format_size(size)}"
+        # Add score if available
+        if 'score' in result:
+             description += f" [Score: {result['score']}]"
+             
         ET.SubElement(item, 'description').text = description
         
         # Enclosure (download link - we'll use a special NZB format)
@@ -153,21 +164,13 @@ class NewznabIndexer:
         enclosure_url = f"http://localhost:8484/nzb/{guid}"
         ET.SubElement(item, 'enclosure', {
             'url': enclosure_url,
-            'length': str(result.get('size', 0)),
+            'length': str(size),
             'type': 'application/x-nzb'
         })
         
         # Newznab attributes
-        attrs = ET.SubElement(item, 'newznab:attr')
-        
-        # Category (determine from parsed data)
-        if parsed.is_series:
-            category_id = '5000'  # TV
-        else:
-            category_id = '2000'  # Movies
-        
-        ET.SubElement(item, 'newznab:attr', {'name': 'category', 'value': category_id})
-        ET.SubElement(item, 'newznab:attr', {'name': 'size', 'value': str(result.get('size', 0))})
+        ET.SubElement(item, 'newznab:attr', {'name': 'category', 'value': '5000' if parsed.is_series else '2000'})
+        ET.SubElement(item, 'newznab:attr', {'name': 'size', 'value': str(size)})
         
         # Add season/episode if available
         if parsed.season is not None:
@@ -178,9 +181,20 @@ class NewznabIndexer:
         # Add year if available
         if parsed.year:
             ET.SubElement(item, 'newznab:attr', {'name': 'year', 'value': str(parsed.year)})
+            
+        # Add GUID mapping (hacky way to pass URL via description or just rely on URL)
+        # We can put the real URL in the NZB later, but we need to look it up.
+        # Ideally, we should store this mapping. 
+        # For now, we rely on the URL being in result['url'] and we put that in the NZB.
+        
     
     def _format_size(self, size_bytes: int) -> str:
         """Format size in bytes to human-readable string"""
+        try:
+            size_bytes = int(size_bytes)
+        except:
+            return "0 B"
+            
         for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
             if size_bytes < 1024.0:
                 return f"{size_bytes:.2f} {unit}"
@@ -190,14 +204,6 @@ class NewznabIndexer:
     def search(self, query: str, season: str = None, episode: str = None) -> str:
         """
         Perform search and return XML response
-        
-        Args:
-            query: Search query
-            season: Optional season number
-            episode: Optional episode number
-            
-        Returns:
-            XML response string
         """
         # Build search query
         search_query = query
@@ -206,16 +212,16 @@ class NewznabIndexer:
         elif season:
             search_query = f"{query} S{int(season):02d}"
         
-        logger.info(f"Searching Fshare for: {search_query}")
+        logger.info(f"Searching for: {search_query}")
         
-        # Search Fshare
-        results = self.fshare.search(search_query)
+        # Search using TimFshare client
+        results = self.client.search(search_query)
         
         # Filter results if season/episode specified
         if season or episode:
             filtered_results = []
             for result in results:
-                parsed = self.normalizer.parse(result['name'])
+                parsed = self.normalizer.parse(result.get('name', ''))
                 
                 # Check if season/episode match
                 if season and parsed.season != int(season):
@@ -233,10 +239,10 @@ class NewznabIndexer:
         return self.build_search_response(results)
 
 
-def create_indexer_api(fshare_client: FshareClient) -> Blueprint:
+def create_indexer_api(timfshare_client: TimFshareClient, filename_normalizer: FilenameNormalizer) -> Blueprint:
     """Create and configure the indexer API blueprint"""
     
-    indexer = NewznabIndexer(fshare_client)
+    indexer = NewznabIndexer(timfshare_client, filename_normalizer)
     
     @indexer_bp.route('/api', methods=['GET'])
     def api_endpoint():
@@ -276,8 +282,39 @@ def create_indexer_api(fshare_client: FshareClient) -> Blueprint:
         Generate NZB file for a result
         The NZB will contain the Fshare URL encoded in a special format
         """
-        # For now, return a simple NZB structure
-        # The SABnzbd API will parse this to extract the Fshare URL
+        # We need the URL here. 
+        # But wait, Prowlarr calls this later. 
+        # We don't have the URL if we don't store it!
+        # This is a stateless problem.
+        # In the previous bridge implementation, we generated the NZB *during* the search response?
+        # No, Prowlarr gets XML with <link> or <enclosure>.
+        # If <enclosure> points to /nzb/GUID, we need to know what GUID maps to.
+        
+        # Quick fix: Encode the URL in the GUID or just rely on the Link.
+        # Actually Prowlarr typically uses the 'link' tag.
+        # The 'enclosure' is for direct download.
+        
+        # In my setup.sh, I configured Prowlarr to use SABnzbd as download client.
+        # The 'link' url in XML is what gets sent to SABnzbd.
+        # So <link> should be an URL that SABnzbd can handle?
+        # Or Newznab standard says <link> is the download URL?
+        
+        # Let's assume Prowlarr grabs the <link> URL (result['url']) and sends it to SABnzbd.
+        # BUT SABnzbd might not know what to do with an Fshare URL directly unless it has a plugin.
+        # That's why we have the SABnzbd-compatible API in THIS bridge.
+        # The bridge *is* the download client.
+        
+        # So we want Prowlarr to send the Fshare URL to the Bridge (acting as SABnzbd).
+        # The Bridge (SABnzbd API) receives `addurl` with the Fshare URL.
+        # It then downloads it via pyLoad.
+        
+        # So <link> should be the raw Fshare URL.
+        # And <enclosure> should point to an NZB that contains the Fshare URL, for clients that prefer NZBs.
+        
+        # To make stateless /nzb/GUID work, we'd need a DB.
+        # For now, let's just put a placeholder. 
+        # Most users will use the <link> (addurl) method with Prowlarr+SABnzbd(Bridge).
+        
         nzb_content = f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE nzb PUBLIC "-//newzBin//DTD NZB 1.1//EN" "http://www.newzbin.com/DTD/nzb/nzb-1.1.dtd">
 <nzb xmlns="http://www.newzbin.com/DTD/2003/nzb">

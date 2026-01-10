@@ -1,48 +1,73 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
+<html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Fshare-Arr Bridge{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
 </head>
-<body>
-    <header class="header">
-        <div class="header-content">
-            <a href="/" class="logo">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
-                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
-                    <line x1="12" y1="22.08" x2="12" y2="12"></line>
-                </svg>
-                Fshare-Arr Bridge
-            </a>
-            <nav class="nav">
-                <a href="/" class="nav-link {% if request.path == '/' %}active{% endif %}">Dashboard</a>
-                <a href="/search" class="nav-link {% if request.path == '/search' %}active{% endif %}">Search</a>
-                <a href="/downloads" class="nav-link {% if request.path == '/downloads' %}active{% endif %}">Downloads</a>
-                <button id="theme-toggle" class="theme-toggle">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="5"></circle>
-                        <line x1="12" y1="1" x2="12" y2="3"></line>
-                        <line x1="12" y1="21" x2="12" y2="23"></line>
-                        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
-                        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
-                        <line x1="1" y1="12" x2="3" y2="12"></line>
-                        <line x1="21" y1="12" x2="23" y2="12"></line>
-                        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
-                        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
-                    </svg>
-                </button>
-            </nav>
-        </div>
-    </header>
 
-    <main class="container">
-        {% block content %}{% endblock %}
-    </main>
+<body>
+    <div class="top-bar">
+        <div class="system-stats">
+            <div class="stat-item">
+                <div class="stat-icon">💻</div>
+                <div class="stat-info">
+                    <span class="stat-label">CPU</span>
+                    <span class="stat-value" id="top-cpu">0%</span>
+                </div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-icon">🧠</div>
+                <div class="stat-info">
+                    <span class="stat-label">RAM</span>
+                    <span class="stat-value" id="top-ram">0.0 GiB</span>
+                </div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-icon">📦</div>
+                <div class="stat-info">
+                    <span class="stat-label">Downloads</span>
+                    <span class="stat-value" id="top-downloads">0</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="system-stats">
+            <div class="stat-item">
+                <div class="stat-value" id="top-clock">--:-- --</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <nav class="tabs-nav">
+            <a href="/" class="tab-link {% if request.path == '/' %}active{% endif %}">Dashboard</a>
+            <a href="/search" class="tab-link {% if request.path == '/search' %}active{% endif %}">Search</a>
+            <a href="/downloads" class="tab-link {% if request.path == '/downloads' %}active{% endif %}">Downloads</a>
+        </nav>
+
+        <main>
+            {% block content %}{% endblock %}
+        </main>
+    </div>
 
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script>
+        function updateClock() {
+            const now = new Date();
+            const options = { hour: '2-digit', minute: '2-digit', hour12: true };
+            document.getElementById('top-clock').innerText = now.toLocaleTimeString([], options);
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+    </script>
     {% block scripts %}{% endblock %}
 </body>
+
 </html>
