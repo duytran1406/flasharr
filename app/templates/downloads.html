@@ -4,31 +4,29 @@
 
 {% block content %}
 <div class="downloads-container">
-    <!-- Functional Toolbar -->
-    <div class="downloads-toolbar"
-        style="justify-content: space-between; background: var(--bg-card); padding: 0.75rem 1rem; border-radius: 12px; border: 1px solid var(--border-color); backdrop-filter: blur(10px);">
-        <div style="display: flex; gap: 0.75rem;">
-            <button class="btn-primary" onclick="bridge.startAllDownloads()" title="Start All"
-                style="background: rgba(16, 185, 129, 0.2); color: #10b981; border-color: rgba(16, 185, 129, 0.3);">
+    <!-- Elegant Header -->
+    <div class="elegant-toolbar">
+        <div class="search-wrapper">
+            <span class="material-icons">search</span>
+            <input type="text" class="elegant-search-input" placeholder="Search by name..." id="downloads-search-input"
+                oninput="bridge.loadDownloads()" autocomplete="off">
+        </div>
+
+        <div class="action-group">
+            <button class="icon-action-btn btn-add" onclick="alert('Add links functionality coming soon')"
+                title="Add Link">
+                <span class="material-icons">queue</span>
+            </button>
+            <button class="icon-action-btn btn-start" onclick="bridge.startAllDownloads()" title="Start All">
                 <span class="material-icons">play_arrow</span>
-                Start All
             </button>
-            <button class="btn-primary" onclick="bridge.pauseAllDownloads()" title="Pause All"
-                style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; border-color: rgba(245, 158, 11, 0.3);">
+            <button class="icon-action-btn btn-pause" onclick="bridge.pauseAllDownloads()" title="Pause All">
                 <span class="material-icons">pause</span>
-                Pause All
             </button>
-            <button class="btn-primary" onclick="bridge.stopAllDownloads()" title="Stop All"
-                style="background: rgba(239, 68, 68, 0.2); color: #ef4444; border-color: rgba(239, 68, 68, 0.3);">
+            <button class="icon-action-btn btn-stop" onclick="bridge.stopAllDownloads()" title="Stop All">
                 <span class="material-icons">stop</span>
-                Stop All
             </button>
         </div>
-        <button class="btn-primary" onclick="alert('Add links functionality coming soon')"
-            style="display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 1.25rem; border-radius: 8px;">
-            <span class="material-icons">queue</span>
-            Add Links
-        </button>
     </div>
 
     <!-- Main List Card -->

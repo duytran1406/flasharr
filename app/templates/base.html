@@ -57,11 +57,7 @@
             <header class="header">
                 <div class="search-container">
                     {% if request.path == '/downloads' %}
-                    <span class="material-icons"
-                        style="position: absolute; left: 1rem; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 1.25rem;">search</span>
-                    <input type="text" class="search-input" placeholder="Filter download by title..."
-                        id="downloads-search-input" style="padding-left: 3rem;" oninput="bridge.loadDownloads()"
-                        autocomplete="off">
+                    <!-- Search moved to local toolbar for elegance -->
                     {% else %}
                     <input type="text" class="search-input" placeholder="Search Fshare..." id="header-search-input"
                         autocomplete="off">
