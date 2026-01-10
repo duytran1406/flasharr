@@ -6,87 +6,54 @@ Handles communication with pyLoad download manager
 import requests
 import logging
 from typing import Optional, Dict, List
+from requests.auth import HTTPBasicAuth
 
 logger = logging.getLogger(__name__)
 
 
 class PyLoadClient:
-    """Client for interacting with pyLoad API"""
+    """Client for interacting with pyLoad API (v0.5.0+)"""
     
     def __init__(self, host: str, port: int, username: str, password: str):
         self.base_url = f"http://{host}:{port}"
         self.username = username
         self.password = password
         self.session = requests.Session()
-        self.logged_in = False
+        # Use Basic Auth for all requests to pyLoad NG
+        self.session.auth = HTTPBasicAuth(self.username, self.password)
+        self.logged_in = True
     
     def login(self) -> bool:
         """
-        Login to pyLoad
-        
-        Returns:
-            True if login successful, False otherwise
+        Test connection to pyLoad
         """
         try:
-            logger.info("Logging into pyLoad...")
-            
-            response = self.session.post(
-                f"{self.base_url}/api/login",
-                json={
-                    "username": self.username,
-                    "password": self.password
-                },
-                timeout=10
-            )
-            
+            response = self.session.get(f"{self.base_url}/api/status_server", timeout=5)
             if response.status_code == 200:
-                data = response.json()
-                if data:
-                    self.logged_in = True
-                    logger.info("✅ pyLoad login successful")
-                    return True
-                else:
-                    logger.error("❌ pyLoad login failed: Invalid credentials")
-                    return False
+                logger.info("✅ pyLoad API access verified (v0.5.0+)")
+                return True
             else:
-                logger.error(f"❌ pyLoad login request failed: {response.status_code}")
+                logger.error(f"❌ pyLoad API access failed: {response.status_code}")
                 return False
-                
         except Exception as e:
-            logger.error(f"❌ pyLoad login error: {e}")
+            logger.error(f"❌ pyLoad connection test failed: {e}")
             return False
     
     def ensure_logged_in(self) -> bool:
-        """Ensure we have a valid session, login if needed"""
-        if not self.logged_in:
-            return self.login()
         return True
     
     def add_download(self, url: str, filename: Optional[str] = None, package_name: Optional[str] = None) -> bool:
         """
         Add a download to pyLoad
-        
-        Args:
-            url: Download URL (Fshare direct link)
-            filename: Optional custom filename
-            package_name: Optional package name
-            
-        Returns:
-            True if download added successfully, False otherwise
         """
-        if not self.ensure_logged_in():
-            logger.error("Cannot add download: not logged in to pyLoad")
-            return False
-        
         try:
             logger.info(f"Adding download to pyLoad: {filename or url}")
             
-            # Create package name
             pkg_name = package_name or filename or "Fshare Download"
             
-            # Add package
+            # pyLoad 0.5.0+ uses snake_case and JSON body
             response = self.session.post(
-                f"{self.base_url}/api/addPackage",
+                f"{self.base_url}/api/add_package",
                 json={
                     "name": pkg_name,
                     "links": [url]
@@ -95,15 +62,10 @@ class PyLoadClient:
             )
             
             if response.status_code == 200:
-                data = response.json()
-                if data:
-                    logger.info(f"✅ Download added to pyLoad: {pkg_name}")
-                    return True
-                else:
-                    logger.error("❌ Failed to add download to pyLoad")
-                    return False
+                logger.info(f"✅ Download added to pyLoad: {pkg_name}")
+                return True
             else:
-                logger.error(f"❌ pyLoad add download request failed: {response.status_code}")
+                logger.error(f"❌ pyLoad add download failed: {response.status_code} - {response.text}")
                 return False
                 
         except Exception as e:
@@ -113,27 +75,16 @@ class PyLoadClient:
     def get_queue(self) -> List[Dict]:
         """
         Get current download queue
-        
-        Returns:
-            List of downloads in queue
         """
-        if not self.ensure_logged_in():
-            logger.error("Cannot get queue: not logged in to pyLoad")
-            return []
-        
         try:
             response = self.session.get(
-                f"{self.base_url}/api/getQueue",
+                f"{self.base_url}/api/get_queue",
                 timeout=10
             )
             
             if response.status_code == 200:
-                data = response.json()
-                return data if data else []
-            else:
-                logger.error(f"Failed to get queue: {response.status_code}")
-                return []
-                
+                return response.json() or []
+            return []
         except Exception as e:
             logger.error(f"Error getting queue: {e}")
             return []
@@ -141,26 +92,31 @@ class PyLoadClient:
     def get_status(self) -> Optional[Dict]:
         """
         Get pyLoad status
-        
-        Returns:
-            Status dict or None if failed
         """
-        if not self.ensure_logged_in():
-            logger.error("Cannot get status: not logged in to pyLoad")
-            return None
-        
         try:
             response = self.session.get(
-                f"{self.base_url}/api/getServerStatus",
+                f"{self.base_url}/api/status_server",
                 timeout=10
             )
             
             if response.status_code == 200:
-                return response.json()
-            else:
-                logger.error(f"Failed to get status: {response.status_code}")
-                return None
-                
+                data = response.json()
+                # Map newer keys to what web_ui expects if necessary
+                if 'speed' in data and 'speed_format' not in data:
+                    data['speed_format'] = self.format_speed(data['speed'])
+                return data
+            return None
         except Exception as e:
             logger.error(f"Error getting status: {e}")
             return None
+
+    def format_speed(self, speed_bytes: float) -> str:
+        """Format speed in bytes/s to human readable string"""
+        if speed_bytes == 0:
+            return "0 B/s"
+        units = ["B/s", "KB/s", "MB/s", "GB/s"]
+        i = 0
+        while speed_bytes >= 1024 and i < len(units) - 1:
+            speed_bytes /= 1024
+            i += 1
+        return f"{speed_bytes:.1f} {units[i]}"

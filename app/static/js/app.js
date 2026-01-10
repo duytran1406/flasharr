@@ -31,8 +31,8 @@ class FshareBridge {
 
     updateUIValues(data) {
         // Top bar stats
-        this.setText('top-cpu', data.system.cpu);
-        this.setText('top-ram', data.system.ram);
+        this.setText('top-speedtest', data.system.speedtest);
+        this.setText('top-uptime', this.formatUptime(data.system.uptime));
         this.setText('top-downloads', data.pyload.active);
 
         // pyLoad card
@@ -45,6 +45,14 @@ class FshareBridge {
         // Bridge card
         this.setText('stats-search-count', data.bridge.searches);
         this.setText('stats-success-rate', data.bridge.success_rate);
+    }
+
+    formatUptime(seconds) {
+        const s = parseInt(seconds);
+        if (s < 60) return `${s}s`;
+        if (s < 3600) return `${Math.floor(s / 60)}m`;
+        if (s < 86400) return `${Math.floor(s / 3600)}h`;
+        return `${Math.floor(s / 86400)}d`;
     }
 
     setText(id, value) {

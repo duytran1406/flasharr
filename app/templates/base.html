@@ -9,24 +9,17 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.png') }}">
 </head>
 
 <body>
     <div class="top-bar">
         <div class="system-stats">
             <div class="stat-item">
-                <div class="stat-icon">💻</div>
+                <div class="stat-icon">🛰️</div>
                 <div class="stat-info">
-                    <span class="stat-label">CPU</span>
-                    <span class="stat-value" id="top-cpu">0%</span>
-                </div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-icon">🧠</div>
-                <div class="stat-info">
-                    <span class="stat-label">RAM</span>
-                    <span class="stat-value" id="top-ram">0.0 GiB</span>
+                    <span class="stat-label">Net Speed</span>
+                    <span class="stat-value" id="top-speedtest">0 Mbps</span>
                 </div>
             </div>
             <div class="stat-item">
@@ -34,6 +27,13 @@
                 <div class="stat-info">
                     <span class="stat-label">Downloads</span>
                     <span class="stat-value" id="top-downloads">0</span>
+                </div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-icon">🕒</div>
+                <div class="stat-info">
+                    <span class="stat-label">Uptime</span>
+                    <span class="stat-value" id="top-uptime">0s</span>
                 </div>
             </div>
         </div>

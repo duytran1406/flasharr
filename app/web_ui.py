@@ -7,9 +7,47 @@ from flask import Blueprint, render_template, jsonify, request
 import logging
 import psutil
 import time
-from datetime import datetime
+import threading
+try:
+    import speedtest
+except ImportError:
+    speedtest = None
 
 logger = logging.getLogger(__name__)
+
+# Global cache for speedtest results
+speedtest_cache = {
+    'download': 0,
+    'upload': 0,
+    'ping': 0,
+    'last_updated': 0
+}
+speedtest_lock = threading.Lock()
+
+def run_speedtest():
+    """Run speedtest in background"""
+    global speedtest_cache
+    if not speedtest:
+        logger.warning("speedtest-cli not installed")
+        return
+
+    try:
+        logger.info("🎬 Starting background speedtest...")
+        st = speedtest.Speedtest()
+        st.get_best_server()
+        download = st.download() / 1_000_000  # Mbps
+        upload = st.upload() / 1_000_000      # Mbps
+        results = st.results.dict()
+        
+        with speedtest_lock:
+            speedtest_cache['download'] = round(download, 1)
+            speedtest_cache['upload'] = round(upload, 1)
+            speedtest_cache['ping'] = results.get('ping', 0)
+            speedtest_cache['last_updated'] = time.time()
+        
+        logger.info(f"✅ Speedtest complete: Down: {speedtest_cache['download']} Mbps")
+    except Exception as e:
+        logger.error(f"❌ Speedtest failed: {e}")
 
 def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     """Create and configure the Web UI blueprint"""
@@ -19,6 +57,9 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     
     # Persistent stats (mocked for this session)
     boot_time = time.time()
+    
+    # Initial speedtest
+    threading.Thread(target=run_speedtest, daemon=True).start()
     
     @web_ui_bp.route('/')
     def index():
@@ -47,10 +88,7 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             return jsonify({'results': []})
         
         try:
-            # Use smart search from TimFshare client
             results = timfshare_client.search(query, limit=40)
-            
-            # Format results for frontend
             formatted_results = []
             for result in results:
                 formatted_results.append({
@@ -60,28 +98,9 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
                     'score': result.get('score', 0),
                     'fcode': result.get('fcode', '')
                 })
-            
-            logger.info(f"Search for '{query}' returned {len(formatted_results)} results")
             return jsonify({'results': formatted_results})
-            
         except Exception as e:
             logger.error(f"Search API error: {e}")
-            return jsonify({'error': str(e)}), 500
-    
-    @web_ui_bp.route('/api/autocomplete')
-    def api_autocomplete():
-        """Autocomplete API endpoint"""
-        query = request.args.get('q', '')
-        
-        if not query or len(query) < 2:
-            return jsonify({'suggestions': []})
-        
-        try:
-            suggestions = timfshare_client.autocomplete(query)
-            return jsonify({'suggestions': suggestions[:10]})
-            
-        except Exception as e:
-            logger.error(f"Autocomplete API error: {e}")
             return jsonify({'error': str(e)}), 500
     
     @web_ui_bp.route('/api/download', methods=['POST'])
@@ -95,20 +114,15 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             return jsonify({'success': False, 'error': 'Missing url or name'}), 400
         
         try:
-            # Normalize filename
             parsed = filename_normalizer.parse(name)
             normalized_name = parsed.normalized_filename
-            
             logger.info(f"Adding download: {name}")
             
-            # Send to pyLoad
             success = pyload_client.add_download(url, filename=normalized_name)
-            
             if success:
                 return jsonify({'success': True, 'normalized': normalized_name})
             else:
                 return jsonify({'success': False, 'error': 'pyLoad failed'}), 500
-                
         except Exception as e:
             logger.error(f"Download API error: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
@@ -117,14 +131,8 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     def api_downloads():
         """Get download queue from pyLoad"""
         try:
-            # Get actual queue from pyLoad
-            if hasattr(pyload_client, 'get_queue'):
-                downloads = pyload_client.get_queue()
-            else:
-                downloads = []
-                
+            downloads = pyload_client.get_queue() or []
             return jsonify({'downloads': downloads})
-            
         except Exception as e:
             logger.error(f"Downloads API error: {e}")
             return jsonify({'error': str(e)}), 500
@@ -133,27 +141,25 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     def api_stats():
         """Get statistics for the homepage-style dashboard"""
         try:
-            # System stats
-            cpu_percent = psutil.cpu_percent()
-            mem = psutil.virtual_memory()
-            mem_used_gb = mem.used / (1024**3)
-            
-            # pyLoad stats (simplified)
+            # Refresh speedtest if older than 1 hour
+            if time.time() - speedtest_cache['last_updated'] > 3600:
+                threading.Thread(target=run_speedtest, daemon=True).start()
+
+            # pyLoad stats
             active_downloads = 0
             speed = "0 B/s"
             total_downloads = 0
             
-            if hasattr(pyload_client, 'get_status'):
-                status = pyload_client.get_status()
+            status = pyload_client.get_status()
+            if status:
                 active_downloads = status.get('active', 0)
                 speed = status.get('speed_format', "0 B/s")
                 total_downloads = status.get('total', 0)
             
             return jsonify({
                 'system': {
-                    'cpu': f"{cpu_percent}%",
-                    'ram': f"{mem_used_gb:.1f} GiB",
-                    'uptime': str(int(time.time() - boot_time))
+                    'uptime': str(int(time.time() - boot_time)),
+                    'speedtest': f"{speedtest_cache['download']} Mbps"
                 },
                 'pyload': {
                     'active': active_downloads,
@@ -162,7 +168,7 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
                     'connected': pyload_client.logged_in if hasattr(pyload_client, 'logged_in') else False
                 },
                 'bridge': {
-                    'searches': 42, # Mock search count
+                    'searches': 42,
                     'success_rate': '100%'
                 }
             })
