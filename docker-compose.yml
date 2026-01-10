@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  fshare-arr-bridge:
+    build: .
+    container_name: fshare-arr-bridge
+    restart: unless-stopped
+    ports:
+      - "8484:8484"
+    environment:
+      # Fshare credentials
+      FSHARE_EMAIL: ${FSHARE_EMAIL}
+      FSHARE_PASSWORD: ${FSHARE_PASSWORD}
+
+      # pyLoad connection
+      PYLOAD_HOST: ${PYLOAD_HOST:-192.168.1.112}
+      PYLOAD_PORT: ${PYLOAD_PORT:-8000}
+      PYLOAD_USERNAME: ${PYLOAD_USERNAME:-admin}
+      PYLOAD_PASSWORD: ${PYLOAD_PASSWORD}
+
+      # Server configuration
+      INDEXER_PORT: ${INDEXER_PORT:-8484}
+      DEBUG: ${DEBUG:-false}
+    networks:
+      - arr-network
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import requests; requests.get('http://localhost:8484/health')" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  arr-network:
+    external: true
