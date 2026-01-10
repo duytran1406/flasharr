@@ -666,10 +666,19 @@ class FshareBridge {
             });
         }
 
-        // Sidebar Toggle
+        // Sidebar Toggle via Button
         const sidebarToggle = document.getElementById('sidebar-toggle');
         if (sidebarToggle) {
-            sidebarToggle.addEventListener('click', () => this.toggleSidebar());
+            sidebarToggle.addEventListener('click', (e) => {
+                e.stopPropagation(); // Prevent bubbling if needed
+                this.toggleSidebar();
+            });
+        }
+
+        // Sidebar Toggle via Brand (Logo)
+        const sidebarBrand = document.getElementById('sidebar-brand');
+        if (sidebarBrand) {
+            sidebarBrand.addEventListener('click', () => this.toggleSidebar());
         }
 
         // Search page search input

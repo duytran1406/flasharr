@@ -128,6 +128,7 @@ body {
    Let's hide brand TEXT only.
 */
 
+/* Toggle Button */
 .toggle-btn {
   background: transparent;
   border: none;
@@ -141,6 +142,11 @@ body {
 
 .toggle-btn:hover {
   color: white;
+}
+
+/* Hide toggle button in collapsed mode (use logo instead) */
+.sidebar.collapsed .toggle-btn {
+  display: none !important;
 }
 
 /* Sidebar Nav */
@@ -189,14 +195,13 @@ body {
 }
 
 .sidebar.collapsed .nav-text {
-  opacity: 0;
-  width: 0;
-  margin-left: -50px;
-  /* Hide */
+  display: none;
+  /* remove from flow to fix centering */
 }
 
 .sidebar.collapsed .nav-item {
-  padding: 0.75rem;
+  padding: 0.75rem 0;
+  /* remove side padding to auto-center */
   justify-content: center;
 }
 
