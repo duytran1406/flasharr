@@ -37,7 +37,7 @@ services:
       - TZ=Asia/Ho_Chi_Minh
     volumes:
       - /bulk-storage/appdata/fshare-arr-bridge/pyload/config:/config
-      - /bulk-storage/appdata/fshare-arr-bridge/pyload/downloads:/downloads
+      - /bulk-storage/data/downloads:/downloads
       - /bulk-storage/appdata/fshare-arr-bridge/pyload/plugins:/config/pyload/userplugins # Custom Fshare plugins
     networks:
       - fshare-network

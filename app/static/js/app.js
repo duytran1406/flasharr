@@ -513,11 +513,13 @@ class FshareBridge {
         const statusClass = d.status === 'Running' ? 'running' :
             d.status === 'Finished' ? 'success' :
                 d.status === 'Stop' ? 'error' : 'warning';
+        const catClass = (d.category || 'Uncategorized').toLowerCase();
+        const catLabel = d.category || 'Uncategorized';
 
         return `
              <tr>
                 <td><div class="download-name" title="${this.escapeHtml(d.name)}">${this.escapeHtml(d.name)}</div></td>
-                <td style="color: var(--text-muted); font-size: 0.85rem;">${d.category || 'Default'}</td>
+                <td><span class="category-badge cat-${catClass}">${catLabel}</span></td>
                 <td>${d.size}</td>
                 <td>
                     <div style="display: flex; align-items: center; gap: 0.75rem;">

@@ -38,7 +38,7 @@ class PyLoadClient:
     def ensure_logged_in(self) -> bool:
         return True
     
-    def add_download(self, url: str, filename: Optional[str] = None, package_name: Optional[str] = None) -> bool:
+    def add_download(self, url: str, filename: Optional[str] = None, package_name: Optional[str] = None, category: str = "Uncategorized") -> bool:
         """Add a download to pyLoad"""
         try:
             pkg_name = package_name or filename or "Fshare Download"
@@ -46,7 +46,8 @@ class PyLoadClient:
                 f"{self.base_url}/api/add_package",
                 json={
                     "name": pkg_name,
-                    "links": [url]
+                    "links": [url],
+                    "category": category
                 },
                 timeout=10
             )

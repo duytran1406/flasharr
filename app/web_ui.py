@@ -134,7 +134,7 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             normalized_name = parsed.normalized_filename
             logger.info(f"Adding download: {name}")
             
-            success = pyload_client.add_download(url, filename=normalized_name)
+            success = pyload_client.add_download(url, filename=normalized_name, category="Uncategorized")
             if success:
                 return jsonify({'success': True, 'normalized': normalized_name})
             else:

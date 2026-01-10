@@ -32,7 +32,7 @@ class SABnzbdAPI:
         self.queue = {}  # nzo_id -> download info
         self.history = {}  # nzo_id -> download info
     
-    def add_file(self, nzb_data: bytes, filename: str = "download.nzb") -> Optional[str]:
+    def add_file(self, nzb_data: bytes, filename: str = "download.nzb", category: Optional[str] = None) -> Optional[str]:
         """
         Add a download from NZB file data
         """
@@ -67,26 +67,51 @@ class SABnzbdAPI:
             parsed = self.normalizer.parse(subject)
             normalized_filename = parsed.normalized_filename
             
-            logger.info(f"Normalized filename: {normalized_filename}")
+            # Resolve direct download link
+            download_url = self.fshare.get_download_link(guid)
+            if not download_url:
+                logger.error(f"Failed to get download link for GUID: {guid}")
+                return None
+
+            # Determine category
+            if not category:
+                category = 'Sonarr' if parsed.is_series else 'Radarr'
+            else:
+                cat_lower = category.lower()
+                if 'tv' in cat_lower or 'sonarr' in cat_lower: category = 'Sonarr'
+                elif 'movie' in cat_lower or 'radarr' in cat_lower: category = 'Radarr'
+                else: category = category.capitalize()
+
+            # Send to pyLoad
+            success = self.pyload.add_download(
+                download_url,
+                filename=normalized_filename,
+                package_name=parsed.title,
+                category=category
+            )
             
-            # Add to queue
+            if not success:
+                logger.error("Failed to add download to pyLoad")
+                return None
+
+            # Add to queue for tracking
             self.queue[nzo_id] = {
                 'nzo_id': nzo_id,
                 'filename': normalized_filename,
                 'original_filename': subject,
-                'status': 'Queued',
+                'status': 'Downloading',
                 'percentage': 0,
                 'mb_left': 0,
                 'mb_total': 0,
                 'time_left': '0:00:00',
                 'eta': 'unknown',
                 'priority': 'Normal',
-                'category': 'tv' if parsed.is_series else 'movies',
+                'category': category,
                 'guid': guid,
                 'added': datetime.now().isoformat()
             }
             
-            logger.info(f"✅ Added to queue with NZO ID: {nzo_id}")
+            logger.info(f"✅ Added to pyLoad and queue with NZO ID: {nzo_id}")
             
             return nzo_id
             
@@ -94,7 +119,7 @@ class SABnzbdAPI:
             logger.error(f"Error adding file: {e}", exc_info=True)
             return None
     
-    def add_url(self, url: str, filename: Optional[str] = None) -> Optional[str]:
+    def add_url(self, url: str, filename: Optional[str] = None, category: Optional[str] = None) -> Optional[str]:
         """
         Add a download from URL
         """
@@ -117,11 +142,21 @@ class SABnzbdAPI:
                 logger.error("Failed to get download link from Fshare")
                 return None
             
+            # Determine category
+            if not category:
+                category = 'Sonarr' if parsed.is_series else 'Radarr'
+            else:
+                cat_lower = category.lower()
+                if 'tv' in cat_lower or 'sonarr' in cat_lower: category = 'Sonarr'
+                elif 'movie' in cat_lower or 'radarr' in cat_lower: category = 'Radarr'
+                else: category = category.capitalize()
+
             # Send to pyLoad
             success = self.pyload.add_download(
                 download_url,
                 filename=normalized_filename,
-                package_name=parsed.title
+                package_name=parsed.title,
+                category=category
             )
             
             if not success:
@@ -143,7 +178,7 @@ class SABnzbdAPI:
                 'time_left': '0:00:00',
                 'eta': 'unknown',
                 'priority': 'Normal',
-                'category': 'tv' if parsed.is_series else 'movies',
+                'category': category,
                 'fshare_url': url,
                 'added': datetime.now().isoformat()
             }
@@ -246,7 +281,8 @@ def create_sabnzbd_api(fshare_client: FshareClient, pyload_client: PyLoadClient,
             nzb_file = request.files['name']
             nzb_data = nzb_file.read()
             
-            nzo_id = api.add_file(nzb_data, nzb_file.filename)
+            category = request.args.get('cat') or request.form.get('cat')
+            nzo_id = api.add_file(nzb_data, nzb_file.filename, category=category)
             
             if nzo_id:
                 if output == 'json':
@@ -266,7 +302,8 @@ def create_sabnzbd_api(fshare_client: FshareClient, pyload_client: PyLoadClient,
             if not url:
                 return jsonify({'error': 'No URL provided'}), 400
             
-            nzo_id = api.add_url(url)
+            category = request.args.get('cat') or request.form.get('cat')
+            nzo_id = api.add_url(url, category=category)
             
             if nzo_id:
                 if output == 'json':
