@@ -3,165 +3,209 @@
 {% block title %}Dashboard - Fshare-Arr Bridge{% endblock %}
 
 {% block content %}
-<div class="group">
-    <h2 class="group-title">Management</h2>
-    <div class="grid">
-        <!-- System Status Widget -->
-        <div class="card widget-status">
-            <div class="card-top">
-                <div class="card-title-group">
-                    <div class="card-icon">⚙️</div>
-                    <div class="card-info">
-                        <div class="card-title">System Status</div>
-                        <div class="card-subtitle">Fshare-Arr Bridge</div>
-                    </div>
-                </div>
-                <div class="badge badge-success">Online</div>
+<h1 class="page-title">Dashboard</h1>
+
+<!-- Status Widgets Row -->
+<div class="dashboard-grid">
+    <!-- System Status -->
+    <div class="widget">
+        <div class="widget-header">
+            <div class="widget-title">
+                <span class="widget-icon">⚙️</span>
+                1. System Status
             </div>
-            <div class="card-content">
-                <p class="card-subtitle">All services operational</p>
+            <div class="widget-status online"></div>
+        </div>
+        <div class="widget-content">
+            <div class="widget-metric">
+                <span class="metric-label">Indexer</span>
+                <span class="status-badge success" id="indexer-status">STABLE</span>
             </div>
-            <div class="card-stats">
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Indexer</div>
-                    <div class="mini-stat-value">OK</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">SABnzbd</div>
-                    <div class="mini-stat-value">OK</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Uptime</div>
-                    <div class="mini-stat-value">99.9%</div>
-                </div>
+            <div class="widget-metric">
+                <span class="metric-label">SABnzbd API</span>
+                <span class="status-badge success" id="sabnzbd-status">READY</span>
+            </div>
+            <div class="widget-metric">
+                <span class="metric-label">CPU</span>
+                <span class="metric-value">12%</span>
+            </div>
+            <div class="widget-metric">
+                <span class="metric-label">RAM</span>
+                <span class="metric-value">4.2GB</span>
             </div>
         </div>
+    </div>
 
-        <!-- pyLoad Integration Widget -->
-        <div class="card widget-pyload">
-            <div class="card-top">
-                <div class="card-title-group">
-                    <div class="card-icon">⏬</div>
-                    <div class="card-info">
-                        <div class="card-title">pyLoad</div>
-                        <div class="card-subtitle">Download Manager</div>
-                    </div>
-                </div>
-                <div id="pyload-status-badge" class="badge badge-success">Connected</div>
+    <!-- Downloader Status -->
+    <div class="widget">
+        <div class="widget-header">
+            <div class="widget-title">
+                <span class="widget-icon">⚡</span>
+                2. Downloader
             </div>
-            <div class="card-content">
-                <p class="card-subtitle" id="pyload-active-desc">0 active downloads</p>
+            <div class="widget-status online" id="pyload-status-indicator"></div>
+        </div>
+        <div class="widget-content">
+            <div class="widget-metric">
+                <span class="metric-label">Fshare Account</span>
+                <span class="status-badge success" id="fshare-account-status">PREMIUM PLUS</span>
             </div>
-            <div class="card-stats">
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Queue</div>
-                    <div class="mini-stat-value" id="stats-active-count">0</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Speed</div>
-                    <div class="mini-stat-value" id="stats-speed">0 B/s</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Total</div>
-                    <div class="mini-stat-value" id="stats-total-count">0</div>
-                </div>
+            <div class="widget-metric">
+                <span class="metric-label">Active Downloads</span>
+                <span class="metric-value large accent-blue" id="active-downloads-count">08</span>
+            </div>
+            <div class="widget-metric">
+                <span class="metric-label">Queue Count</span>
+                <span class="metric-value accent-cyan" id="queue-count">154</span>
             </div>
         </div>
+    </div>
 
-        <!-- TimFshare Search Widget -->
-        <div class="card widget-fshare">
-            <div class="card-top">
-                <div class="card-title-group">
-                    <div class="card-icon">🔍</div>
-                    <div class="card-info">
-                        <div class="card-title">TimFshare</div>
-                        <div class="card-subtitle">Search Engine</div>
-                    </div>
-                </div>
-                <div class="badge badge-success">Ready</div>
+    <!-- Search Engine -->
+    <div class="widget">
+        <div class="widget-header">
+            <div class="widget-title">
+                <span class="widget-icon">🔍</span>
+                3. Search Engine
             </div>
-            <div class="card-content">
-                <p class="card-subtitle">Fshare search with smart scoring</p>
+            <div class="widget-status online" id="timfshare-status-indicator"></div>
+        </div>
+        <div class="widget-content">
+            <div class="widget-metric">
+                <span class="metric-label">TimFshare API</span>
+                <span class="status-badge success" id="timfshare-status">ONLINE</span>
             </div>
-            <div class="card-stats">
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Searches</div>
-                    <div class="mini-stat-value" id="stats-search-count">0</div>
-                </div>
-                <div class="mini-stat">
-                    <div class="mini-stat-label">Success</div>
-                    <div class="mini-stat-value" id="stats-success-rate">0%</div>
-                </div>
+            <div class="widget-metric">
+                <span class="metric-label">Health Check</span>
+                <span class="metric-value accent-green" id="api-health">100%</span>
+            </div>
+            <div class="widget-metric">
+                <span class="metric-label">Response Time</span>
+                <span class="metric-value" id="api-ping">45ms</span>
             </div>
         </div>
     </div>
 </div>
 
-<div class="group">
-    <h2 class="group-title">Search & Utilities</h2>
-
-    <div class="search-overlay">
-        <div class="search-input-group">
-            <span style="padding-left: 1rem; display: flex; align-items: center;">🔍</span>
-            <input type="text" id="search-input" placeholder="Quick search Fshare..." autocomplete="off">
-            <button class="btn btn-primary"
-                onclick="window.location.href='/search?q=' + document.getElementById('search-input').value">Search</button>
+<!-- System Log -->
+<div class="widget" style="margin-bottom: 1.5rem;">
+    <div class="widget-header">
+        <div class="widget-title">
+            <span class="widget-icon">📋</span>
+            4. System Log
         </div>
-        <div id="search-suggestions" class="search-suggestions" style="display: none;"></div>
+        <a href="#" class="status-badge info" style="text-decoration: none;">VIEW STREAM</a>
     </div>
-
-    <div class="grid">
-        <div class="card" style="grid-column: span 2;">
-            <div class="card-top">
-                <div class="card-title-group">
-                    <div class="card-icon">📜</div>
-                    <div class="card-info">
-                        <div class="card-title">Recent Downloads</div>
-                        <div class="card-subtitle">Last few items added to queue</div>
-                    </div>
-                </div>
-                <a href="/downloads" class="btn btn-secondary">View History</a>
+    <div class="widget-content">
+        <div class="log-list" id="system-log">
+            <div class="log-entry info">
+                <span class="log-time">[23:45:12]</span>
+                <span class="log-message">SYSTEM: Initialized UI v2.0</span>
             </div>
-            <div class="card-content" id="downloads-list" style="margin-top: 1rem;">
-                <p class="text-secondary">Loading activity...</p>
+            <div class="log-entry success">
+                <span class="log-time">[23:43:01]</span>
+                <span class="log-message">SUCCESS: pyLoad Access Verified</span>
             </div>
-        </div>
-
-        <div class="card">
-            <div class="card-top">
-                <div class="card-title-group">
-                    <div class="card-icon">🔧</div>
-                    <div class="card-info">
-                        <div class="card-title">Tools</div>
-                        <div class="card-subtitle">Quick Actions</div>
-                    </div>
-                </div>
+            <div class="log-entry info">
+                <span class="log-time">[23:42:45]</span>
+                <span class="log-message">INFO: INITIALIZED IN v2.0</span>
             </div>
-            <div class="card-content" style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 1rem;">
-                <button class="btn btn-secondary" style="width: 100%; justify-content: center;">Restart Bridge</button>
-                <button class="btn btn-secondary" style="width: 100%; justify-content: center;">Clear Search
-                    Cache</button>
-                <button class="btn btn-secondary" style="width: 100%; justify-content: center;">Scan pyLoad
-                    Plugins</button>
+            <div class="log-entry warning">
+                <span class="log-time">[23:12:11]</span>
+                <span class="log-message">WARN: Rate Limit at 92%</span>
             </div>
         </div>
+    </div>
+</div>
+
+<!-- Download Manager -->
+<div class="widget">
+    <div class="widget-header">
+        <div class="widget-title">
+            <span class="widget-icon">📥</span>
+            5. Download Manager
+            <span style="font-size: 0.7rem; color: var(--text-muted); font-weight: 400; margin-left: 0.5rem;">
+                LATEST ACTIVE PROCESSING PIPELINE
+            </span>
+        </div>
+        <div style="display: flex; gap: 0.5rem;">
+            <button class="icon-btn" title="Sort">☰</button>
+            <button class="icon-btn" title="Refresh">🔄</button>
+            <button class="btn-primary">VIEW ALL</button>
+        </div>
+    </div>
+    <div class="widget-content" style="padding: 0; margin-top: 1rem;">
+        <table class="download-table">
+            <thead>
+                <tr>
+                    <th>NAME</th>
+                    <th>SIZE</th>
+                    <th>STATUS</th>
+                    <th>PROGRESS</th>
+                    <th>CONTROL</th>
+                </tr>
+            </thead>
+            <tbody id="download-manager-list">
+                <tr>
+                    <td>
+                        <div class="download-name">Arcane.S02E02.2160p.NOR.mkv</div>
+                        <div style="font-size: 0.7rem; color: var(--text-muted);">ARCANE | 2160p-NOR-01</div>
+                    </td>
+                    <td class="download-size">8.62 GB</td>
+                    <td><span class="status-badge info">DOWNLOADING</span></td>
+                    <td>
+                        <div class="download-progress">
+                            <div class="progress-bar" style="width: 120px;">
+                                <div class="progress-fill" style="width: 78%"></div>
+                            </div>
+                            <span class="progress-text">78.5%</span>
+                            <span style="font-size: 0.7rem; color: var(--text-muted);">12.3 MB/s</span>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="download-controls">
+                            <button class="icon-btn" title="Pause">⏸</button>
+                            <button class="icon-btn" title="Delete">🗑</button>
+                        </div>
+                    </td>
+                </tr>
+                <tr>
+                    <td>
+                        <div class="download-name">Linux.Kernel.v6.11.Stable.tar.gz</div>
+                        <div style="font-size: 0.7rem; color: var(--text-muted);">COMPLETED | 13m AGO</div>
+                    </td>
+                    <td class="download-size">214.5 MB</td>
+                    <td><span class="status-badge success">SUCCESS</span></td>
+                    <td>
+                        <div class="download-progress">
+                            <div class="progress-bar" style="width: 120px;">
+                                <div class="progress-fill" style="width: 100%; background: var(--accent-green);"></div>
+                            </div>
+                            <span class="progress-text">100%</span>
+                            <span style="font-size: 0.7rem; color: var(--accent-green);">VERIFIED</span>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="download-controls">
+                            <button class="icon-btn" title="Replay">↻</button>
+                            <button class="icon-btn" title="Delete">🗑</button>
+                        </div>
+                    </td>
+                </tr>
+            </tbody>
+        </table>
     </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-    // Refresh stats every 30 seconds
-    function refreshStats() {
-        if (bridge) bridge.loadStats();
-    }
-
-    // Auto-refresh downloads every 5 seconds
+    // Auto-refresh dashboard data
     setInterval(() => {
-        if (bridge) bridge.loadDownloads();
+        if (bridge) {
+            bridge.loadDashboardData();
+            bridge.loadDownloads();
+        }
     }, 5000);
-
-    setInterval(refreshStats, 30000);
-    refreshStats();
 </script>
 {% endblock %}

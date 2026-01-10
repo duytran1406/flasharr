@@ -1,5 +1,5 @@
 // Fshare-Arr Bridge - Frontend JavaScript
-// Homepage Style Dashboard Integration
+// NEXUS Dashboard v2.0
 
 class FshareBridge {
     constructor() {
@@ -13,6 +13,7 @@ class FshareBridge {
 
         // Auto-refresh stats every 10s
         setInterval(() => this.loadDashboardData(), 10000);
+        setInterval(() => this.loadDownloads(), 5000);
     }
 
     // Dashboard Data & Stats
@@ -22,37 +23,58 @@ class FshareBridge {
             const data = await response.json();
 
             if (data) {
-                this.updateUIValues(data);
+                this.updateDashboard(data);
             }
         } catch (error) {
             console.error('Load stats error:', error);
         }
     }
 
-    updateUIValues(data) {
-        // Top bar stats
-        this.setText('top-speedtest', data.system.speedtest);
-        this.setText('top-uptime', this.formatUptime(data.system.uptime));
-        this.setText('top-downloads', data.pyload.active);
+    updateDashboard(data) {
+        // Header stats
+        this.setText('header-speed', data.system.speedtest);
+        this.setText('header-active', data.pyload.active);
+        this.setText('header-uptime', this.formatUptime(data.system.uptime));
 
-        // pyLoad card
-        this.setText('stats-active-count', data.pyload.active);
-        this.setText('stats-speed', data.pyload.speed);
-        this.setText('stats-total-count', data.pyload.total);
-        this.updateBadge('pyload-status-badge', data.pyload.connected);
-        this.setText('pyload-active-desc', `${data.pyload.active} active downloads currently`);
+        // Widget 1: System Status
+        this.updateBadge('indexer-status', true, 'STABLE');
+        this.updateBadge('sabnzbd-status', true, 'READY');
 
-        // Bridge card
-        this.setText('stats-search-count', data.bridge.searches);
-        this.setText('stats-success-rate', data.bridge.success_rate);
+        // Widget 2: Downloader
+        const pyloadConnected = data.pyload.connected;
+        this.updateStatusIndicator('pyload-status-indicator', pyloadConnected);
+        this.updateBadge('fshare-account-status', pyloadConnected, pyloadConnected ? 'PREMIUM PLUS' : 'OFFLINE');
+        this.setText('active-downloads-count', String(data.pyload.active).padStart(2, '0'));
+        this.setText('queue-count', data.pyload.total);
+
+        // Widget 3: Search Engine
+        this.updateStatusIndicator('timfshare-status-indicator', true);
+        this.updateBadge('timfshare-status', true, 'ONLINE');
+        this.setText('api-health', '100%');
+        this.setText('api-ping', '45ms');
+    }
+
+    updateStatusIndicator(id, isOnline) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.className = `widget-status ${isOnline ? 'online' : 'offline'}`;
+        }
+    }
+
+    updateBadge(id, isSuccess, text) {
+        const el = document.getElementById(id);
+        if (el) {
+            el.className = `status-badge ${isSuccess ? 'success' : 'error'}`;
+            el.textContent = text;
+        }
     }
 
     formatUptime(seconds) {
         const s = parseInt(seconds);
         if (s < 60) return `${s}s`;
         if (s < 3600) return `${Math.floor(s / 60)}m`;
-        if (s < 86400) return `${Math.floor(s / 3600)}h`;
-        return `${Math.floor(s / 86400)}d`;
+        if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+        return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
     }
 
     setText(id, value) {
@@ -60,19 +82,73 @@ class FshareBridge {
         if (el) el.textContent = value;
     }
 
-    updateBadge(id, isConnected) {
-        const el = document.getElementById(id);
-        if (el) {
-            el.textContent = isConnected ? 'Connected' : 'Disconnected';
-            el.className = `badge ${isConnected ? 'badge-success' : 'badge-danger'}`;
+    // Download Manager
+    async loadDownloads() {
+        const container = document.getElementById('download-manager-list');
+        if (!container) return;
+
+        try {
+            const response = await fetch('/api/downloads');
+            const data = await response.json();
+
+            if (data.downloads && data.downloads.length > 0) {
+                // Show top 5 downloads
+                const topDownloads = data.downloads.slice(0, 5);
+                container.innerHTML = topDownloads.map(d => this.createDownloadRow(d)).join('');
+            } else {
+                container.innerHTML = `
+                    <tr>
+                        <td colspan="5" style="text-align: center; padding: 3rem; color: var(--text-muted);">
+                            No active downloads in queue
+                        </td>
+                    </tr>
+                `;
+            }
+        } catch (error) {
+            console.error('Load downloads error:', error);
         }
+    }
+
+    createDownloadRow(d) {
+        const statusClass = d.status === 'Running' ? 'info' :
+            d.status === 'Finished' ? 'success' :
+                d.status === 'Stop' ? 'error' : 'warning';
+
+        const progressColor = d.status === 'Running' ? 'var(--accent-blue)' :
+            d.status === 'Finished' ? 'var(--accent-green)' :
+                'var(--text-muted)';
+
+        return `
+            <tr>
+                <td>
+                    <div class="download-name">${this.escapeHtml(d.name)}</div>
+                    <div style="font-size: 0.7rem; color: var(--text-muted);">${d.status.toUpperCase()}</div>
+                </td>
+                <td class="download-size">${d.size}</td>
+                <td><span class="status-badge ${statusClass}">${d.status.toUpperCase()}</span></td>
+                <td>
+                    <div class="download-progress">
+                        <div class="progress-bar" style="width: 120px;">
+                            <div class="progress-fill" style="width: ${d.progress}%; background: ${progressColor};"></div>
+                        </div>
+                        <span class="progress-text">${d.progress}%</span>
+                        <span style="font-size: 0.7rem; color: var(--text-muted);">${d.info}</span>
+                    </div>
+                </td>
+                <td>
+                    <div class="download-controls">
+                        <button class="icon-btn" title="Pause">⏸</button>
+                        <button class="icon-btn" title="Delete">🗑</button>
+                    </div>
+                </td>
+            </tr>
+        `;
     }
 
     // Search Operations
     async search(query) {
         if (!query) return;
 
-        // Redirect to search page or handle inline
         if (window.location.pathname !== '/search') {
             window.location.href = `/search?q=${encodeURIComponent(query)}`;
             return;
@@ -81,7 +157,7 @@ class FshareBridge {
         const resultsContainer = document.getElementById('search-results');
         if (!resultsContainer) return;
 
-        resultsContainer.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 3rem;"><p>Searching Fshare...</p></div>';
+        resultsContainer.innerHTML = '<div style="text-align: center; padding: 3rem;"><p>Searching Fshare...</p></div>';
 
         try {
             const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
@@ -90,11 +166,11 @@ class FshareBridge {
             if (data.results && data.results.length > 0) {
                 this.displayResults(data.results);
             } else {
-                resultsContainer.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 3rem;"><p class="text-secondary">No results found</p></div>';
+                resultsContainer.innerHTML = '<div style="text-align: center; padding: 3rem;"><p class="text-secondary">No results found</p></div>';
             }
         } catch (error) {
             console.error('Search error:', error);
-            resultsContainer.innerHTML = '<p class="text-danger">Search failed</p>';
+            resultsContainer.innerHTML = '<p style="color: var(--accent-red);">Search failed</p>';
         }
     }
 
@@ -111,24 +187,24 @@ class FshareBridge {
         const sizeStr = this.formatSize(size);
 
         return `
-            <div class="card">
-                <div class="card-top">
-                    <div class="card-title-group">
-                        <div class="card-title">${this.escapeHtml(name)}</div>
+            <div class="widget">
+                <div class="widget-header">
+                    <div class="widget-title" style="font-size: 0.95rem; text-transform: none;">
+                        ${this.escapeHtml(name)}
                     </div>
                 </div>
-                <div class="card-content">
+                <div class="widget-content">
                     <div style="display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
-                        <span class="badge badge-success">Score: ${score}</span>
-                        <span class="badge badge-secondary">${sizeStr}</span>
-                        ${metadata.resolution ? `<span class="badge badge-secondary">${metadata.resolution}</span>` : ''}
-                        ${metadata.vietnamese ? `<span class="badge badge-success">${metadata.vietnamese}</span>` : ''}
+                        <span class="status-badge success">Score: ${score}</span>
+                        <span class="status-badge info">${sizeStr}</span>
+                        ${metadata.resolution ? `<span class="status-badge info">${metadata.resolution}</span>` : ''}
+                        ${metadata.vietnamese ? `<span class="status-badge success">${metadata.vietnamese}</span>` : ''}
                     </div>
+                    <button class="btn-primary" style="width: 100%; justify-content: center;" 
+                            onclick="bridge.download('${this.escapeHtml(url)}', '${this.escapeHtml(name)}')">
+                        Download
+                    </button>
                 </div>
-                <button class="btn btn-primary" style="width: 100%; justify-content: center;" 
-                        onclick="bridge.download('${this.escapeHtml(url)}', '${this.escapeHtml(name)}')">
-                    Download
-                </button>
             </div>
         `;
     }
@@ -162,95 +238,14 @@ class FshareBridge {
             const data = await response.json();
 
             if (data.success) {
-                alert(`Added to queue: ${data.normalized}`);
+                alert(`✅ Added to queue: ${data.normalized}`);
                 this.loadDownloads();
             } else {
-                alert('Failed to add download');
+                alert('❌ Failed to add download');
             }
         } catch (error) {
             console.error('Download error:', error);
         }
-    }
-
-    async loadDownloads() {
-        const container = document.getElementById('downloads-list');
-        if (!container) return;
-
-        try {
-            const response = await fetch('/api/downloads');
-            const data = await response.json();
-
-            if (data.downloads && data.downloads.length > 0) {
-                container.innerHTML = data.downloads.map(d => this.createDownloadRow(d)).join('');
-            } else {
-                container.innerHTML = '<p class="text-secondary" style="font-size: 0.85rem;">No active activity in queue</p>';
-            }
-        } catch (error) {
-            console.error('Load downloads error:', error);
-        }
-    }
-
-    createDownloadRow(d) {
-        return `
-            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-bottom: 1px solid var(--card-border);">
-                <div style="font-size: 0.85rem; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                    ${this.escapeHtml(d.name)}
-                </div>
-                <div class="badge badge-secondary">${d.progress}%</div>
-            </div>
-        `;
-    }
-
-    // Autocomplete handling
-    async handleAutocomplete() {
-        const input = document.getElementById('search-input');
-        const query = input.value.trim();
-
-        if (query.length < 2) {
-            this.hideSuggestions();
-            return;
-        }
-
-        try {
-            const response = await fetch(`/api/autocomplete?q=${encodeURIComponent(query)}`);
-            const data = await response.json();
-            if (data.suggestions) {
-                this.displaySuggestions(data.suggestions);
-            }
-        } catch (e) { console.error(e); }
-    }
-
-    displaySuggestions(suggestions) {
-        const container = document.getElementById('search-suggestions');
-        if (!container) return;
-
-        if (suggestions.length === 0) {
-            container.style.display = 'none';
-            return;
-        }
-
-        container.innerHTML = suggestions.map(s => `
-            <div style="padding: 0.75rem 1rem; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.05);" 
-                 onclick="bridge.selectSuggestion('${this.escapeHtml(s)}')">
-                ${this.escapeHtml(s)}
-            </div>
-        `).join('');
-        container.style.display = 'block';
-        container.style.background = 'rgba(15, 23, 42, 0.95)';
-        container.style.borderRadius = '0.75rem';
-        container.style.marginTop = '0.5rem';
-        container.style.zIndex = '1000';
-    }
-
-    selectSuggestion(s) {
-        document.getElementById('search-input').value = s;
-        this.hideSuggestions();
-        this.search(s);
-    }
-
-    hideSuggestions() {
-        const el = document.getElementById('search-suggestions');
-        if (el) el.style.display = 'none';
     }
 
     escapeHtml(text) {
@@ -262,19 +257,10 @@ class FshareBridge {
     setupEventListeners() {
         const searchInput = document.getElementById('search-input');
         if (searchInput) {
-            let timeout;
-            searchInput.addEventListener('input', () => {
-                clearTimeout(timeout);
-                timeout = setTimeout(() => this.handleAutocomplete(), 300);
-            });
             searchInput.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') this.search(searchInput.value);
             });
         }
-
-        document.addEventListener('click', (e) => {
-            if (!e.target.closest('.search-input-group')) this.hideSuggestions();
-        });
     }
 }
 

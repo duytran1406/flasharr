@@ -19,22 +19,17 @@ class PyLoadClient:
         self.username = username
         self.password = password
         self.session = requests.Session()
-        # Use Basic Auth for all requests to pyLoad NG
         self.session.auth = HTTPBasicAuth(self.username, self.password)
         self.logged_in = True
     
     def login(self) -> bool:
-        """
-        Test connection to pyLoad
-        """
+        """Test connection to pyLoad"""
         try:
             response = self.session.get(f"{self.base_url}/api/status_server", timeout=5)
             if response.status_code == 200:
                 logger.info("✅ pyLoad API access verified (v0.5.0+)")
                 return True
-            else:
-                logger.error(f"❌ pyLoad API access failed: {response.status_code}")
-                return False
+            return False
         except Exception as e:
             logger.error(f"❌ pyLoad connection test failed: {e}")
             return False
@@ -43,15 +38,9 @@ class PyLoadClient:
         return True
     
     def add_download(self, url: str, filename: Optional[str] = None, package_name: Optional[str] = None) -> bool:
-        """
-        Add a download to pyLoad
-        """
+        """Add a download to pyLoad"""
         try:
-            logger.info(f"Adding download to pyLoad: {filename or url}")
-            
             pkg_name = package_name or filename or "Fshare Download"
-            
-            # pyLoad 0.5.0+ uses snake_case and JSON body
             response = self.session.post(
                 f"{self.base_url}/api/add_package",
                 json={
@@ -60,49 +49,83 @@ class PyLoadClient:
                 },
                 timeout=10
             )
-            
-            if response.status_code == 200:
-                logger.info(f"✅ Download added to pyLoad: {pkg_name}")
-                return True
-            else:
-                logger.error(f"❌ pyLoad add download failed: {response.status_code} - {response.text}")
-                return False
-                
+            return response.status_code == 200
         except Exception as e:
             logger.error(f"❌ Error adding download to pyLoad: {e}")
             return False
     
     def get_queue(self) -> List[Dict]:
         """
-        Get current download queue
+        Get formatted download queue with detailed info
         """
         try:
-            response = self.session.get(
-                f"{self.base_url}/api/get_queue",
-                timeout=10
-            )
+            # 1. Get running downloads for ETA/Speed
+            active_downloads = {}
+            try:
+                active_resp = self.session.get(f"{self.base_url}/api/status_downloads", timeout=5)
+                if active_resp.status_code == 200:
+                    for d in active_resp.json():
+                        active_downloads[d['fid']] = d
+            except Exception as e:
+                logger.warning(f"Failed to get active downloads: {e}")
+
+            # 2. Get full queue data (packages and links)
+            response = self.session.get(f"{self.base_url}/api/get_queue_data", timeout=5)
+            if response.status_code != 200:
+                return []
+
+            formatted_queue = []
+            for package in response.json():
+                links = package.get('links', [])
+                if not links: continue
+                
+                for link in links:
+                    fid = link.get('fid')
+                    active = active_downloads.get(fid)
+                    
+                    # Determine Status Text
+                    status_msg = link.get('statusmsg', 'unknown').capitalize()
+                    if active:
+                        status_text = "Running"
+                        info = f"{active.get('format_eta')} @{self.format_speed(active.get('speed', 0))}"
+                        progress = active.get('percent', 0)
+                    else:
+                        if status_msg == "Aborted":
+                            status_text = "Stop"
+                        elif status_msg == "Finished":
+                            status_text = "Finished"
+                        elif status_msg == "Failed":
+                            status_text = "Stop"
+                        else:
+                            status_text = "Queue"
+                        
+                        info = status_msg
+                        # Try to calculate progress from link if available, else 0
+                        # link usually has size, but might not have sizedone in get_queue_data
+                        # In v0.5.0 get_queue_data, link doesn't have sizedone. 
+                        # We use 0 if not active and not finished.
+                        progress = 100 if status_msg == "Finished" else 0
+
+                    formatted_queue.append({
+                        "name": link.get('name'),
+                        "status": status_text,
+                        "info": info,
+                        "size": link.get('format_size', '0 B'),
+                        "progress": progress
+                    })
             
-            if response.status_code == 200:
-                return response.json() or []
-            return []
+            return formatted_queue
         except Exception as e:
             logger.error(f"Error getting queue: {e}")
             return []
     
     def get_status(self) -> Optional[Dict]:
-        """
-        Get pyLoad status
-        """
+        """Get pyLoad server status"""
         try:
-            response = self.session.get(
-                f"{self.base_url}/api/status_server",
-                timeout=10
-            )
-            
+            response = self.session.get(f"{self.base_url}/api/status_server", timeout=5)
             if response.status_code == 200:
                 data = response.json()
-                # Map newer keys to what web_ui expects if necessary
-                if 'speed' in data and 'speed_format' not in data:
+                if 'speed' in data:
                     data['speed_format'] = self.format_speed(data['speed'])
                 return data
             return None
@@ -111,8 +134,8 @@ class PyLoadClient:
             return None
 
     def format_speed(self, speed_bytes: float) -> str:
-        """Format speed in bytes/s to human readable string"""
-        if speed_bytes == 0:
+        """Format speed bytes/s to human readable"""
+        if not speed_bytes or speed_bytes == 0:
             return "0 B/s"
         units = ["B/s", "KB/s", "MB/s", "GB/s"]
         i = 0

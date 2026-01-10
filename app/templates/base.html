@@ -7,65 +7,111 @@
     <title>{% block title %}Fshare-Arr Bridge{% endblock %}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.png') }}">
 </head>
 
 <body>
-    <div class="top-bar">
-        <div class="system-stats">
-            <div class="stat-item">
-                <div class="stat-icon">🛰️</div>
-                <div class="stat-info">
-                    <span class="stat-label">Net Speed</span>
-                    <span class="stat-value" id="top-speedtest">0 Mbps</span>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-icon">⚡</div>
+                <div class="brand-name">NEXUS</div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">
+                    <span class="nav-icon">📊</span>
+                    <span>Dashboard</span>
+                </a>
+                <a href="/search" class="nav-item {% if request.path == '/search' %}active{% endif %}">
+                    <span class="nav-icon">🔍</span>
+                    <span>Search</span>
+                </a>
+                <a href="/downloads" class="nav-item {% if request.path == '/downloads' %}active{% endif %}">
+                    <span class="nav-icon">📥</span>
+                    <span>Manager</span>
+                </a>
+                <a href="/settings" class="nav-item {% if request.path == '/settings' %}active{% endif %}">
+                    <span class="nav-icon">⚙️</span>
+                    <span>Settings</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="user-profile">
+                    <div class="user-avatar">A</div>
+                    <div class="user-info">
+                        <div class="user-name">Admin Console</div>
+                        <div class="user-role">MASTER #032</div>
+                    </div>
                 </div>
             </div>
-            <div class="stat-item">
-                <div class="stat-icon">📦</div>
-                <div class="stat-info">
-                    <span class="stat-label">Downloads</span>
-                    <span class="stat-value" id="top-downloads">0</span>
+        </aside>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Header -->
+            <header class="header">
+                <div class="header-search">
+                    <input type="text" class="search-input" placeholder="Quick search..." id="header-search-input">
                 </div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-icon">🕒</div>
-                <div class="stat-info">
-                    <span class="stat-label">Uptime</span>
-                    <span class="stat-value" id="top-uptime">0s</span>
+
+                <div class="header-stats">
+                    <div class="header-stat">
+                        <div class="stat-label">Net Speed</div>
+                        <div class="stat-value accent" id="header-speed">0 Mbps</div>
+                    </div>
+                    <div class="header-stat">
+                        <div class="stat-label">Active</div>
+                        <div class="stat-value" id="header-active">0</div>
+                    </div>
+                    <div class="header-stat">
+                        <div class="stat-label">Uptime</div>
+                        <div class="stat-value" id="header-uptime">0s</div>
+                    </div>
                 </div>
+
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <button class="icon-btn">🔔</button>
+                    <div style="font-size: 0.75rem; color: var(--text-muted); text-align: right;">
+                        <div id="header-date">OCT 24, 2025</div>
+                        <div id="header-time" style="font-weight: 600; color: var(--text-primary);">23:45:12</div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Content -->
+            <div class="content">
+                {% block content %}{% endblock %}
             </div>
         </div>
-
-        <div class="system-stats">
-            <div class="stat-item">
-                <div class="stat-value" id="top-clock">--:-- --</div>
-            </div>
-        </div>
-    </div>
-
-    <div class="container">
-        <nav class="tabs-nav">
-            <a href="/" class="tab-link {% if request.path == '/' %}active{% endif %}">Dashboard</a>
-            <a href="/search" class="tab-link {% if request.path == '/search' %}active{% endif %}">Search</a>
-            <a href="/downloads" class="tab-link {% if request.path == '/downloads' %}active{% endif %}">Downloads</a>
-        </nav>
-
-        <main>
-            {% block content %}{% endblock %}
-        </main>
     </div>
 
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     <script>
-        function updateClock() {
+        // Update header clock
+        function updateHeaderClock() {
             const now = new Date();
-            const options = { hour: '2-digit', minute: '2-digit', hour12: true };
-            document.getElementById('top-clock').innerText = now.toLocaleTimeString([], options);
+            const timeStr = now.toLocaleTimeString('en-US', { hour12: false });
+            const dateStr = now.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }).toUpperCase();
+            document.getElementById('header-time').textContent = timeStr;
+            document.getElementById('header-date').textContent = dateStr;
         }
-        setInterval(updateClock, 1000);
-        updateClock();
+        setInterval(updateHeaderClock, 1000);
+        updateHeaderClock();
+
+        // Header search
+        document.getElementById('header-search-input').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const query = e.target.value;
+                if (query) {
+                    window.location.href = `/search?q=${encodeURIComponent(query)}`;
+                }
+            }
+        });
     </script>
     {% block scripts %}{% endblock %}
 </body>
