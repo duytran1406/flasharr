@@ -157,20 +157,6 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     def api_stats():
         """Get statistics for the homepage-style dashboard"""
         try:
-            # Get speedtest from LXC 109 Speedtest Tracker
-            speedtest_speed = "0 Mbps"
-            try:
-                import requests as req
-                response = req.get('http://192.168.1.109:8080/api/speedtest/latest', timeout=2)
-                if response.status_code == 200:
-                    data = response.json()
-                    if data and 'data' in data:
-                        download_mbps = data['data'].get('download', 0)
-                        speedtest_speed = f"{download_mbps:.1f} Mbps"
-            except Exception as e:
-                logger.warning(f"Failed to get speedtest from LXC 109: {e}")
-                speedtest_speed = f"{speedtest_cache['download']} Mbps"  # Fallback to local
-
             # Get container uptime from Docker
             container_uptime = "0s"
             try:
@@ -192,6 +178,7 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             # pyLoad stats
             active_downloads = 0
             speed = "0 B/s"
+            speed_bytes = 0
             total_downloads = 0
             fshare_account = {'valid': False, 'premium': False}
             
@@ -199,7 +186,14 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             if status:
                 active_downloads = status.get('active', 0)
                 speed = status.get('speed_format', "0 B/s")
+                speed_bytes = status.get('speed', 0)  # Get raw speed in bytes/s
                 total_downloads = status.get('total', 0)
+            
+            # Format speed for header (convert bytes/s to Mbps)
+            net_speed = "0 Mbps"
+            if speed_bytes > 0:
+                mbps = (speed_bytes * 8) / (1024 * 1024)  # Convert bytes/s to Mbps
+                net_speed = f"{mbps:.1f} Mbps"
             
             # Get Fshare account status from pyLoad
             try:
@@ -222,7 +216,7 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             return jsonify({
                 'system': {
                     'uptime': container_uptime,
-                    'speedtest': speedtest_speed
+                    'speedtest': net_speed
                 },
                 'pyload': {
                     'active': active_downloads,

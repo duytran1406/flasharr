@@ -527,6 +527,34 @@ body::before {
   border-bottom: 1px solid var(--border-color);
 }
 
+.sortable-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.2s;
+}
+
+.sortable-header:hover {
+  color: var(--accent-blue);
+}
+
+.sort-arrow {
+  font-size: 0.7rem;
+  opacity: 0.5;
+  transition: opacity 0.2s;
+}
+
+.sortable-header:hover .sort-arrow {
+  opacity: 1;
+}
+
+.sort-arrow.active {
+  opacity: 1;
+  color: var(--accent-blue);
+}
+
 .download-table td {
   padding: 1rem;
   border-bottom: 1px solid var(--border-color);

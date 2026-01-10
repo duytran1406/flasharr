@@ -95,10 +95,31 @@
         <table class="download-table">
             <thead>
                 <tr>
-                    <th>NAME</th>
-                    <th>SIZE</th>
-                    <th>STATUS</th>
-                    <th>PROGRESS</th>
+                    <th>
+                        <div class="sortable-header" onclick="bridge.sortDownloads('name')">
+                            NAME <span class="sort-arrow" id="sort-arrow-name">↕</span>
+                        </div>
+                    </th>
+                    <th>
+                        <div class="sortable-header" onclick="bridge.sortDownloads('size')">
+                            SIZE <span class="sort-arrow" id="sort-arrow-size">↕</span>
+                        </div>
+                    </th>
+                    <th>
+                        <div class="sortable-header" onclick="bridge.sortDownloads('status')">
+                            STATUS <span class="sort-arrow" id="sort-arrow-status">↕</span>
+                        </div>
+                    </th>
+                    <th>
+                        <div class="sortable-header" onclick="bridge.sortDownloads('speed')">
+                            SPEED <span class="sort-arrow" id="sort-arrow-speed">↕</span>
+                        </div>
+                    </th>
+                    <th>
+                        <div class="sortable-header" onclick="bridge.sortDownloads('progress')">
+                            PROGRESS <span class="sort-arrow" id="sort-arrow-progress">↕</span>
+                        </div>
+                    </th>
                     <th>CONTROL</th>
                 </tr>
             </thead>

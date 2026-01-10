@@ -3,6 +3,9 @@
 
 class FshareBridge {
     constructor() {
+        this.downloads = [];
+        this.sortColumn = null;
+        this.sortDirection = 'asc';
         this.init();
     }
 
@@ -153,12 +156,12 @@ class FshareBridge {
             const data = await response.json();
 
             if (data.downloads && data.downloads.length > 0) {
-                const topDownloads = data.downloads.slice(0, 5);
-                container.innerHTML = topDownloads.map(d => this.createDownloadRow(d)).join('');
+                this.downloads = data.downloads.slice(0, 5);
+                this.renderDownloads();
             } else {
                 container.innerHTML = `
                     <tr>
-                        <td colspan="5" style="text-align: center; padding: 3rem; color: var(--text-muted);">
+                        <td colspan="6" style="text-align: center; padding: 3rem; color: var(--text-muted);">
                             No active downloads in queue
                         </td>
                     </tr>
@@ -167,6 +170,91 @@ class FshareBridge {
         } catch (error) {
             console.error('Load downloads error:', error);
         }
+    }
+
+    sortDownloads(column) {
+        if (!this.downloads || this.downloads.length === 0) return;
+
+        // Toggle sort direction
+        if (this.sortColumn === column) {
+            this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
+        } else {
+            this.sortColumn = column;
+            this.sortDirection = 'asc';
+        }
+
+        // Sort the downloads array
+        this.downloads.sort((a, b) => {
+            let aVal, bVal;
+
+            switch (column) {
+                case 'name':
+                    aVal = a.name.toLowerCase();
+                    bVal = b.name.toLowerCase();
+                    break;
+                case 'size':
+                    aVal = this.parseSizeToBytes(a.size);
+                    bVal = this.parseSizeToBytes(b.size);
+                    break;
+                case 'status':
+                    aVal = a.status;
+                    bVal = b.status;
+                    break;
+                case 'speed':
+                    aVal = this.parseSpeedToBytes(a.info);
+                    bVal = this.parseSpeedToBytes(b.info);
+                    break;
+                case 'progress':
+                    aVal = a.progress;
+                    bVal = b.progress;
+                    break;
+                default:
+                    return 0;
+            }
+
+            if (aVal < bVal) return this.sortDirection === 'asc' ? -1 : 1;
+            if (aVal > bVal) return this.sortDirection === 'asc' ? 1 : -1;
+            return 0;
+        });
+
+        // Update arrow indicators
+        document.querySelectorAll('.sort-arrow').forEach(arrow => {
+            arrow.textContent = '↕';
+            arrow.classList.remove('active');
+        });
+
+        const activeArrow = document.getElementById(`sort-arrow-${column}`);
+        if (activeArrow) {
+            activeArrow.textContent = this.sortDirection === 'asc' ? '↑' : '↓';
+            activeArrow.classList.add('active');
+        }
+
+        this.renderDownloads();
+    }
+
+    parseSizeToBytes(sizeStr) {
+        const match = sizeStr.match(/^([\d.]+)\s*([KMGT]?B)$/i);
+        if (!match) return 0;
+        const value = parseFloat(match[1]);
+        const unit = match[2].toUpperCase();
+        const multipliers = { 'B': 1, 'KB': 1024, 'MB': 1024 ** 2, 'GB': 1024 ** 3, 'TB': 1024 ** 4 };
+        return value * (multipliers[unit] || 1);
+    }
+
+    parseSpeedToBytes(infoStr) {
+        // Extract speed from info string like "00:05:35 @9.3MB/s"
+        const match = infoStr.match(/@([\d.]+)\s*([KMGT]?B\/s)/i);
+        if (!match) return 0;
+        const value = parseFloat(match[1]);
+        const unit = match[2].toUpperCase().replace('/S', '');
+        const multipliers = { 'B': 1, 'KB': 1024, 'MB': 1024 ** 2, 'GB': 1024 ** 3 };
+        return value * (multipliers[unit] || 1);
+    }
+
+    renderDownloads() {
+        const container = document.getElementById('download-manager-list');
+        if (!container || !this.downloads) return;
+        container.innerHTML = this.downloads.map(d => this.createDownloadRow(d)).join('');
     }
 
     createDownloadRow(d) {
@@ -181,6 +269,10 @@ class FshareBridge {
         const controlBtn = d.status === 'Running' ? '⏸' : '▶';
         const controlTitle = d.status === 'Running' ? 'Pause' : 'Resume';
 
+        // Extract speed from info
+        const speedMatch = d.info.match(/@(.+)/);
+        const speed = speedMatch ? speedMatch[1] : '-';
+
         return `
             <tr>
                 <td>
@@ -189,13 +281,13 @@ class FshareBridge {
                 </td>
                 <td class="download-size">${d.size}</td>
                 <td><span class="status-badge ${statusClass}">${d.status.toUpperCase()}</span></td>
+                <td style="color: var(--text-secondary); font-size: 0.875rem;">${speed}</td>
                 <td>
                     <div class="download-progress">
                         <div class="progress-bar" style="width: 120px;">
                             <div class="progress-fill" style="width: ${d.progress}%; background: ${progressColor};"></div>
                         </div>
                         <span class="progress-text">${d.progress}%</span>
-                        <span style="font-size: 0.7rem; color: var(--text-muted);">${d.info}</span>
                     </div>
                 </td>
                 <td>
