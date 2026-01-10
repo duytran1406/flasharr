@@ -223,6 +223,7 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
                 'pyload': {
                     'active': active_downloads,
                     'speed': speed,
+                    'speed_bytes': speed_bytes,
                     'total': total_downloads,
                     'connected': pyload_client.logged_in if hasattr(pyload_client, 'logged_in') else False,
                     'fshare_account': fshare_account
