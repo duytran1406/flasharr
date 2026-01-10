@@ -43,7 +43,12 @@ class FshareBridge {
         // Widget 2: Downloader
         const pyloadConnected = data.pyload.connected;
         this.updateStatusIndicator('pyload-status-indicator', pyloadConnected);
-        this.updateBadge('fshare-account-status', pyloadConnected, pyloadConnected ? 'PREMIUM PLUS' : 'OFFLINE');
+
+        // Fshare Account Status from pyLoad
+        const fshareStatus = data.pyload.fshare_account || {};
+        const isPremium = fshareStatus.valid && fshareStatus.premium;
+        this.updateBadge('fshare-account-status', isPremium, isPremium ? 'PREMIUM' : 'N/A');
+
         this.setText('active-downloads-count', String(data.pyload.active).padStart(2, '0'));
         this.setText('queue-count', data.pyload.total);
 
@@ -82,6 +87,60 @@ class FshareBridge {
         if (el) el.textContent = value;
     }
 
+    // Autocomplete for header search
+    async handleAutocomplete(query) {
+        if (!query || query.length < 2) {
+            this.hideAutocomplete();
+            return;
+        }
+
+        try {
+            const response = await fetch(`/api/autocomplete?q=${encodeURIComponent(query)}`);
+            const data = await response.json();
+
+            if (data.suggestions && data.suggestions.length > 0) {
+                this.showAutocomplete(data.suggestions.slice(0, 3)); // Top 3 only
+            } else {
+                this.hideAutocomplete();
+            }
+        } catch (error) {
+            console.error('Autocomplete error:', error);
+            this.hideAutocomplete();
+        }
+    }
+
+    showAutocomplete(suggestions) {
+        const dropdown = document.getElementById('autocomplete-dropdown');
+        if (!dropdown) return;
+
+        dropdown.innerHTML = suggestions.map(s => `
+            <div class="autocomplete-item" data-query="${this.escapeHtml(s)}">
+                ${this.escapeHtml(s)}
+            </div>
+        `).join('');
+
+        dropdown.className = 'autocomplete-dropdown show';
+
+        // Add click handlers
+        dropdown.querySelectorAll('.autocomplete-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const query = item.getAttribute('data-query');
+                this.redirectToSearch(query);
+            });
+        });
+    }
+
+    hideAutocomplete() {
+        const dropdown = document.getElementById('autocomplete-dropdown');
+        if (dropdown) {
+            dropdown.className = 'autocomplete-dropdown';
+        }
+    }
+
+    redirectToSearch(query) {
+        window.location.href = `/search?q=${encodeURIComponent(query)}`;
+    }
+
     // Download Manager
     async loadDownloads() {
         const container = document.getElementById('download-manager-list');
@@ -92,7 +151,6 @@ class FshareBridge {
             const data = await response.json();
 
             if (data.downloads && data.downloads.length > 0) {
-                // Show top 5 downloads
                 const topDownloads = data.downloads.slice(0, 5);
                 container.innerHTML = topDownloads.map(d => this.createDownloadRow(d)).join('');
             } else {
@@ -118,6 +176,9 @@ class FshareBridge {
             d.status === 'Finished' ? 'var(--accent-green)' :
                 'var(--text-muted)';
 
+        const controlBtn = d.status === 'Running' ? '⏸' : '▶';
+        const controlTitle = d.status === 'Running' ? 'Pause' : 'Resume';
+
         return `
             <tr>
                 <td>
@@ -137,12 +198,23 @@ class FshareBridge {
                 </td>
                 <td>
                     <div class="download-controls">
-                        <button class="icon-btn" title="Pause">⏸</button>
-                        <button class="icon-btn" title="Delete">🗑</button>
+                        <button class="icon-btn" title="${controlTitle}" onclick="bridge.toggleDownload(${d.fid})">${controlBtn}</button>
+                        <button class="icon-btn delete-btn" title="Delete" onclick="bridge.deleteDownload(${d.fid})">🗑</button>
                     </div>
                 </td>
             </tr>
         `;
+    }
+
+    async toggleDownload(fid) {
+        // TODO: Implement pyLoad pause/resume API call
+        console.log('Toggle download:', fid);
+    }
+
+    async deleteDownload(fid) {
+        if (!confirm('Are you sure you want to delete this download?')) return;
+        // TODO: Implement pyLoad delete API call
+        console.log('Delete download:', fid);
     }
 
     // Search Operations
@@ -150,7 +222,7 @@ class FshareBridge {
         if (!query) return;
 
         if (window.location.pathname !== '/search') {
-            window.location.href = `/search?q=${encodeURIComponent(query)}`;
+            this.redirectToSearch(query);
             return;
         }
 
@@ -255,6 +327,34 @@ class FshareBridge {
     }
 
     setupEventListeners() {
+        // Header search with autocomplete
+        const headerSearch = document.getElementById('header-search-input');
+        if (headerSearch) {
+            let autocompleteTimeout;
+
+            headerSearch.addEventListener('input', (e) => {
+                clearTimeout(autocompleteTimeout);
+                autocompleteTimeout = setTimeout(() => {
+                    this.handleAutocomplete(e.target.value);
+                }, 300);
+            });
+
+            headerSearch.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    this.hideAutocomplete();
+                    this.redirectToSearch(e.target.value);
+                }
+            });
+
+            // Hide autocomplete when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('.header-search')) {
+                    this.hideAutocomplete();
+                }
+            });
+        }
+
+        // Search page search input
         const searchInput = document.getElementById('search-input');
         if (searchInput) {
             searchInput.addEventListener('keypress', (e) => {

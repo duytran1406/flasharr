@@ -17,8 +17,10 @@
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-brand">
-                <div class="brand-icon">⚡</div>
-                <div class="brand-name">NEXUS</div>
+                <div class="brand-icon">
+                    <img src="{{ url_for('static', filename='images/fshare.png') }}" alt="Fshare">
+                </div>
+                <div class="brand-name">Fshare Nexus</div>
             </div>
 
             <nav class="sidebar-nav">
@@ -56,7 +58,9 @@
             <!-- Header -->
             <header class="header">
                 <div class="header-search">
-                    <input type="text" class="search-input" placeholder="Quick search..." id="header-search-input">
+                    <input type="text" class="search-input" placeholder="Quick search..." id="header-search-input"
+                        autocomplete="off">
+                    <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
                 </div>
 
                 <div class="header-stats">

@@ -103,6 +103,22 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             logger.error(f"Search API error: {e}")
             return jsonify({'error': str(e)}), 500
     
+    @web_ui_bp.route('/api/autocomplete')
+    def api_autocomplete():
+        """Autocomplete API endpoint - returns top 3 suggestions"""
+        query = request.args.get('q', '')
+        
+        if not query or len(query) < 2:
+            return jsonify({'suggestions': []})
+        
+        try:
+            results = timfshare_client.search(query, limit=3)
+            suggestions = [result.get('name', '') for result in results if result.get('name')]
+            return jsonify({'suggestions': suggestions})
+        except Exception as e:
+            logger.error(f"Autocomplete API error: {e}")
+            return jsonify({'suggestions': []})
+    
     @web_ui_bp.route('/api/download', methods=['POST'])
     def api_download():
         """Add download to pyLoad"""
