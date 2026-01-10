@@ -198,7 +198,7 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             # Get Fshare account status from pyLoad
             try:
                 accounts_response = pyload_client.session.get(
-                    f"{pyload_client.base_url}/api/get_accounts",
+                    f"{pyload_client.base_url}/api/get_accounts?refresh=false",
                     timeout=5
                 )
                 if accounts_response.status_code == 200:
@@ -207,7 +207,9 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
                         if account.get('type', '').lower() == 'fsharevn':
                             fshare_account = {
                                 'valid': account.get('valid', False),
-                                'premium': account.get('premium', False)
+                                'premium': account.get('premium', False),
+                                'validuntil': account.get('validuntil', 0),
+                                'login': account.get('login', '')
                             }
                             break
             except Exception as e:
