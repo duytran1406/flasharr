@@ -21,6 +21,7 @@ class PyLoadClient:
         self.session = requests.Session()
         self.session.auth = HTTPBasicAuth(self.username, self.password)
         self.logged_in = True
+        self.progress_cache = {}  # Cache to preserve progress for stopped downloads
     
     def login(self) -> bool:
         """Test connection to pyLoad"""
@@ -89,6 +90,8 @@ class PyLoadClient:
                         status_text = "Running"
                         info = f"{active.get('format_eta')} @{self.format_speed(active.get('speed', 0))}"
                         progress = active.get('percent', 0)
+                        # Cache the progress for this file
+                        self.progress_cache[fid] = progress
                     else:
                         if status_msg == "Aborted":
                             status_text = "Stop"
@@ -100,11 +103,14 @@ class PyLoadClient:
                             status_text = "Queue"
                         
                         info = status_msg
-                        # Try to calculate progress from link if available, else 0
-                        # link usually has size, but might not have sizedone in get_queue_data
-                        # In v0.5.0 get_queue_data, link doesn't have sizedone. 
-                        # We use 0 if not active and not finished.
-                        progress = 100 if status_msg == "Finished" else 0
+                        # Use cached progress if available, otherwise use 100 for finished or 0
+                        if status_msg == "Finished":
+                            progress = 100
+                        elif fid in self.progress_cache:
+                            # Preserve last known progress for stopped downloads
+                            progress = self.progress_cache[fid]
+                        else:
+                            progress = 0
 
                     formatted_queue.append({
                         "fid": fid,
