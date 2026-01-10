@@ -148,8 +148,8 @@ class FshareBridge {
         setInterval(() => this.loadDownloads(), 5000);
         setInterval(() => this.loadSystemLogs(), 15000);
 
-        // Update network graph every 500ms
-        setInterval(() => this.updateNetworkGraph(), 500);
+        // Update network graph every 1000ms
+        setInterval(() => this.updateNetworkGraph(), 1000);
     }
 
     // Dashboard Data & Stats
@@ -427,15 +427,16 @@ class FshareBridge {
         const controlBtn = d.status === 'Running' ? '⏸' : '▶';
         const controlTitle = d.status === 'Running' ? 'Pause' : 'Resume';
 
-        // Extract speed from info
-        const speedMatch = d.info.match(/@(.+)/);
-        const speed = speedMatch ? speedMatch[1] : '-';
+        // Extract speed and ETA from info (format: "HH:MM:SS @speed")
+        const infoMatch = d.info.match(/^([\d:]+)\s*@(.+)$/);
+        const eta = infoMatch ? infoMatch[1] : '-';
+        const speed = infoMatch ? infoMatch[2] : '-';
 
         return `
             <tr>
                 <td>
                     <div class="download-name">${this.escapeHtml(d.name)}</div>
-                    <div style="font-size: 0.7rem; color: var(--text-muted);">${d.status.toUpperCase()}</div>
+                    <div style="font-size: 0.7rem; color: var(--text-muted);">ETA: ${eta}</div>
                 </td>
                 <td class="download-size">${d.size}</td>
                 <td><span class="status-badge ${statusClass}">${d.status.toUpperCase()}</span></td>
