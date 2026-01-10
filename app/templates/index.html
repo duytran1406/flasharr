@@ -7,23 +7,30 @@
 
 <!-- Status Widgets Row -->
 <div class="dashboard-grid">
-    <!-- System Status -->
+    <!-- Network Graph -->
     <div class="widget">
         <div class="widget-header">
             <div class="widget-title">
-                <span class="widget-icon">⚙️</span>
-                1. System Status
+                <span class="widget-icon">📈</span>
+                1. Network Usage
             </div>
-            <div class="widget-status online"></div>
+            <div class="widget-status online" id="network-status-indicator"></div>
         </div>
-        <div class="widget-content">
-            <div class="widget-metric">
-                <span class="metric-label">Indexer</span>
-                <span class="status-badge success" id="indexer-status">STABLE</span>
-            </div>
-            <div class="widget-metric">
-                <span class="metric-label">SABnzbd API</span>
-                <span class="status-badge success" id="sabnzbd-status">READY</span>
+        <div class="widget-content" style="padding: 0;">
+            <div class="network-graph-container">
+                <canvas id="network-graph" width="800" height="200"></canvas>
+                <div class="graph-overlay">
+                    <div class="graph-stats">
+                        <div class="stat-item">
+                            <span class="stat-label">CURRENT</span>
+                            <span class="stat-value" id="current-speed">0 B/s</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">PEAK</span>
+                            <span class="stat-value" id="peak-speed">0 B/s</span>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

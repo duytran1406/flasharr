@@ -88,16 +88,7 @@
 
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     <script>
-        // Update header clock
-        function updateHeaderClock() {
-            const now = new Date();
-            const timeStr = now.toLocaleTimeString('en-US', { hour12: false });
-            const dateStr = now.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }).toUpperCase();
-            document.getElementById('header-time').textContent = timeStr;
-            document.getElementById('header-date').textContent = dateStr;
-        }
-        setInterval(updateHeaderClock, 1000);
-        updateHeaderClock();
+        // Header clock removed - elements don't exist in current template
 
         // Header search
         document.getElementById('header-search-input').addEventListener('keypress', (e) => {

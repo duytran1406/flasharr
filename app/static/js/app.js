@@ -1,16 +1,144 @@
 // Fshare-Arr Bridge - Frontend JavaScript
 // NEXUS Dashboard v2.0
 
+// Network Graph Class
+class NetworkGraph {
+    constructor(canvasId) {
+        this.canvas = document.getElementById(canvasId);
+        if (!this.canvas) {
+            console.warn('Network graph canvas not found');
+            return;
+        }
+
+        this.ctx = this.canvas.getContext('2d');
+        this.dataPoints = [];
+        this.maxDataPoints = 60;
+        this.maxSpeed = 0;
+        this.peakSpeed = 0;
+
+        for (let i = 0; i < this.maxDataPoints; i++) {
+            this.dataPoints.push(0);
+        }
+
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+        this.draw();
+    }
+
+    resize() {
+        if (!this.canvas) return;
+        const container = this.canvas.parentElement;
+        const dpr = window.devicePixelRatio || 1;
+
+        this.canvas.width = container.clientWidth * dpr;
+        this.canvas.height = container.clientHeight * dpr;
+        this.canvas.style.width = container.clientWidth + 'px';
+        this.canvas.style.height = container.clientHeight + 'px';
+
+        this.ctx.scale(dpr, dpr);
+        this.width = container.clientWidth;
+        this.height = container.clientHeight;
+    }
+
+    addDataPoint(speedBytes) {
+        this.dataPoints.push(speedBytes);
+        if (this.dataPoints.length > this.maxDataPoints) {
+            this.dataPoints.shift();
+        }
+
+        if (speedBytes > this.peakSpeed) {
+            this.peakSpeed = speedBytes;
+        }
+
+        this.maxSpeed = Math.max(...this.dataPoints, 1024 * 1024);
+        this.draw();
+    }
+
+    draw() {
+        if (!this.ctx) return;
+
+        const ctx = this.ctx;
+        const width = this.width;
+        const height = this.height;
+
+        ctx.clearRect(0, 0, width, height);
+
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+        ctx.lineWidth = 1;
+
+        for (let i = 0; i <= 4; i++) {
+            const y = (height / 4) * i;
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(width, y);
+            ctx.stroke();
+        }
+
+        if (this.dataPoints.length > 1) {
+            const gradient = ctx.createLinearGradient(0, 0, 0, height);
+            gradient.addColorStop(0, 'rgba(59, 130, 246, 0.3)');
+            gradient.addColorStop(1, 'rgba(59, 130, 246, 0.0)');
+
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.moveTo(0, height);
+
+            this.dataPoints.forEach((speed, index) => {
+                const x = (width / (this.maxDataPoints - 1)) * index;
+                const y = height - (speed / this.maxSpeed) * (height * 0.9);
+                ctx.lineTo(x, y);
+            });
+
+            ctx.lineTo(width, height);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.strokeStyle = '#3b82f6';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+
+            this.dataPoints.forEach((speed, index) => {
+                const x = (width / (this.maxDataPoints - 1)) * index;
+                const y = height - (speed / this.maxSpeed) * (height * 0.9);
+
+                if (index === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            });
+
+            ctx.stroke();
+        }
+    }
+
+    formatSpeed(bytes) {
+        if (bytes === 0) return '0 B/s';
+        const units = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+        let size = bytes;
+        let unitIndex = 0;
+
+        while (size >= 1024 && unitIndex < units.length - 1) {
+            size /= 1024;
+            unitIndex++;
+        }
+
+        return `${size.toFixed(2)} ${units[unitIndex]}`;
+    }
+}
+
 class FshareBridge {
     constructor() {
         this.downloads = [];
         this.sortColumn = null;
         this.sortDirection = 'asc';
+        this.networkGraph = null;
         this.init();
     }
 
     init() {
         this.setupEventListeners();
+        this.networkGraph = new NetworkGraph('network-graph');
         this.loadDashboardData();
         this.loadDownloads();
         this.loadSystemLogs();
@@ -19,6 +147,9 @@ class FshareBridge {
         setInterval(() => this.loadDashboardData(), 10000);
         setInterval(() => this.loadDownloads(), 5000);
         setInterval(() => this.loadSystemLogs(), 15000);
+
+        // Update network graph every 500ms
+        setInterval(() => this.updateNetworkGraph(), 500);
     }
 
     // Dashboard Data & Stats
@@ -41,9 +172,8 @@ class FshareBridge {
         this.setText('header-active', data.pyload.active);
         this.setText('header-uptime', this.formatUptime(data.system.uptime));
 
-        // Widget 1: System Status
-        this.updateBadge('indexer-status', true, 'STABLE');
-        this.updateBadge('sabnzbd-status', true, 'READY');
+        // Widget 1: Network Graph - handled by updateNetworkGraph()
+        this.updateStatusIndicator('network-status-indicator', data.pyload.connected);
 
         // Widget 2: Downloader
         const pyloadConnected = data.pyload.connected;
@@ -62,6 +192,34 @@ class FshareBridge {
         this.updateBadge('timfshare-status', true, 'ONLINE');
         this.setText('api-health', '100%');
         this.setText('api-ping', '45ms');
+    }
+
+    async updateNetworkGraph() {
+        if (!this.networkGraph) return;
+
+        try {
+            const response = await fetch('/api/stats');
+            const data = await response.json();
+
+            if (data && data.pyload) {
+                const activeDownloads = data.pyload.active || 0;
+                const speedBytes = data.pyload.speed_bytes || 0;
+
+                // Only update graph if there are active downloads
+                if (activeDownloads > 0) {
+                    this.networkGraph.addDataPoint(speedBytes);
+
+                    // Update speed displays
+                    const currentSpeed = this.networkGraph.formatSpeed(speedBytes);
+                    const peakSpeed = this.networkGraph.formatSpeed(this.networkGraph.peakSpeed);
+
+                    this.setText('current-speed', currentSpeed);
+                    this.setText('peak-speed', peakSpeed);
+                }
+            }
+        } catch (error) {
+            console.error('Network graph update error:', error);
+        }
     }
 
     updateStatusIndicator(id, isOnline) {
