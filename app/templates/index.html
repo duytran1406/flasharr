@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Fshare-Arr Bridge{% endblock %}
+
+{% block content %}
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value" id="total-searches">0</div>
+        <div class="stat-label">Total Searches</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="active-downloads">0</div>
+        <div class="stat-label">Active Downloads</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" id="success-rate">0%</div>
+        <div class="stat-label">Success Rate</div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Quick Search</h2>
+    </div>
+    <div class="search-container">
+        <div class="search-box">
+            <input type="text" id="search-input" class="search-input" placeholder="Search for movies or TV shows..."
+                autocomplete="off">
+            <div id="search-suggestions" class="search-suggestions" style="display: none;"></div>
+        </div>
+    </div>
+    <div id="search-results"></div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">Recent Downloads</h2>
+        <a href="/downloads" class="btn btn-secondary">View All</a>
+    </div>
+    <div id="downloads-list">
+        <p class="text-secondary">No recent downloads</p>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 class="card-title">System Status</h2>
+    </div>
+    <div class="result-meta">
+        <span class="badge resolution">TimFshare: Connected</span>
+        <span class="badge">pyLoad: {{ 'Connected' if pyload_status else 'Disconnected' }}</span>
+        <span class="badge vietnamese">Filename Normalizer: Active</span>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Auto-refresh downloads every 5 seconds
+    setInterval(() => {
+        if (bridge) bridge.loadDownloads();
+    }, 5000);
+</script>
+{% endblock %}

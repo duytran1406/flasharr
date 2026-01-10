@@ -1,19 +1,23 @@
 """
 TimFshare API Client
-Handles search operations using TimFshare.com API
+Handles search operations using TimFshare.com API with smart scoring
 """
 
 import requests
 import logging
+import urllib.parse
+import re
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class TimFshareClient:
-    """Client for interacting with TimFshare.com search API"""
+    """Client for interacting with TimFshare.com search API with smart scoring"""
     
     API_BASE = "https://timfshare.com/api/v1"
+    SEARCH_API = f"{API_BASE}/string-query-search"
+    AUTOCOMPLETE_API = f"{API_BASE}/autocomplete"
     
     def __init__(self):
         self.session = requests.Session()
@@ -21,9 +25,158 @@ class TimFshareClient:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
     
+    def get_autocomplete_value(self, query: str) -> Optional[str]:
+        """
+        Get the best autocomplete suggestion for a query
+        
+        Args:
+            query: Search query
+            
+        Returns:
+            Best matching filename from autocomplete, or None
+        """
+        try:
+            url = f"{self.AUTOCOMPLETE_API}?query={urllib.parse.quote(query)}"
+            headers = {
+                'accept': '*/*',
+                'user-agent': 'Mozilla/5.0',
+                'referer': f'https://timfshare.com/search?key={urllib.parse.quote(query)}'
+            }
+            
+            response = self.session.get(url, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json().get('data', [])
+                if data:
+                    # Return the first (best) suggestion
+                    return data[0].get('value')
+            
+        except Exception as e:
+            logger.error(f"Autocomplete error: {e}")
+        
+        return None
+    
+    def smart_search(self, query: str, limit: int = 50) -> List[Dict]:
+        """
+        Smart search with two-step process and scoring
+        
+        1. Get autocomplete suggestion for exact filename
+        2. Search with exact filename
+        3. Score and rank results
+        
+        Args:
+            query: Search query
+            limit: Maximum number of results
+            
+        Returns:
+            List of scored and ranked results
+        """
+        logger.info(f"Smart Search starting for: {query}")
+        
+        # Step 1: Try to get exact filename from autocomplete
+        refinement_queries = [query, f"{query} vie"]
+        best_filename = None
+        
+        for q in refinement_queries:
+            val = self.get_autocomplete_value(q)
+            if val and len(val) > 5:
+                best_filename = val
+                logger.info(f"Autocomplete found: {val}")
+                break
+        
+        # Step 2: Search with best filename or original query
+        search_query = best_filename if best_filename else query
+        raw_results = self._execute_search(search_query)
+        
+        # Fallback: if autocomplete search fails, try original query
+        if not raw_results and search_query != query:
+            logger.info("Autocomplete search failed, trying original query")
+            raw_results = self._execute_search(query)
+        
+        if not raw_results:
+            return []
+        
+        # Step 3: Score and rank results
+        scored_results = self._score_results(raw_results, query)
+        
+        # Sort by score and return top results
+        scored_results.sort(key=lambda x: x.get('score', 0), reverse=True)
+        
+        logger.info(f"Returning {len(scored_results[:limit])} scored results")
+        return scored_results[:limit]
+    
+    def _execute_search(self, query: str) -> List[Dict]:
+        """Execute the actual search API call"""
+        try:
+            url = f"{self.SEARCH_API}?query={urllib.parse.quote(query)}"
+            headers = {
+                'content-length': '0',
+                'origin': 'https://timfshare.com',
+                'referer': f'https://timfshare.com/search?key={urllib.parse.quote(query)}',
+                'user-agent': 'Mozilla/5.0'
+            }
+            
+            response = self.session.post(url, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json().get('data', [])
+                logger.info(f"Search API returned {len(data)} results")
+                return data
+            else:
+                logger.error(f"Search API failed: {response.status_code}")
+                
+        except Exception as e:
+            logger.error(f"Search API Error: {e}")
+        
+        return []
+    
+    def _score_results(self, results: List[Dict], query: str) -> List[Dict]:
+        """
+        Score results based on relevance
+        
+        Scoring factors:
+        - Keyword match count (10 points per keyword)
+        - Year match (20 points)
+        - Resolution quality (10 points for 1080p+)
+        - Vietnamese content (extra boost)
+        """
+        # Normalize query and extract keywords
+        q_norm = query.lower().replace('.', ' ')
+        keywords = [kw for kw in q_norm.split() if len(kw) > 1]
+        
+        scored = []
+        
+        for item in results:
+            name = item.get('name', '')
+            name_lower = name.lower()
+            
+            # Base score from keyword matching
+            match_count = sum(1 for kw in keywords if kw in name_lower)
+            score = match_count * 10
+            
+            # Year matching bonus
+            year_match = re.search(r'\b(19[5-9][0-9]|20[0-2][0-9])\b', name_lower)
+            if year_match and year_match.group(1) in q_norm:
+                score += 20
+            
+            # Quality bonus
+            if '1080p' in name_lower or '2160p' in name_lower or '4k' in name_lower:
+                score += 10
+            
+            # Vietnamese content boost
+            vietnamese_markers = ['vietsub', 'thuyết minh', 'thuyet minh', 'lồng tiếng', 'long tieng']
+            if any(marker in name_lower for marker in vietnamese_markers):
+                score += 15
+            
+            # Add score to item
+            item['score'] = score
+            scored.append(item)
+        
+        return scored
+    
     def autocomplete(self, query: str) -> List[str]:
         """
-        Get autocomplete suggestions
+        Get autocomplete suggestions (for UI)
         
         Args:
             query: Search query
@@ -32,17 +185,18 @@ class TimFshareClient:
             List of suggested titles
         """
         try:
-            logger.info(f"Getting autocomplete suggestions for: {query}")
+            url = f"{self.AUTOCOMPLETE_API}?query={urllib.parse.quote(query)}"
+            headers = {
+                'accept': '*/*',
+                'user-agent': 'Mozilla/5.0',
+                'referer': f'https://timfshare.com/search?key={urllib.parse.quote(query)}'
+            }
             
-            response = self.session.get(
-                f"{self.API_BASE}/autocomplete",
-                params={'query': query},
-                timeout=10
-            )
+            response = self.session.get(url, headers=headers, timeout=10)
             
             if response.status_code == 200:
-                data = response.json()
-                suggestions = [item['value'] for item in data.get('data', [])]
+                data = response.json().get('data', [])
+                suggestions = [item['value'] for item in data]
                 logger.info(f"✅ Found {len(suggestions)} suggestions")
                 return suggestions
             else:
@@ -55,74 +209,13 @@ class TimFshareClient:
     
     def search(self, query: str, limit: int = 50) -> List[Dict]:
         """
-        Search for files on TimFshare
+        Main search method (uses smart_search)
         
         Args:
             query: Search query
             limit: Maximum number of results
             
         Returns:
-            List of file dictionaries with keys: name, url, size, fcode
+            List of file dictionaries with keys: name, url, size, fcode, score
         """
-        try:
-            logger.info(f"Searching TimFshare for: {query}")
-            
-            # First get autocomplete suggestions
-            suggestions = self.autocomplete(query)
-            
-            if not suggestions:
-                logger.warning("No suggestions found")
-                return []
-            
-            # For now, we'll use the autocomplete results
-            # In a real implementation, you'd need to query each suggestion
-            # to get the actual Fshare links
-            
-            results = []
-            for suggestion in suggestions[:limit]:
-                # Parse the suggestion to extract metadata
-                # The suggestion format is typically: "Title YYYY Quality SxxExx ..."
-                
-                # For now, we'll create a placeholder result
-                # You'll need to implement the actual link retrieval
-                results.append({
-                    'name': suggestion,
-                    'url': f"https://www.fshare.vn/file/PLACEHOLDER",  # TODO: Get actual link
-                    'size': 0,  # TODO: Get actual size
-                    'fcode': 'PLACEHOLDER',  # TODO: Get actual fcode
-                    'type': 0  # 0 = file
-                })
-            
-            logger.info(f"✅ Found {len(results)} results")
-            return results
-            
-        except Exception as e:
-            logger.error(f"Search error: {e}")
-            return []
-    
-    def get_fshare_link(self, title: str) -> Optional[str]:
-        """
-        Get Fshare download link for a specific title
-        
-        Args:
-            title: Full title from autocomplete
-            
-        Returns:
-            Fshare URL or None if not found
-        """
-        try:
-            logger.info(f"Getting Fshare link for: {title}")
-            
-            # TODO: Implement the actual API call to get Fshare links
-            # This might require:
-            # 1. Querying the string-query-search endpoint
-            # 2. Or scraping the search page
-            # 3. Or using another API endpoint
-            
-            # For now, return None
-            logger.warning("get_fshare_link not yet implemented")
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error getting Fshare link: {e}")
-            return None
+        return self.smart_search(query, limit)

@@ -7,10 +7,12 @@ import logging
 import os
 from dotenv import load_dotenv
 
-from .fshare_client import FshareClient
+from .timfshare_client import TimFshareClient
 from .pyload_client import PyLoadClient
+from .filename_parser import FilenameNormalizer
 from .indexer import create_indexer_api
 from .sabnzbd import create_sabnzbd_api
+from .web_ui import create_web_ui
 
 # Load environment variables
 load_dotenv()
@@ -33,11 +35,8 @@ def create_app():
     app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
     
     # Initialize clients
-    logger.info("Initializing Fshare client...")
-    fshare_client = FshareClient(
-        email=os.getenv('FSHARE_EMAIL'),
-        password=os.getenv('FSHARE_PASSWORD')
-    )
+    logger.info("Initializing TimFshare client...")
+    timfshare_client = TimFshareClient()
     
     logger.info("Initializing pyLoad client...")
     pyload_client = PyLoadClient(
@@ -47,41 +46,30 @@ def create_app():
         password=os.getenv('PYLOAD_PASSWORD')
     )
     
-    # Login to Fshare
-    if not fshare_client.login():
-        logger.error("Failed to login to Fshare! Check your credentials.")
+    # Initialize filename normalizer
+    logger.info("Initializing filename normalizer...")
+    filename_normalizer = FilenameNormalizer()
     
     # Login to pyLoad
     if not pyload_client.login():
         logger.warning("Failed to login to pyLoad! Downloads may not work.")
     
     # Register blueprints
-    indexer_bp = create_indexer_api(fshare_client)
-    sabnzbd_bp = create_sabnzbd_api(fshare_client, pyload_client)
+    indexer_bp = create_indexer_api(timfshare_client, filename_normalizer)
+    sabnzbd_bp = create_sabnzbd_api(timfshare_client, pyload_client, filename_normalizer)
+    web_ui_bp = create_web_ui(timfshare_client, pyload_client, filename_normalizer)
     
     app.register_blueprint(indexer_bp, url_prefix='/indexer')
     app.register_blueprint(sabnzbd_bp, url_prefix='/sabnzbd')
+    app.register_blueprint(web_ui_bp)  # Web UI at root
     
     # Health check endpoint
     @app.route('/health')
     def health():
         return {
             'status': 'healthy',
-            'fshare': 'connected' if fshare_client.token else 'disconnected',
+            'timfshare': 'connected',
             'pyload': 'connected' if pyload_client.logged_in else 'disconnected'
-        }
-    
-    # Root endpoint
-    @app.route('/')
-    def index():
-        return {
-            'name': 'Fshare-Arr Bridge',
-            'version': '1.0.0',
-            'endpoints': {
-                'indexer': '/indexer/api',
-                'sabnzbd': '/sabnzbd/api',
-                'health': '/health'
-            }
         }
     
     logger.info("✅ Fshare-Arr Bridge initialized successfully")
@@ -92,15 +80,16 @@ def create_app():
 if __name__ == '__main__':
     app = create_app()
     
-    # Get ports from environment
-    indexer_port = int(os.getenv('INDEXER_PORT', 8484))
+    # Get port from environment
+    port = int(os.getenv('INDEXER_PORT', 8484))
     
-    logger.info(f"Starting Fshare-Arr Bridge on port {indexer_port}")
-    logger.info(f"Indexer API: http://0.0.0.0:{indexer_port}/indexer/api")
-    logger.info(f"SABnzbd API: http://0.0.0.0:{indexer_port}/sabnzbd/api")
+    logger.info(f"Starting Fshare-Arr Bridge on port {port}")
+    logger.info(f"Web UI: http://0.0.0.0:{port}/")
+    logger.info(f"Indexer API: http://0.0.0.0:{port}/indexer/api")
+    logger.info(f"SABnzbd API: http://0.0.0.0:{port}/sabnzbd/api")
     
     app.run(
         host='0.0.0.0',
-        port=indexer_port,
+        port=port,
         debug=os.getenv('DEBUG', 'false').lower() == 'true'
     )
