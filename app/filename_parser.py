@@ -49,11 +49,13 @@ class FilenameNormalizer:
         'HDR', 'HDR10', 'HDR10+', 'Dolby Vision', 'DV',
         'SDR', '10Bit', '10bit', '8Bit', '8bit', '12bit',
         'x265', 'x264', 'H.265', 'H.264', 'HEVC', 'AVC',
+        'H265', 'H264', 'MPEG-2', 'MPEG-4',
         'XviD', 'DivX', 'VP9', 'AV1',
         
         # Audio
         'AAC', 'AC3', 'DTS', 'DTS-HD', 'DTS-X', 'TrueHD', 'Atmos',
         'DD5.1', 'DD+', 'EAC3', 'FLAC', 'PCM', 'MP3',
+        'HE-AAC', 'AAC-LC', 'Vorbis', 'Opus',
         
         # Groups/Tags
         'Proper', 'Repack', 'Real', 'Rerip', 'Hybrid',
@@ -73,6 +75,7 @@ class FilenameNormalizer:
         r'S(\d{1,4})\s*EP?(\d{1,3})',  # S01 E14, S01 EP14
         r'(?<!\w)E(\d{1,3})(?!\w)',  # E14 (standalone)
         r'(?<!\w)EP(\d{1,3})(?!\w)',  # EP14 (standalone)
+        r'\s-\s(\d{1,4})(?!\d)', # - 01 (Anime absolute numbering)
     ]
     
     def __init__(self):
@@ -219,10 +222,15 @@ class FilenameNormalizer:
     
     def _clean_title(self, title: str) -> str:
         """Clean up title string"""
-        # Replace dots and underscores with spaces
-        title = re.sub(r'[\._]', ' ', title)
+        # Replace underscores with spaces FIRST to ensure word boundaries work
+        title = title.replace('_', ' ')
+        
         # Remove quality and Vietnamese markers
         title = self.quality_pattern.sub('', title)
+        
+        # Replace remaining dots with spaces
+        title = re.sub(r'[\.]', ' ', title)
+        
         # Remove year if present
         title = re.sub(r'\b(19\d{2}|20\d{2})\b', '', title)
         # Clean up extra spaces
