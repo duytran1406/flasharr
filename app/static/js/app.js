@@ -149,13 +149,13 @@ class FshareBridge {
         this.loadSystemLogs();
         this.initSidebar();
 
-        // Auto-refresh stats every 1.5s for responsive UI
-        setInterval(() => this.loadDashboardData(), 1500);
-        setInterval(() => this.loadDownloads(), 5000);
+        // Auto-refresh stats every 250ms for responsive UI
+        setInterval(() => this.loadDashboardData(), 250);
+        setInterval(() => this.loadDownloads(), 2000); // Faster download list refresh
         setInterval(() => this.loadSystemLogs(), 15000);
 
-        // Update network graph every 1000ms
-        setInterval(() => this.updateNetworkGraph(), 1000);
+        // Update network graph every 250ms
+        setInterval(() => this.updateNetworkGraph(), 250);
 
         // Update ETA countdown every second
         setInterval(() => this.updateETACountdown(), 1000);
@@ -214,17 +214,16 @@ class FshareBridge {
                 const activeDownloads = data.pyload.active || 0;
                 const speedBytes = data.pyload.speed_bytes || 0;
 
-                // Only update graph if there are active downloads
-                if (activeDownloads > 0) {
-                    this.networkGraph.addDataPoint(speedBytes);
+                // Always update graph to show current state (even if 0)
+                this.networkGraph.addDataPoint(speedBytes);
 
-                    // Update speed displays
-                    const currentSpeed = this.networkGraph.formatSpeed(speedBytes);
-                    const peakSpeed = this.networkGraph.formatSpeed(this.networkGraph.peakSpeed);
+                // Update speed displays
+                const currentSpeed = this.networkGraph.formatSpeed(speedBytes);
+                // Only update peak if > 0 or keep previous
+                const peakSpeed = this.networkGraph.formatSpeed(this.networkGraph.peakSpeed);
 
-                    this.setText('current-speed', currentSpeed);
-                    this.setText('peak-speed', peakSpeed);
-                }
+                this.setText('current-speed', currentSpeed);
+                this.setText('peak-speed', peakSpeed);
             }
         } catch (error) {
             console.error('Network graph update error:', error);
@@ -232,8 +231,8 @@ class FshareBridge {
     }
 
     updateETACountdown() {
-        // Find all ETA elements in the downloads table
-        const etaElements = document.querySelectorAll('.download-table .download-name + div');
+        // Find all ETA cells using the specific class
+        const etaElements = document.querySelectorAll('.eta-cell');
 
         etaElements.forEach(el => {
             const text = el.textContent;
@@ -573,7 +572,7 @@ class FshareBridge {
                 </td>
                 <td><span class="status-badge ${statusClass}">${d.status.toUpperCase()}</span></td>
                 <td>${d.speed}</td>
-                <td>${d.eta}</td>
+                <td class="eta-cell">${d.eta}</td>
                 <td style="text-align: right; padding-right: 1.5rem;">
                     <div class="download-controls" style="justify-content: flex-end;">
                         <button class="icon-btn" title="Toggle" onclick="bridge.toggleDownload(${d.fid})">

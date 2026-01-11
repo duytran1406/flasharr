@@ -176,12 +176,17 @@
             initSpeedGraph();
         }
 
+        // Download list refresh (2000ms)
         setInterval(() => {
             if (bridge) {
                 bridge.loadDownloads();
-                updateSpeedGraph();
             }
-        }, 5000);
+        }, 2000);
+
+        // Speed graph refresh (250ms)
+        setInterval(() => {
+            updateSpeedGraph();
+        }, 250);
     });
 
     let speedChart = null;
