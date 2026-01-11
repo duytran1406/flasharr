@@ -889,9 +889,12 @@ class FshareBridge {
 
         if (!url) return;
 
-        // Basic validation
-        if (!url.includes('fshare.vn/file/')) {
-            errorText.textContent = "Please enter a valid Fshare file link.";
+        // Validate Fshare file or folder link
+        const isFshareFile = url.includes('fshare.vn/file/');
+        const isFshareFolder = url.includes('fshare.vn/folder/');
+
+        if (!isFshareFile && !isFshareFolder) {
+            errorText.textContent = "Please enter a valid Fshare file or folder link.";
             errorMsg.style.display = 'block';
             return;
         }
