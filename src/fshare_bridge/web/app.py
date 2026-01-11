@@ -63,9 +63,19 @@ def create_app(config_override: dict = None) -> Flask:
     from .sabnzbd_routes import sabnzbd_bp
     from .settings_api import settings_bp
     
+    # Inject version into all templates
+    @app.context_processor
+    def inject_version():
+        version = "1.0.0-alpha"
+        try:
+            with open("/app/VERSION", "r") as f:
+                version = f.read().strip()
+        except:
+            pass
+        return dict(version=version)
+
     app.register_blueprint(main_bp)
     app.register_blueprint(api_bp, url_prefix="/api")
-    # Update settings blueprint to use /api/settings prefix
     app.register_blueprint(settings_bp, url_prefix="/api/settings")
     app.register_blueprint(indexer_bp, url_prefix="/indexer")
     app.register_blueprint(sabnzbd_bp, url_prefix="/sabnzbd")
