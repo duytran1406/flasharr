@@ -6,7 +6,7 @@
 <div class="search-header-container">
     <div class="search-input-wrapper">
         <span class="material-icons search-icon">search</span>
-        <input type="text" id="search-query-input" class="search-query-input"
+        <input type="text" id="search-page-input" class="search-query-input"
             placeholder="Search movies, series, or files..." value="{{ query or '' }}" autofocus>
         <button class="clear-search-btn" id="clear-search-btn" style="display: none;">
             <span class="material-icons">close</span>
@@ -111,169 +111,170 @@
 
 {% block scripts %}
 <script>
-    // Search functionality
-    const searchInput = document.getElementById('search-query-input');
-    const clearBtn = document.getElementById('clear-search-btn');
-    const resultsGrid = document.getElementById('search-results-grid');
-    const resultsCount = document.getElementById('results-count');
-    const loadingState = document.getElementById('loading-state');
-    const emptyState = document.getElementById('empty-state');
+    (function () {
+        // Search functionality
+        const searchInput = document.getElementById('search-page-input');
+        const clearBtn = document.getElementById('clear-search-btn');
+        const resultsGrid = document.getElementById('search-results-grid');
+        const resultsCount = document.getElementById('results-count');
+        const loadingState = document.getElementById('loading-state');
+        const emptyState = document.getElementById('empty-state');
 
-    // Hide loading state initially
-    loadingState.style.display = 'none';
-
-    let searchTimeout;
-    let currentFilters = {
-        quality: ['4k'],
-        vietsub: true,
-        vietdub: false,
-        sort: 'newest'
-    };
-
-    // Show/hide clear button
-    searchInput.addEventListener('input', (e) => {
-        clearBtn.style.display = e.target.value ? 'flex' : 'none';
-
-        // Debounced search
-        clearTimeout(searchTimeout);
-        searchTimeout = setTimeout(() => {
-            performSearch(e.target.value);
-        }, 500);
-    });
-
-    clearBtn.addEventListener('click', () => {
-        searchInput.value = '';
-        clearBtn.style.display = 'none';
-        resultsGrid.innerHTML = '';
-        resultsCount.textContent = 'Found 0 results';
+        // Hide loading state initially
         loadingState.style.display = 'none';
-        emptyState.style.display = 'none';
-    });
 
-    // Filter toggles
-    document.querySelectorAll('.filter-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            const filterType = btn.dataset.filter;
+        let searchTimeout;
+        let currentFilters = {
+            quality: ['4k'],
+            vietsub: true,
+            vietdub: false,
+            sort: 'newest'
+        };
 
-            if (filterType === 'vietsub' || filterType === 'vietdub') {
-                currentFilters[filterType] = !currentFilters[filterType];
-                const icon = btn.querySelector('.check-icon');
-                icon.textContent = currentFilters[filterType] ? 'check_circle' : 'cancel';
-                btn.classList.toggle('active', currentFilters[filterType]);
+        // Show/hide clear button
+        searchInput.addEventListener('input', (e) => {
+            clearBtn.style.display = e.target.value ? 'flex' : 'none';
 
-                if (searchInput.value) {
-                    performSearch(searchInput.value);
-                }
-            } else {
-                // Toggle dropdown
-                const dropdown = btn.nextElementSibling;
-                if (dropdown && dropdown.classList.contains('filter-dropdown')) {
-                    dropdown.classList.toggle('show');
-                }
-            }
+            // Debounced search
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => {
+                performSearch(e.target.value);
+            }, 500);
         });
-    });
 
-    // Quality filter
-    document.querySelectorAll('#quality-dropdown input[type="checkbox"]').forEach(checkbox => {
-        checkbox.addEventListener('change', () => {
-            currentFilters.quality = Array.from(
-                document.querySelectorAll('#quality-dropdown input:checked')
-            ).map(cb => cb.value);
-
-            if (searchInput.value) {
-                performSearch(searchInput.value);
-            }
-        });
-    });
-
-    // Sort filter
-    document.querySelectorAll('#sort-dropdown input[type="radio"]').forEach(radio => {
-        radio.addEventListener('change', (e) => {
-            currentFilters.sort = e.target.value;
-            document.querySelector('[data-filter="sort"] .filter-label').textContent =
-                `Sort: ${e.target.value.charAt(0).toUpperCase() + e.target.value.slice(1)}`;
-
-            if (searchInput.value) {
-                performSearch(searchInput.value);
-            }
-        });
-    });
-
-    // View toggle
-    document.querySelectorAll('.view-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            resultsGrid.className = `search-results-${btn.dataset.view}`;
-        });
-    });
-
-    // Close dropdowns when clicking outside
-    document.addEventListener('click', (e) => {
-        if (!e.target.closest('.filter-group')) {
-            document.querySelectorAll('.filter-dropdown').forEach(dd => {
-                dd.classList.remove('show');
-            });
-        }
-    });
-
-    // Perform search
-    async function performSearch(query) {
-        if (!query.trim()) {
+        clearBtn.addEventListener('click', () => {
+            searchInput.value = '';
+            clearBtn.style.display = 'none';
             resultsGrid.innerHTML = '';
             resultsCount.textContent = 'Found 0 results';
             loadingState.style.display = 'none';
             emptyState.style.display = 'none';
-            return;
-        }
+        });
 
-        // Show loading state
-        loadingState.style.display = 'flex';
-        emptyState.style.display = 'none';
-        resultsGrid.innerHTML = '';
-        resultsGrid.appendChild(loadingState);
+        // Filter toggles
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const filterType = btn.dataset.filter;
 
-        try {
-            const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-            const data = await response.json();
+                if (filterType === 'vietsub' || filterType === 'vietdub') {
+                    currentFilters[filterType] = !currentFilters[filterType];
+                    const icon = btn.querySelector('.check-icon');
+                    icon.textContent = currentFilters[filterType] ? 'check_circle' : 'cancel';
+                    btn.classList.toggle('active', currentFilters[filterType]);
 
-            loadingState.style.display = 'none';
+                    if (searchInput.value) {
+                        performSearch(searchInput.value);
+                    }
+                } else {
+                    // Toggle dropdown
+                    const dropdown = btn.nextElementSibling;
+                    if (dropdown && dropdown.classList.contains('filter-dropdown')) {
+                        dropdown.classList.toggle('show');
+                    }
+                }
+            });
+        });
 
-            if (data.results && data.results.length > 0) {
-                displayResults(data.results);
-            } else {
+        // Quality filter
+        document.querySelectorAll('#quality-dropdown input[type="checkbox"]').forEach(checkbox => {
+            checkbox.addEventListener('change', () => {
+                currentFilters.quality = Array.from(
+                    document.querySelectorAll('#quality-dropdown input:checked')
+                ).map(cb => cb.value);
+
+                if (searchInput.value) {
+                    performSearch(searchInput.value);
+                }
+            });
+        });
+
+        // Sort filter
+        document.querySelectorAll('#sort-dropdown input[type="radio"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                currentFilters.sort = e.target.value;
+                document.querySelector('[data-filter="sort"] .filter-label').textContent =
+                    `Sort: ${e.target.value.charAt(0).toUpperCase() + e.target.value.slice(1)}`;
+
+                if (searchInput.value) {
+                    performSearch(searchInput.value);
+                }
+            });
+        });
+
+        // View toggle
+        document.querySelectorAll('.view-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                resultsGrid.className = `search-results-${btn.dataset.view}`;
+            });
+        });
+
+        // Close dropdowns when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.filter-group')) {
+                document.querySelectorAll('.filter-dropdown').forEach(dd => {
+                    dd.classList.remove('show');
+                });
+            }
+        });
+
+        // Perform search
+        async function performSearch(query) {
+            if (!query.trim()) {
+                resultsGrid.innerHTML = '';
+                resultsCount.textContent = 'Found 0 results';
+                loadingState.style.display = 'none';
+                emptyState.style.display = 'none';
+                return;
+            }
+
+            // Show loading state
+            loadingState.style.display = 'flex';
+            emptyState.style.display = 'none';
+            resultsGrid.innerHTML = '';
+            resultsGrid.appendChild(loadingState);
+
+            try {
+                const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+                const data = await response.json();
+
+                loadingState.style.display = 'none';
+
+                if (data.results && data.results.length > 0) {
+                    displayResults(data.results);
+                } else {
+                    emptyState.style.display = 'flex';
+                    resultsGrid.appendChild(emptyState);
+                    resultsCount.textContent = 'Found 0 results';
+                }
+            } catch (error) {
+                console.error('Search error:', error);
+                loadingState.style.display = 'none';
                 emptyState.style.display = 'flex';
                 resultsGrid.appendChild(emptyState);
-                resultsCount.textContent = 'Found 0 results';
             }
-        } catch (error) {
-            console.error('Search error:', error);
-            loadingState.style.display = 'none';
-            emptyState.style.display = 'flex';
-            resultsGrid.appendChild(emptyState);
         }
-    }
 
-    function displayResults(results) {
-        resultsGrid.innerHTML = '';
-        resultsCount.textContent = `Found ${results.length} result${results.length !== 1 ? 's' : ''}`;
+        function displayResults(results) {
+            resultsGrid.innerHTML = '';
+            resultsCount.textContent = `Found ${results.length} result${results.length !== 1 ? 's' : ''}`;
 
-        results.forEach(result => {
-            const card = createResultCard(result);
-            resultsGrid.appendChild(card);
-        });
-    }
+            results.forEach(result => {
+                const card = createResultCard(result);
+                resultsGrid.appendChild(card);
+            });
+        }
 
-    function createResultCard(result) {
-        const card = document.createElement('div');
-        card.className = 'result-card';
+        function createResultCard(result) {
+            const card = document.createElement('div');
+            card.className = 'result-card';
 
-        const qualityBadge = result.quality || '1080P';
-        const hasVietsub = result.vietsub || false;
-        const hasVietdub = result.vietdub || false;
+            const qualityBadge = result.quality || '1080P';
+            const hasVietsub = result.vietsub || false;
+            const hasVietdub = result.vietdub || false;
 
-        card.innerHTML = `
+            card.innerHTML = `
             <div class="result-card-header">
                 <h3 class="result-title">${escapeHtml(result.name)}</h3>
                 <span class="quality-badge quality-${qualityBadge.toLowerCase()}">${qualityBadge}</span>
@@ -298,40 +299,40 @@
             </button>
         `;
 
-        // Add download event listener
-        card.querySelector('.download-btn').addEventListener('click', function () {
-            downloadFile(this.dataset.url, this.dataset.name);
-        });
-
-        return card;
-    }
-
-    async function downloadFile(url, name) {
-        try {
-            const response = await fetch('/api/download', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ url, name })
+            // Add download event listener
+            card.querySelector('.download-btn').addEventListener('click', function () {
+                downloadFile(this.dataset.url, this.dataset.name);
             });
 
-            const data = await response.json();
-
-            if (data.success) {
-                showNotification('Download added to queue', 'success');
-            } else {
-                showNotification(data.error || 'Failed to add download', 'error');
-            }
-        } catch (error) {
-            showNotification('Failed to add download', 'error');
+            return card;
         }
-    }
 
-    function showNotification(message, type) {
-        // Simple notification (you can enhance this)
-        const notification = document.createElement('div');
-        notification.style.cssText = `
+        async function downloadFile(url, name) {
+            try {
+                const response = await fetch('/api/download', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ url, name })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showNotification('Download added to queue', 'success');
+                } else {
+                    showNotification(data.error || 'Failed to add download', 'error');
+                }
+            } catch (error) {
+                showNotification('Failed to add download', 'error');
+            }
+        }
+
+        function showNotification(message, type) {
+            // Simple notification (you can enhance this)
+            const notification = document.createElement('div');
+            notification.style.cssText = `
             position: fixed;
             top: 20px;
             right: 20px;
@@ -343,28 +344,29 @@
             font-weight: 500;
             box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.5);
         `;
-        notification.textContent = message;
-        document.body.appendChild(notification);
+            notification.textContent = message;
+            document.body.appendChild(notification);
 
-        setTimeout(() => {
-            notification.remove();
-        }, 3000);
-    }
+            setTimeout(() => {
+                notification.remove();
+            }, 3000);
+        }
 
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
 
-    // Initial search if query parameter exists
-    const urlParams = new URLSearchParams(window.location.search);
-    const initialQuery = urlParams.get('q');
-    if (initialQuery) {
-        searchInput.value = initialQuery;
-        clearBtn.style.display = 'flex';
-        performSearch(initialQuery);
-    }
+        // Initial search if query parameter exists
+        const urlParams = new URLSearchParams(window.location.search);
+        const initialQuery = urlParams.get('q');
+        if (initialQuery) {
+            searchInput.value = initialQuery;
+            clearBtn.style.display = 'flex';
+            performSearch(initialQuery);
+        }
+    })();
 </script>
 {% endblock %}
 {% endblock %}

@@ -66,7 +66,7 @@
                         autocomplete="off">
                     <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
                 </div>
-                {% elif request.path == '/downloads' %}
+                {% elif request.path in ['/downloads', '/search'] %}
                 {% block custom_header %}{% endblock %}
                 {% endif %}
             </header>
