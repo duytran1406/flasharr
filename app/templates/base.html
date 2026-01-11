@@ -99,7 +99,7 @@
     </script>
     {% block scripts %}{% endblock %}
 
-    <script>
+    <script id="spa-navigation-script">
         // Seamless tab navigation
         (function () {
             const navItems = document.querySelectorAll('.nav-item');
@@ -141,7 +141,7 @@
                         }
 
                         // Execute any scripts in the new content
-                        const scripts = doc.querySelectorAll('script');
+                        const scripts = doc.querySelectorAll('script:not(#spa-navigation-script)');
                         scripts.forEach(script => {
                             if (script.textContent) {
                                 eval(script.textContent);
