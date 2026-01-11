@@ -357,14 +357,22 @@ class FshareBridge {
             if (data.downloads) {
                 this.downloads = data.downloads;
 
-                // Re-apply sort if active
-                if (this.sortColumn) {
-                    const col = this.sortColumn;
-                    const dir = this.sortDirection;
-                    // Directly apply the sort without toggling
-                    this.downloads.sort((a, b) => {
+                // Always apply priority sort: in-progress (0<p<100) first, sorted ascending
+                this.downloads.sort((a, b) => {
+                    const aInProgress = a.progress > 0 && a.progress < 100;
+                    const bInProgress = b.progress > 0 && b.progress < 100;
+
+                    if (aInProgress && !bInProgress) return -1;
+                    if (!aInProgress && bInProgress) return 1;
+
+                    if (aInProgress && bInProgress) {
+                        return a.progress - b.progress;
+                    }
+
+                    // For others, use sortColumn if set
+                    if (this.sortColumn) {
                         let aVal, bVal;
-                        switch (col) {
+                        switch (this.sortColumn) {
                             case 'name': aVal = a.name.toLowerCase(); bVal = b.name.toLowerCase(); break;
                             case 'category': aVal = (a.category || '').toLowerCase(); bVal = (b.category || '').toLowerCase(); break;
                             case 'size': aVal = a.size_bytes || 0; bVal = b.size_bytes || 0; break;
@@ -374,11 +382,14 @@ class FshareBridge {
                             case 'progress': aVal = a.progress || 0; bVal = b.progress || 0; break;
                             default: return 0;
                         }
-                        if (aVal < bVal) return dir === 'asc' ? -1 : 1;
-                        if (aVal > bVal) return dir === 'asc' ? 1 : -1;
-                        return 0;
-                    });
-                    this.updateSortIcons(col);
+                        if (aVal < bVal) return this.sortDirection === 'asc' ? -1 : 1;
+                        if (aVal > bVal) return this.sortDirection === 'asc' ? 1 : -1;
+                    }
+                    return 0;
+                });
+
+                if (this.sortColumn) {
+                    this.updateSortIcons(this.sortColumn);
                 }
 
                 // If we are on the dashboard, only show top 5
@@ -473,8 +484,20 @@ class FshareBridge {
             this.sortDirection = 'asc';
         }
 
-        // Apply sort
+        // Apply sort with priority for in-progress items
         this.downloads.sort((a, b) => {
+            const aInProgress = a.progress > 0 && a.progress < 100;
+            const bInProgress = b.progress > 0 && b.progress < 100;
+
+            if (aInProgress && !bInProgress) return -1;
+            if (!aInProgress && bInProgress) return 1;
+
+            if (aInProgress && bInProgress) {
+                // If both in progress, user said sort ascending
+                return a.progress - b.progress;
+            }
+
+            // Tie breaker for non-in-progress items using current sortColumn
             let aVal, bVal;
             switch (column) {
                 case 'name': aVal = a.name.toLowerCase(); bVal = b.name.toLowerCase(); break;
