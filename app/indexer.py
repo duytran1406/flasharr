@@ -217,22 +217,31 @@ class NewznabIndexer:
         # Search using TimFshare client
         results = self.client.search(search_query)
         
-        # Filter results if season/episode specified
-        if season or episode:
-            filtered_results = []
-            for result in results:
-                parsed = self.normalizer.parse(result.get('name', ''))
+        # Extensions to filter
+        VIDEO_EXTENSIONS = ('.mp4', '.avi', '.mov', '.mkv', '.m4v', '.flv', '.mpeg', '.wav')
+        
+        # Filter results
+        filtered_results = []
+        for result in results:
+            name = result.get('name', '')
+            
+            # 1. Filter by video extension (case-insensitive)
+            if not name.lower().endswith(VIDEO_EXTENSIONS):
+                continue
+            
+            # 2. Filter by season/episode if specified
+            if season or episode:
+                parsed = self.normalizer.parse(name)
                 
                 # Check if season/episode match
                 if season and parsed.season != int(season):
                     continue
                 if episode and parsed.episode != int(episode):
                     continue
-                
-                filtered_results.append(result)
             
-            results = filtered_results
+            filtered_results.append(result)
         
+        results = filtered_results
         logger.info(f"Returning {len(results)} results")
         
         # Build and return XML response

@@ -103,22 +103,32 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
         try:
             results = timfshare_client.search(query, limit=40)
             formatted_results = []
+            
+            # Video extensions to filter
+            VIDEO_EXTENSIONS = ('.mp4', '.avi', '.mov', '.mkv', '.m4v', '.flv', '.mpeg', '.wav')
+            
             for result in results:
+                raw_name = result.get('name', '')
+                
+                # Filter by extension (case-insensitive)
+                if not raw_name.lower().endswith(VIDEO_EXTENSIONS):
+                    continue
+                    
                 # Parse filename
-                parsed = filename_normalizer.parse(result.get('name', ''))
+                parsed = filename_normalizer.parse(raw_name)
                 
                 # Calculate score based on quality markers
-                score = calculate_quality_score(parsed, result.get('name', ''), query=query)
+                score = calculate_quality_score(parsed, raw_name, query=query)
                 
                 # Format file size
                 size_bytes = result.get('size', 0)
                 size_formatted = format_file_size(size_bytes)
                 
                 # Detect quality badge
-                quality_badge = detect_quality_badge(result.get('name', ''))
+                quality_badge = detect_quality_badge(raw_name)
                 
                 # Detect vietsub/vietdub
-                name_lower = result.get('name', '').lower()
+                name_lower = raw_name.lower()
                 has_vietsub = any(marker in name_lower for marker in ['vietsub', 'tvp'])
                 has_vietdub = any(marker in name_lower for marker in ['vietdub', 'tmpđ', 'thuyết minh', 'lồng tiếng'])
                 
