@@ -145,10 +145,10 @@
 
         let searchTimeout;
         let currentFilters = {
-            quality: ['4k'],
-            vietsub: true,
-            vietdub: false,
-            sort: 'newest'
+            quality: [],      // No quality filter by default
+            vietsub: false,   // No vietsub filter by default
+            vietdub: false,   // No vietdub filter by default
+            sort: 'score'     // Sort by score (relevance) by default
         };
 
         // Show/hide clear button
