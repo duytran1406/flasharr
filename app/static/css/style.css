@@ -602,6 +602,11 @@ body {
   border-bottom: none;
 }
 
+.download-table tbody tr:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+}
+
 .download-name {
   font-weight: 600;
   color: white;
