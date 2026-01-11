@@ -188,26 +188,67 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
         accuracy_score = int(accuracy_ratio * 90)
         
         # 2. Tie-Breaker Bonuses (0-10)
-        bonus_score = 0
-        filename_lower = filename.lower()
-        
-        # Resolution Preference (4K/1080p > 720p/SD)
-        if any(q in filename_lower for q in ['4k', '2160p', 'uhd', '1080p']):
-            bonus_score += 4
-        elif '720p' in filename_lower:
-            bonus_score += 2
-        
-        # Source/Quality Preference
-        if any(q in filename_lower for q in ['remux', 'iso', 'bluray', 'blu-ray']):
-            bonus_score += 2
+        bonus_score = get_quality_profile_score(filename)
             
-        # Language Preference
+        # Language Bonus (+2)
+        filename_lower = filename.lower()
         if any(marker in filename_lower for marker in ['vietsub', 'tvp', 'vietdub', 'tmpđ', 'thuyết minh', 'lồng tiếng']):
-             bonus_score += 4
+             bonus_score += 2
              
         final_score = accuracy_score + min(bonus_score, 10)
         
         return min(final_score, 100)
+
+    def get_quality_profile_score(filename):
+        """
+        Get score (0-8) based on *arr Quality Profile hierarchy.
+        
+        Hierarchy:
+        8: Remux / ISO / 2160p (with Source)
+        7: 1080p BluRay
+        6: 1080p WEB-DL
+        5: 1080p (Generic)
+        4: 720p BluRay / WEB-DL
+        3: 720p (Generic)
+        2: HDTV / PDTV
+        1: SD / DVD / 480p
+        0: CAM / TS / Unknown
+        """
+        f = filename.lower()
+        
+        # 1. Check for Remux/ISO (Top Tier)
+        if 'remux' in f or 'iso' in f:
+            return 8
+            
+        # 2. Check Resolution & Source
+        is_4k = any(k in f for k in ['2160p', '4k', 'uhd', '8k'])
+        is_1080p = '1080p' in f
+        is_720p = '720p' in f
+        
+        is_bluray = any(k in f for k in ['bluray', 'blu-ray', 'bdrip', 'brrip'])
+        is_web = any(k in f for k in ['web-dl', 'webdl', 'webrip'])
+        is_hdtv = any(k in f for k in ['hdtv', 'pdtv', 'tvrip'])
+        is_sd = any(k in f for k in ['480p', '576p', 'dvd', 'sd'])
+        
+        if is_4k:
+            return 8 # 4K matches top tier in this simple scale
+            
+        if is_1080p:
+            if is_bluray: return 7
+            if is_web: return 6
+            return 5
+            
+        if is_720p:
+            if is_bluray or is_web: return 4
+            return 3
+            
+        if is_hdtv:
+            return 2
+            
+        if is_sd:
+            return 1
+            
+        return 0
     
     def format_file_size(size_bytes):
         """Format file size in human-readable format"""

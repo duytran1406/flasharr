@@ -30,26 +30,35 @@ Search results are scored from **0 to 100**, heavily prioritizing how well the f
 - *Goal: Ensure the top result is exactly what you typed.*
 
 #### 2. Tie-Breaker Bonus (Max 10 points)
-Used only to rank identical titles by quality.
-- **Resolution**:
-    - `4K/1080p`: +5 points
-    - `720p`: +3 points
-- **Localization**:
-    - `Vietsub/Vietdub/TVP`: +5 points
+Used to rank identical titles by quality, mirroring standard **Sonarr/Radarr Quality Profiles**.
+
+**Profile Score (0-8 points):**
+- **8**: `Remux` / `ISO` / `2160p` (with Source)
+- **7**: `1080p BluRay`
+- **6**: `1080p WEB-DL`
+- **5**: `1080p` (Generic)
+- **4**: `720p BluRay / WEB-DL`
+- **3**: `720p` (Generic)
+- **2**: `HDTV` / `PDTV`
+- **1**: `SD` / `DVD` / `480p`
+- **0**: `CAM` / `TS` / Low Quality
+
+**Language Bonus (+2 points):**
+- `Vietsub`, `Vietdub`, `Thuyết Minh`, `Lồng Tiếng` receive an additional **+2 points**.
 
 ### Example Calculation
 **Query:** "Avengers"
-1. **File A:** "Avengers.2012.4K.Vietsub.mkv"
-   - Clean Title: "Avengers" -> Match Ratio: 1.0 -> Accuracy: **90**
-   - Bonus: 4K (+5) + Vietsub (+5) = **10**
+1. **File A:** "Avengers.2012.2160p.Remux.Vietsub.mkv"
+   - Accuracy: **90** (Exact match)
+   - Profile: Remux (**8**) + Vietsub (**2**) = **10** (Max Bonus)
    - **Total: 100**
 
-2. **File B:** "Avengers.Endgame.2019.1080p.mkv"
-   - Clean Title: "Avengers Endgame" -> Match Ratio: 0.6 -> Accuracy: **54**
-   - Bonus: 1080p (+5) = **5**
-   - **Total: 59**
+2. **File B:** "Avengers.2012.1080p.BluRay.mkv"
+   - Accuracy: **90**
+   - Profile: 1080p BluRay (**7**) + No Sub (**0**) = **7**
+   - **Total: 97**
 
-*Result: The exact movie match appears much higher than the sequel.*
+*Result: Remux > BluRay > WEB-DL.*
 
 ## 3. Supported Quality Types
 
