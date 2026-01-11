@@ -278,9 +278,48 @@
 
         function displayResults(results) {
             resultsGrid.innerHTML = '';
-            resultsCount.textContent = `Found ${results.length} result${results.length !== 1 ? 's' : ''}`;
 
-            results.forEach(result => {
+            // Filter results
+            const filtered = results.filter(result => {
+                // Quality filter
+                if (currentFilters.quality.length > 0) {
+                    const resultQuality = (result.quality || '').toLowerCase();
+                    if (!currentFilters.quality.includes(resultQuality)) {
+                        return false;
+                    }
+                }
+
+                // Vietsub filter
+                if (currentFilters.vietsub && !result.vietsub) {
+                    return false;
+                }
+
+                // Vietdub filter
+                if (currentFilters.vietdub && !result.vietdub) {
+                    return false;
+                }
+
+                return true;
+            });
+
+            // Sort results (Backend already does smart sort, but client sort overrides if changed)
+            if (currentFilters.sort === 'size_desc') {
+                filtered.sort((a, b) => b.size_bytes - a.size_bytes);
+            } else if (currentFilters.sort === 'size_asc') {
+                filtered.sort((a, b) => a.size_bytes - b.size_bytes);
+            } else if (currentFilters.sort === 'score') {
+                filtered.sort((a, b) => b.score - a.score);
+            }
+            // 'newest' uses default backend sort order (Smart Sort) which is usually what we want
+
+            resultsCount.textContent = `Found ${filtered.length} result${filtered.length !== 1 ? 's' : ''}`;
+
+            if (filtered.length === 0) {
+                resultsGrid.innerHTML = '<div class="no-results">No results match your filters</div>';
+                return;
+            }
+
+            filtered.forEach(result => {
                 const card = createResultCard(result);
                 resultsGrid.appendChild(card);
             });

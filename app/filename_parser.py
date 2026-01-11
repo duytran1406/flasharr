@@ -55,6 +55,8 @@ class FilenameNormalizer:
     SE_PATTERNS = [
         r'S(\d{1,4})E(\d{1,3})',  # S01E14
         r'S(\d{1,4})\s*EP?(\d{1,3})',  # S01 E14, S01 EP14
+        r'(?<!\w)E(\d{1,3})(?!\w)',  # E14 (standalone)
+        r'(?<!\w)EP(\d{1,3})(?!\w)',  # EP14 (standalone)
     ]
     
     def __init__(self):
@@ -95,8 +97,16 @@ class FilenameNormalizer:
             )
         
         # Extract season and episode
-        season = int(se_match.group(1))
-        episode = int(se_match.group(2))
+        # Extract season and episode
+        if se_match.lastindex == 2:
+            # Standard SxxExx pattern
+            season = int(se_match.group(1))
+            episode = int(se_match.group(2))
+        else:
+            # Episode only pattern (default to S01)
+            season = 1
+            episode = int(se_match.group(1))
+            
         se_normalized = f"S{season:02d}E{episode:02d}"
         
         # Split into parts: before SE, SE marker, after SE

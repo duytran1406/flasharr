@@ -107,7 +107,7 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
                 parsed = filename_normalizer.parse(result.get('name', ''))
                 
                 # Calculate score based on quality markers
-                score = calculate_quality_score(parsed, result.get('name', ''))
+                score = calculate_quality_score(parsed, result.get('name', ''), query=query)
                 
                 # Format file size
                 size_bytes = result.get('size', 0)
@@ -158,35 +158,48 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             logger.error(f"Search API error: {e}")
             return jsonify({'error': str(e)}), 500
     
-    def calculate_quality_score(parsed, filename):
-        """Calculate quality score based on resolution and other factors"""
-        score = 50  # Base score
+    def calculate_quality_score(parsed, filename, query=''):
+        """Calculate quality score based on resolution, name match, and other factors"""
+        score = 0
         
         filename_lower = filename.lower()
+        query_parts = query.lower().split()
+        
+        # Name Match Score (Critical - Max 40)
+        # Check how many query words are in the filename
+        if query_parts:
+            match_count = sum(1 for part in query_parts if part in filename_lower)
+            match_ratio = match_count / len(query_parts)
+            score += int(match_ratio * 40)
+        
+        # Quality Score (Max 60 for non-exact)
+        quality_score = 20  # Base quality score
         
         # Resolution scoring
         if '4k' in filename_lower or '2160p' in filename_lower or 'uhd' in filename_lower:
-            score += 50
+            quality_score += 30
         elif '1080p' in filename_lower:
-            score += 30
+            quality_score += 20
         elif '720p' in filename_lower:
-            score += 15
+            quality_score += 10
         
         # HDR bonus
         if 'hdr' in filename_lower:
-            score += 10
+            quality_score += 5
         
         # Codec bonus
         if any(codec in filename_lower for codec in ['x265', 'hevc', 'h.265']):
-            score += 5
+            quality_score += 2
         
         # Audio bonus
         if any(audio in filename_lower for audio in ['atmos', 'truehd', 'dts']):
-            score += 5
+            quality_score += 3
         
-        # Vietnamese audio bonus
-        if any(marker in filename_lower for marker in ['vietsub', 'tvp', 'vietdub', 'tmpđ']):
-            score += 10
+        # Vietnamese audio bonus (Significant for this user)
+        if any(marker in filename_lower for marker in ['vietsub', 'tvp', 'vietdub', 'tmpđ', 'thuyết minh', 'lồng tiếng']):
+            quality_score += 10 # Boost localized content
+            
+        score += quality_score
         
         return min(score, 100)  # Cap at 100
     
