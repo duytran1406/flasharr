@@ -373,15 +373,15 @@ class FshareBridge {
             if (data.downloads) {
                 this.downloads = data.downloads;
 
-                // Always apply priority sort: in-progress (0<p<100) first, sorted ascending
+                // Always apply priority sort: incomplete (p<100) first, sorted ascending
                 this.downloads.sort((a, b) => {
-                    const aInProgress = a.progress > 0 && a.progress < 100;
-                    const bInProgress = b.progress > 0 && b.progress < 100;
+                    const aIncomplete = a.progress < 100;
+                    const bIncomplete = b.progress < 100;
 
-                    if (aInProgress && !bInProgress) return -1;
-                    if (!aInProgress && bInProgress) return 1;
+                    if (aIncomplete && !bIncomplete) return -1;
+                    if (!aIncomplete && bIncomplete) return 1;
 
-                    if (aInProgress && bInProgress) {
+                    if (aIncomplete && bIncomplete) {
                         return a.progress - b.progress;
                     }
 
@@ -500,16 +500,16 @@ class FshareBridge {
             this.sortDirection = 'asc';
         }
 
-        // Apply sort with priority for in-progress items
+        // Apply sort with priority for incomplete items
         this.downloads.sort((a, b) => {
-            const aInProgress = a.progress > 0 && a.progress < 100;
-            const bInProgress = b.progress > 0 && b.progress < 100;
+            const aIncomplete = a.progress < 100;
+            const bIncomplete = b.progress < 100;
 
-            if (aInProgress && !bInProgress) return -1;
-            if (!aInProgress && bInProgress) return 1;
+            if (aIncomplete && !bIncomplete) return -1;
+            if (!aIncomplete && bIncomplete) return 1;
 
-            if (aInProgress && bInProgress) {
-                // If both in progress, user said sort ascending
+            if (aIncomplete && bIncomplete) {
+                // If both incomplete, sort ascending by progress
                 return a.progress - b.progress;
             }
 
