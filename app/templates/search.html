@@ -403,15 +403,46 @@
                     <span>Score: ${score}/100</span>
                 </div>
             </div>
-            <button class="download-btn" data-url="${escapeHtml(result.url)}" data-name="${escapeHtml(result.name)}">
-                <span class="material-icons">download</span>
-                <span>Download</span>
-            </button>
+            <div style="display: flex; gap: 0.5rem; margin-top: auto;">
+                <button class="download-btn" data-url="${escapeHtml(result.url)}" data-name="${escapeHtml(result.name)}" style="flex: 1;">
+                    <span class="material-icons">download</span>
+                    <span>Download</span>
+                </button>
+                <button class="copy-btn" data-url="${escapeHtml(result.url)}" title="Copy Link"
+                    style="width: 42px; border-radius: 8px; border: none; background: rgba(255,255,255,0.08); color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
+                    <span class="material-icons" style="font-size: 20px;">content_copy</span>
+                </button>
+            </div>
         `;
 
             // Add download event listener
             card.querySelector('.download-btn').addEventListener('click', function () {
                 downloadFile(this.dataset.url, this.dataset.name);
+            });
+
+            // Add copy event listener
+            card.querySelector('.copy-btn').addEventListener('click', async function (e) {
+                e.preventDefault();
+                const btn = this;
+                const icon = btn.querySelector('.material-icons');
+                const url = this.dataset.url;
+
+                try {
+                    await navigator.clipboard.writeText(url);
+
+                    // Visual feedback
+                    icon.textContent = 'check';
+                    btn.style.color = '#4ade80';
+                    btn.style.background = 'rgba(74, 222, 128, 0.15)';
+
+                    setTimeout(() => {
+                        icon.textContent = 'content_copy';
+                        btn.style.color = '';
+                        btn.style.background = '';
+                    }, 2000);
+                } catch (err) {
+                    console.error('Failed to copy text: ', err);
+                }
             });
 
             return card;
