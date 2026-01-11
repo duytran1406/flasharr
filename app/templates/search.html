@@ -20,13 +20,13 @@
     <!-- Filter Bar -->
     <div class="search-filters">
         <div class="filter-group">
-            <button class="filter-btn active" data-filter="quality">
-                <span class="filter-label">Quality: 4K</span>
+            <button class="filter-btn" data-filter="quality">
+                <span class="filter-label">Quality: All</span>
                 <span class="material-icons">expand_more</span>
             </button>
             <div class="filter-dropdown" id="quality-dropdown">
                 <label class="filter-option">
-                    <input type="checkbox" value="4k" checked>
+                    <input type="checkbox" value="4k">
                     <span>4K</span>
                 </label>
                 <label class="filter-option">
@@ -63,7 +63,7 @@
         <div class="filter-group">
             <button class="filter-btn" data-filter="vietsub">
                 <span class="filter-label">Vietsub</span>
-                <span class="material-icons check-icon">check_circle</span>
+                <span class="material-icons check-icon">cancel</span>
             </button>
         </div>
 
@@ -76,21 +76,21 @@
 
         <div class="filter-group">
             <button class="filter-btn" data-filter="sort">
-                <span class="filter-label">Sort: Newest</span>
+                <span class="filter-label">Sort: Relevance</span>
                 <span class="material-icons">expand_more</span>
             </button>
             <div class="filter-dropdown" id="sort-dropdown">
                 <label class="filter-option">
-                    <input type="radio" name="sort" value="newest" checked>
-                    <span>Newest</span>
+                    <input type="radio" name="sort" value="score" checked>
+                    <span>Relevance</span>
                 </label>
                 <label class="filter-option">
-                    <input type="radio" name="sort" value="oldest">
-                    <span>Oldest</span>
+                    <input type="radio" name="sort" value="size_desc">
+                    <span>Size (Largest)</span>
                 </label>
                 <label class="filter-option">
-                    <input type="radio" name="sort" value="largest">
-                    <span>Largest</span>
+                    <input type="radio" name="sort" value="size_asc">
+                    <span>Size (Smallest)</span>
                 </label>
                 <label class="filter-option">
                     <input type="radio" name="sort" value="smallest">
@@ -202,6 +202,16 @@
                     document.querySelectorAll('#quality-dropdown input:checked')
                 ).map(cb => cb.value);
 
+                // Update label
+                const qualityBtn = document.querySelector('[data-filter="quality"] .filter-label');
+                if (currentFilters.quality.length === 0) {
+                    qualityBtn.textContent = 'Quality: All';
+                } else if (currentFilters.quality.length === 1) {
+                    qualityBtn.textContent = `Quality: ${currentFilters.quality[0].toUpperCase()}`;
+                } else {
+                    qualityBtn.textContent = `Quality: ${currentFilters.quality.length} selected`;
+                }
+
                 if (searchInput.value) {
                     performSearch(searchInput.value);
                 }
@@ -212,8 +222,15 @@
         document.querySelectorAll('#sort-dropdown input[type="radio"]').forEach(radio => {
             radio.addEventListener('change', (e) => {
                 currentFilters.sort = e.target.value;
-                document.querySelector('[data-filter="sort"] .filter-label').textContent =
-                    `Sort: ${e.target.value.charAt(0).toUpperCase() + e.target.value.slice(1)}`;
+
+                // Update label with human-readable text
+                const sortLabels = {
+                    'score': 'Relevance',
+                    'size_desc': 'Size (Largest)',
+                    'size_asc': 'Size (Smallest)'
+                };
+                const label = sortLabels[e.target.value] || e.target.value;
+                document.querySelector('[data-filter="sort"] .filter-label').textContent = `Sort: ${label}`;
 
                 if (searchInput.value) {
                     performSearch(searchInput.value);
