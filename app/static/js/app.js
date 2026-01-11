@@ -132,6 +132,12 @@ class NetworkGraph {
 
 class FshareBridge {
     constructor() {
+        // Singleton check
+        if (window.fshareBridgeInstance) {
+            return window.fshareBridgeInstance;
+        }
+        window.fshareBridgeInstance = this;
+
         this.downloads = [];
         this.stats = null;
         this.statsListeners = {};
@@ -1072,6 +1078,13 @@ class FshareBridge {
 // Initialize
 let bridge;
 document.addEventListener('DOMContentLoaded', () => {
+    // Prevent re-initialization
+    if (window.fshareBridgeInstance) {
+        bridge = window.fshareBridgeInstance;
+        console.log('Bridge already initialized, skipping recreation.');
+        return;
+    }
+
     bridge = new FshareBridge();
 
     // Check for query param
