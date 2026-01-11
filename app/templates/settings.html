@@ -3,24 +3,530 @@
 {% block title %}Settings - Fshare Nexus{% endblock %}
 
 {% block content %}
-<div class="downloads-container" style="display: flex; align-items: center; justify-content: center; min-height: 60vh;">
-    <div class="service-card"
-        style="text-align: center; padding: 4rem; max-width: 600px; border-color: rgba(59, 130, 246, 0.2);">
-        <div class="service-icon"
-            style="width: 80px; height: 80px; margin: 0 auto 2rem; background: rgba(59, 130, 246, 0.1); color: #3b82f6;">
-            <span class="material-icons" style="font-size: 48px;">settings_applications</span>
+<div class="settings-container">
+    <!-- Settings Header -->
+    <div class="settings-header">
+        <h1 class="settings-title">
+            <span class="material-icons">settings</span>
+            Settings
+        </h1>
+        <div class="settings-actions">
+            <button class="btn btn-secondary" id="btn-export">
+                <span class="material-icons">download</span>
+                Export
+            </button>
+            <button class="btn btn-primary" id="btn-save">
+                <span class="material-icons">save</span>
+                Save Changes
+            </button>
         </div>
-        <h1 style="color: white; margin-bottom: 1rem; font-weight: 700;">Settings Coming Soon</h1>
-        <p style="color: var(--text-muted); line-height: 1.6; margin-bottom: 2rem;">
-            We're working on a powerful settings panel to help you customize your Fshare Nexus experience.
-            Soon you'll be able to manage your Fshare credentials, pyLoad integration, and visualization preferences
-            directly from here.
-        </p>
-        <div
-            style="display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.75rem 1.5rem; background: rgba(59, 130, 246, 0.1); border-radius: 99px; color: #3b82f6; font-size: 0.85rem; font-weight: 600;">
-            <span class="material-icons" style="font-size: 18px;">construction</span>
-            UNDER DEVELOPMENT
+    </div>
+
+    <!-- Tabs Navigation -->
+    <div class="settings-tabs">
+        <button class="tab-btn active" data-tab="account">
+            <span class="material-icons">person</span>
+            Account
+        </button>
+        <button class="tab-btn" data-tab="downloads">
+            <span class="material-icons">cloud_download</span>
+            Downloads
+        </button>
+        <button class="tab-btn" data-tab="integration">
+            <span class="material-icons">extension</span>
+            Integration
+        </button>
+        <button class="tab-btn" data-tab="appearance">
+            <span class="material-icons">palette</span>
+            Appearance
+        </button>
+        <button class="tab-btn" data-tab="about">
+            <span class="material-icons">info</span>
+            About
+        </button>
+    </div>
+
+    <!-- Tab Content -->
+    <div class="settings-content">
+        <!-- Account Tab -->
+        <div class="tab-panel active" id="tab-account">
+            <div class="settings-card">
+                <div class="card-header">
+                    <h2>Fshare Account</h2>
+                    <p class="card-description">Configure your Fshare.vn credentials for downloading files.</p>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="fshare_email">Email</label>
+                        <input type="email" id="fshare_email" class="form-input" placeholder="your@email.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="fshare_password">Password</label>
+                        <div class="input-with-icon">
+                            <input type="password" id="fshare_password" class="form-input" placeholder="••••••••">
+                            <button class="icon-btn toggle-password" data-target="fshare_password">
+                                <span class="material-icons">visibility</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button class="btn btn-secondary" id="btn-test-connection">
+                            <span class="material-icons">sync</span>
+                            Test Connection
+                        </button>
+                        <div class="connection-status" id="connection-status"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Downloads Tab -->
+        <div class="tab-panel" id="tab-downloads">
+            <div class="settings-card">
+                <div class="card-header">
+                    <h2>Download Settings</h2>
+                    <p class="card-description">Configure download paths and behavior.</p>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="download_path">Download Path</label>
+                        <input type="text" id="download_path" class="form-input" placeholder="/downloads">
+                        <span class="form-hint">Base directory for all downloads</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Category Paths</label>
+                        <div class="category-paths">
+                            <div class="category-row">
+                                <span class="category-label">Radarr (Movies)</span>
+                                <input type="text" id="path_radarr" class="form-input" placeholder="movies">
+                            </div>
+                            <div class="category-row">
+                                <span class="category-label">Sonarr (TV)</span>
+                                <input type="text" id="path_sonarr" class="form-input" placeholder="tv">
+                            </div>
+                            <div class="category-row">
+                                <span class="category-label">Lidarr (Music)</span>
+                                <input type="text" id="path_lidarr" class="form-input" placeholder="music">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="max_concurrent">Max Concurrent Downloads</label>
+                            <input type="range" id="max_concurrent" class="form-range" min="1" max="10" value="3">
+                            <span class="range-value" id="max_concurrent_value">3</span>
+                        </div>
+                        <div class="form-group">
+                            <label for="speed_limit">Speed Limit (KB/s)</label>
+                            <input type="number" id="speed_limit" class="form-input" placeholder="0 = Unlimited"
+                                min="0">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="toggle-label">
+                            <input type="checkbox" id="auto_resume" class="toggle-input" checked>
+                            <span class="toggle-switch"></span>
+                            <span class="toggle-text">Auto-resume interrupted downloads</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Integration Tab -->
+        <div class="tab-panel" id="tab-integration">
+            <div class="settings-card">
+                <div class="card-header">
+                    <h2>*arr Integration</h2>
+                    <p class="card-description">API keys for Prowlarr/Radarr/Sonarr integration.</p>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label for="base_url">Base URL</label>
+                        <input type="text" id="base_url" class="form-input" placeholder="http://localhost:8484">
+                        <span class="form-hint">Used for reverse proxy setups</span>
+                    </div>
+                    <div class="form-group">
+                        <label for="indexer_api_key">Indexer API Key</label>
+                        <div class="input-with-btn">
+                            <input type="text" id="indexer_api_key" class="form-input" readonly>
+                            <button class="btn btn-small" id="btn-gen-indexer-key">Generate</button>
+                            <button class="btn-copy" data-target="indexer_api_key">
+                                <span class="material-icons">content_copy</span>
+                            </button>
+                        </div>
+                        <span class="form-hint">Use this key in Prowlarr indexer settings</span>
+                    </div>
+                    <div class="form-group">
+                        <label for="sabnzbd_api_key">SABnzbd API Key</label>
+                        <div class="input-with-btn">
+                            <input type="text" id="sabnzbd_api_key" class="form-input" readonly>
+                            <button class="btn btn-small" id="btn-gen-sab-key">Generate</button>
+                            <button class="btn-copy" data-target="sabnzbd_api_key">
+                                <span class="material-icons">content_copy</span>
+                            </button>
+                        </div>
+                        <span class="form-hint">Use this key in Radarr/Sonarr download client settings</span>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label class="toggle-label">
+                                <input type="checkbox" id="enable_indexer" class="toggle-input" checked>
+                                <span class="toggle-switch"></span>
+                                <span class="toggle-text">Enable Indexer API</span>
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label class="toggle-label">
+                                <input type="checkbox" id="enable_sabnzbd" class="toggle-input" checked>
+                                <span class="toggle-switch"></span>
+                                <span class="toggle-text">Enable SABnzbd API</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Appearance Tab -->
+        <div class="tab-panel" id="tab-appearance">
+            <div class="settings-card">
+                <div class="card-header">
+                    <h2>Appearance</h2>
+                    <p class="card-description">Customize the look and feel.</p>
+                </div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label>Theme</label>
+                        <div class="theme-selector">
+                            <label class="theme-option">
+                                <input type="radio" name="theme" value="dark" checked>
+                                <div class="theme-preview dark-preview">
+                                    <span class="material-icons">dark_mode</span>
+                                </div>
+                                <span>Dark</span>
+                            </label>
+                            <label class="theme-option">
+                                <input type="radio" name="theme" value="light">
+                                <div class="theme-preview light-preview">
+                                    <span class="material-icons">light_mode</span>
+                                </div>
+                                <span>Light</span>
+                            </label>
+                            <label class="theme-option">
+                                <input type="radio" name="theme" value="system">
+                                <div class="theme-preview system-preview">
+                                    <span class="material-icons">settings_brightness</span>
+                                </div>
+                                <span>System</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="language">Language</label>
+                        <select id="language" class="form-select">
+                            <option value="en">English</option>
+                            <option value="vi">Tiếng Việt</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="refresh_interval">Dashboard Refresh Interval</label>
+                        <select id="refresh_interval" class="form-select">
+                            <option value="1000">1 second</option>
+                            <option value="3000" selected>3 seconds</option>
+                            <option value="5000">5 seconds</option>
+                            <option value="10000">10 seconds</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- About Tab -->
+        <div class="tab-panel" id="tab-about">
+            <div class="settings-card">
+                <div class="card-header">
+                    <h2>About Fshare Nexus</h2>
+                </div>
+                <div class="card-body">
+                    <div class="about-info">
+                        <div class="about-row">
+                            <span class="about-label">Version</span>
+                            <span class="about-value" id="app-version">v{{ version }}</span>
+                        </div>
+                        <div class="about-row">
+                            <span class="about-label">Branch</span>
+                            <span class="about-value">v1.0.0alpha</span>
+                        </div>
+                        <div class="about-row">
+                            <span class="about-label">License</span>
+                            <span class="about-value">MIT</span>
+                        </div>
+                    </div>
+                    <div class="about-links">
+                        <a href="https://github.com" target="_blank" class="about-link">
+                            <span class="material-icons">code</span>
+                            GitHub Repository
+                        </a>
+                        <a href="/tutorial" class="about-link">
+                            <span class="material-icons">help</span>
+                            Documentation
+                        </a>
+                    </div>
+                    <div class="about-actions">
+                        <button class="btn btn-danger" id="btn-reset">
+                            <span class="material-icons">restart_alt</span>
+                            Reset to Defaults
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
+
+<!-- Toast Notification -->
+<div class="toast" id="toast">
+    <span class="toast-icon material-icons">check_circle</span>
+    <span class="toast-message"></span>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    (function () {
+        // Tab switching
+        const tabBtns = document.querySelectorAll('.tab-btn');
+        const tabPanels = document.querySelectorAll('.tab-panel');
+
+        tabBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const tab = btn.dataset.tab;
+
+                tabBtns.forEach(b => b.classList.remove('active'));
+                tabPanels.forEach(p => p.classList.remove('active'));
+
+                btn.classList.add('active');
+                document.getElementById(`tab-${tab}`).classList.add('active');
+            });
+        });
+
+        // Password visibility toggle
+        document.querySelectorAll('.toggle-password').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const input = document.getElementById(btn.dataset.target);
+                const icon = btn.querySelector('.material-icons');
+                if (input.type === 'password') {
+                    input.type = 'text';
+                    icon.textContent = 'visibility_off';
+                } else {
+                    input.type = 'password';
+                    icon.textContent = 'visibility';
+                }
+            });
+        });
+
+        // Range slider value display
+        const rangeSlider = document.getElementById('max_concurrent');
+        const rangeValue = document.getElementById('max_concurrent_value');
+        rangeSlider.addEventListener('input', () => {
+            rangeValue.textContent = rangeSlider.value;
+        });
+
+        // Copy to clipboard
+        document.querySelectorAll('.btn-copy').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const input = document.getElementById(btn.dataset.target);
+                navigator.clipboard.writeText(input.value);
+                showToast('Copied to clipboard');
+            });
+        });
+
+        // Toast notification
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const icon = toast.querySelector('.toast-icon');
+            const msg = toast.querySelector('.toast-message');
+
+            msg.textContent = message;
+            icon.textContent = type === 'success' ? 'check_circle' : 'error';
+            toast.className = `toast show ${type}`;
+
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        // Load settings
+        async function loadSettings() {
+            try {
+                const response = await fetch('/api/settings');
+                const data = await response.json();
+
+                if (data.status === 'ok') {
+                    const s = data.settings;
+
+                    // Account
+                    document.getElementById('fshare_email').value = s.fshare_email || '';
+                    document.getElementById('fshare_password').value = s.fshare_password || '';
+
+                    // Downloads
+                    document.getElementById('download_path').value = s.download_path || '/downloads';
+                    document.getElementById('max_concurrent').value = s.max_concurrent_downloads || 3;
+                    rangeValue.textContent = s.max_concurrent_downloads || 3;
+                    document.getElementById('speed_limit').value = s.speed_limit_kbps || 0;
+                    document.getElementById('auto_resume').checked = s.auto_resume !== false;
+
+                    // Category paths
+                    if (s.category_paths) {
+                        document.getElementById('path_radarr').value = s.category_paths.radarr || 'movies';
+                        document.getElementById('path_sonarr').value = s.category_paths.sonarr || 'tv';
+                        document.getElementById('path_lidarr').value = s.category_paths.lidarr || 'music';
+                    }
+
+                    // Integration
+                    document.getElementById('base_url').value = s.base_url || 'http://localhost:8484';
+                    document.getElementById('indexer_api_key').value = s.indexer_api_key || '';
+                    document.getElementById('sabnzbd_api_key').value = s.sabnzbd_api_key || '';
+                    document.getElementById('enable_indexer').checked = s.enable_indexer !== false;
+                    document.getElementById('enable_sabnzbd').checked = s.enable_sabnzbd !== false;
+
+                    // Appearance
+                    document.querySelector(`input[name="theme"][value="${s.theme || 'dark'}"]`).checked = true;
+                    document.getElementById('language').value = s.language || 'en';
+                    document.getElementById('refresh_interval').value = s.refresh_interval || 3000;
+                }
+            } catch (error) {
+                console.error('Error loading settings:', error);
+            }
+        }
+
+        // Save settings
+        document.getElementById('btn-save').addEventListener('click', async () => {
+            const settings = {
+                fshare_email: document.getElementById('fshare_email').value,
+                fshare_password: document.getElementById('fshare_password').value,
+                download_path: document.getElementById('download_path').value,
+                max_concurrent_downloads: parseInt(document.getElementById('max_concurrent').value),
+                speed_limit_kbps: parseInt(document.getElementById('speed_limit').value) || 0,
+                auto_resume: document.getElementById('auto_resume').checked,
+                category_paths: {
+                    radarr: document.getElementById('path_radarr').value,
+                    sonarr: document.getElementById('path_sonarr').value,
+                    lidarr: document.getElementById('path_lidarr').value,
+                },
+                base_url: document.getElementById('base_url').value,
+                enable_indexer: document.getElementById('enable_indexer').checked,
+                enable_sabnzbd: document.getElementById('enable_sabnzbd').checked,
+                theme: document.querySelector('input[name="theme"]:checked').value,
+                language: document.getElementById('language').value,
+                refresh_interval: parseInt(document.getElementById('refresh_interval').value),
+            };
+
+            try {
+                const response = await fetch('/api/settings', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings),
+                });
+                const data = await response.json();
+
+                if (data.status === 'ok') {
+                    showToast('Settings saved successfully');
+                } else {
+                    showToast(data.message || 'Failed to save', 'error');
+                }
+            } catch (error) {
+                showToast('Error saving settings', 'error');
+            }
+        });
+
+        // Test Fshare connection
+        document.getElementById('btn-test-connection').addEventListener('click', async () => {
+            const status = document.getElementById('connection-status');
+            status.innerHTML = '<span class="material-icons spin">sync</span> Testing...';
+            status.className = 'connection-status testing';
+
+            try {
+                const response = await fetch('/api/settings/test-fshare', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        email: document.getElementById('fshare_email').value,
+                        password: document.getElementById('fshare_password').value,
+                    }),
+                });
+                const data = await response.json();
+
+                if (data.status === 'ok') {
+                    status.innerHTML = '<span class="material-icons">check_circle</span> Connected';
+                    status.className = 'connection-status success';
+                } else {
+                    status.innerHTML = `<span class="material-icons">error</span> ${data.message}`;
+                    status.className = 'connection-status error';
+                }
+            } catch (error) {
+                status.innerHTML = '<span class="material-icons">error</span> Connection failed';
+                status.className = 'connection-status error';
+            }
+        });
+
+        // Generate API keys
+        document.getElementById('btn-gen-indexer-key').addEventListener('click', async () => {
+            const response = await fetch('/api/settings/generate-api-key', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type: 'indexer' }),
+            });
+            const data = await response.json();
+            if (data.status === 'ok') {
+                document.getElementById('indexer_api_key').value = data.key;
+                showToast('New indexer key generated');
+            }
+        });
+
+        document.getElementById('btn-gen-sab-key').addEventListener('click', async () => {
+            const response = await fetch('/api/settings/generate-api-key', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ type: 'sabnzbd' }),
+            });
+            const data = await response.json();
+            if (data.status === 'ok') {
+                document.getElementById('sabnzbd_api_key').value = data.key;
+                showToast('New SABnzbd key generated');
+            }
+        });
+
+        // Export settings
+        document.getElementById('btn-export').addEventListener('click', async () => {
+            const response = await fetch('/api/settings/export');
+            const data = await response.json();
+
+            if (data.status === 'ok') {
+                const blob = new Blob([data.data], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'fshare-nexus-settings.json';
+                a.click();
+                showToast('Settings exported');
+            }
+        });
+
+        // Reset settings
+        document.getElementById('btn-reset').addEventListener('click', async () => {
+            if (!confirm('Are you sure you want to reset all settings to defaults?')) return;
+
+            const response = await fetch('/api/settings/reset', { method: 'POST' });
+            const data = await response.json();
+
+            if (data.status === 'ok') {
+                showToast('Settings reset to defaults');
+                loadSettings();
+            }
+        });
+
+        // Initial load
+        loadSettings();
+    })();
+</script>
 {% endblock %}

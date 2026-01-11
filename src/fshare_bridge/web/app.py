@@ -55,9 +55,11 @@ def create_app(config_override: dict = None) -> Flask:
     from .routes import main_bp
     from .indexer_routes import indexer_bp
     from .sabnzbd_routes import sabnzbd_bp
+    from .settings_api import settings_bp
     
     app.register_blueprint(main_bp)
     app.register_blueprint(api_bp, url_prefix="/api")
+    app.register_blueprint(settings_bp, url_prefix="/api")
     app.register_blueprint(indexer_bp, url_prefix="/indexer")
     app.register_blueprint(sabnzbd_bp, url_prefix="/sabnzbd")
     
