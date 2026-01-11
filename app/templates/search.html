@@ -273,6 +273,7 @@
             const qualityBadge = result.quality || '1080P';
             const hasVietsub = result.vietsub || false;
             const hasVietdub = result.vietdub || false;
+            const score = result.score || 0;
 
             card.innerHTML = `
             <div class="result-card-header">
@@ -289,8 +290,8 @@
                     <span>${result.size || 'N/A'}</span>
                 </div>
                 <div class="meta-item">
-                    <span class="material-icons">schedule</span>
-                    <span>${result.uploaded || 'Unknown'}</span>
+                    <span class="material-icons">star</span>
+                    <span>Score: ${score}/100</span>
                 </div>
             </div>
             <button class="download-btn" data-url="${escapeHtml(result.url)}" data-name="${escapeHtml(result.name)}">

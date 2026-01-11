@@ -103,17 +103,98 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             results = timfshare_client.search(query, limit=40)
             formatted_results = []
             for result in results:
+                # Parse filename
+                parsed = filename_normalizer.parse(result.get('name', ''))
+                
+                # Calculate score based on quality markers
+                score = calculate_quality_score(parsed, result.get('name', ''))
+                
+                # Format file size
+                size_bytes = result.get('size', 0)
+                size_formatted = format_file_size(size_bytes)
+                
+                # Detect quality badge
+                quality_badge = detect_quality_badge(result.get('name', ''))
+                
+                # Detect vietsub/vietdub
+                name_lower = result.get('name', '').lower()
+                has_vietsub = any(marker in name_lower for marker in ['vietsub', 'tvp'])
+                has_vietdub = any(marker in name_lower for marker in ['vietdub', 'tmpđ', 'thuyết minh', 'lồng tiếng'])
+                
                 formatted_results.append({
-                    'name': result.get('name', ''),
+                    'name': parsed.title,  # Use parsed title
                     'url': result.get('url', ''),
-                    'size': result.get('size', 0),
-                    'score': result.get('score', 0),
-                    'fcode': result.get('fcode', '')
+                    'size': size_formatted,  # Formatted size
+                    'size_bytes': size_bytes,  # Keep for sorting
+                    'score': score,  # Quality score
+                    'fcode': result.get('fcode', ''),
+                    'quality': quality_badge,
+                    'vietsub': has_vietsub,
+                    'vietdub': has_vietdub
                 })
             return jsonify({'results': formatted_results})
         except Exception as e:
             logger.error(f"Search API error: {e}")
             return jsonify({'error': str(e)}), 500
+    
+    def calculate_quality_score(parsed, filename):
+        """Calculate quality score based on resolution and other factors"""
+        score = 50  # Base score
+        
+        filename_lower = filename.lower()
+        
+        # Resolution scoring
+        if '4k' in filename_lower or '2160p' in filename_lower or 'uhd' in filename_lower:
+            score += 50
+        elif '1080p' in filename_lower:
+            score += 30
+        elif '720p' in filename_lower:
+            score += 15
+        
+        # HDR bonus
+        if 'hdr' in filename_lower:
+            score += 10
+        
+        # Codec bonus
+        if any(codec in filename_lower for codec in ['x265', 'hevc', 'h.265']):
+            score += 5
+        
+        # Audio bonus
+        if any(audio in filename_lower for audio in ['atmos', 'truehd', 'dts']):
+            score += 5
+        
+        # Vietnamese audio bonus
+        if any(marker in filename_lower for marker in ['vietsub', 'tvp', 'vietdub', 'tmpđ']):
+            score += 10
+        
+        return min(score, 100)  # Cap at 100
+    
+    def format_file_size(size_bytes):
+        """Format file size in human-readable format"""
+        if not size_bytes or size_bytes == 0:
+            return 'N/A'
+        
+        # Convert to appropriate unit
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if size_bytes < 1024.0:
+                if unit == 'B':
+                    return f"{int(size_bytes)}{unit}"
+                return f"{size_bytes:.2f}{unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.2f}PB"
+    
+    def detect_quality_badge(filename):
+        """Detect quality badge from filename"""
+        filename_lower = filename.lower()
+        
+        if '4k' in filename_lower or '2160p' in filename_lower or 'uhd' in filename_lower:
+            return '4K'
+        elif '1080p' in filename_lower:
+            return '1080P'
+        elif '720p' in filename_lower:
+            return '720P'
+        else:
+            return '1080P'  # Default
     
     @web_ui_bp.route('/api/autocomplete')
     def api_autocomplete():
