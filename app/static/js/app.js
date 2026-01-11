@@ -162,15 +162,14 @@ class FshareBridge {
 
     wakeupDashboardChart() {
         const canvas = document.getElementById('network-graph');
-        if (canvas && !this.networkGraph) {
-            this.networkGraph = new NetworkGraph('network-graph');
+        if (canvas) {
+            if (!this.networkGraph) {
+                this.networkGraph = new NetworkGraph('network-graph');
+            }
             this.networkGraphActive = true;
+        } else {
+            this.networkGraphActive = false;
         }
-    }
-
-    hibernateDashboardChart() {
-        this.networkGraphActive = false;
-        // Keep the instance but mark as inactive
     }
 
     // Dashboard Data & Stats
@@ -216,6 +215,11 @@ class FshareBridge {
     }
 
     async updateNetworkGraph() {
+        // Try to wake up chart if not active
+        if (!this.networkGraphActive) {
+            this.wakeupDashboardChart();
+        }
+
         if (!this.networkGraph || !this.networkGraphActive) return;
 
         try {

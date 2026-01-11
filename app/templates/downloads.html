@@ -173,13 +173,15 @@
 
     function wakeupSpeedChart() {
         const ctx = document.getElementById('downloads-speed-graph');
-        if (!ctx) return;
-
-        // Only initialize if not already done
-        if (!speedChart) {
-            initSpeedGraph();
+        if (ctx) {
+            // Only initialize if not already done
+            if (!speedChart) {
+                initSpeedGraph();
+            }
+            speedChartActive = true;
+        } else {
+            speedChartActive = false;
         }
-        speedChartActive = true;
     }
 
     function hibernateSpeedChart() {
@@ -205,6 +207,10 @@
 
         // Speed graph refresh (250ms)
         setInterval(() => {
+            // Try to wake up if not active
+            if (!speedChartActive) {
+                wakeupSpeedChart();
+            }
             if (speedChartActive) {
                 updateSpeedGraph();
             }
