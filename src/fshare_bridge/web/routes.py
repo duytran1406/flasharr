@@ -38,9 +38,9 @@ def settings_page():
     return render_template("settings.html")
 
 
-@main_bp.route("/tutorial")
-def tutorial_page():
-    """Render the tutorial/documentation page."""
+@main_bp.route("/about")
+def about_page():
+    """Render the about/documentation page."""
     readme_content = ""
     
     # Try to load README.md
@@ -67,7 +67,12 @@ def tutorial_page():
     else:
         readme_html = "<p>Documentation not found.</p>"
     
-    return render_template("tutorial.html", content=readme_html)
+    return render_template("about.html", content=readme_html)
+
+# Legacy Redirect/Alias if needed, or just remove tutorial route
+@main_bp.route("/tutorial")
+def tutorial_redirect():
+     return about_page()
 
 
 @main_bp.route("/health")

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Fshare-Arr Bridge - Main integration service
   fshare-arr-bridge:

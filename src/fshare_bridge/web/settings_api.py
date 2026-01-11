@@ -14,10 +14,11 @@ from ..core.exceptions import AuthenticationError
 
 logger = logging.getLogger(__name__)
 
+# Note: This blueprint is registered with url_prefix='/api/settings' in app.py
 settings_bp = Blueprint("settings", __name__)
 
 
-@settings_bp.route("/settings", methods=["GET"])
+@settings_bp.route("/", methods=["GET"])
 def get_settings():
     """
     Get all application settings.
@@ -42,7 +43,7 @@ def get_settings():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@settings_bp.route("/settings", methods=["PUT"])
+@settings_bp.route("/", methods=["PUT"])
 def update_settings():
     """
     Update application settings.
@@ -77,7 +78,7 @@ def update_settings():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@settings_bp.route("/settings/test-fshare", methods=["POST"])
+@settings_bp.route("/test-fshare", methods=["POST"])
 def test_fshare_connection():
     """
     Test Fshare connection with provided or stored credentials.
@@ -136,7 +137,7 @@ def test_fshare_connection():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@settings_bp.route("/settings/generate-api-key", methods=["POST"])
+@settings_bp.route("/generate-api-key", methods=["POST"])
 def generate_api_key():
     """
     Generate a new API key.
@@ -176,7 +177,7 @@ def generate_api_key():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@settings_bp.route("/settings/export", methods=["GET"])
+@settings_bp.route("/export", methods=["GET"])
 def export_settings():
     """Export all settings as JSON."""
     try:
@@ -192,7 +193,7 @@ def export_settings():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@settings_bp.route("/settings/import", methods=["POST"])
+@settings_bp.route("/import", methods=["POST"])
 def import_settings():
     """Import settings from JSON."""
     try:
@@ -222,7 +223,7 @@ def import_settings():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-@settings_bp.route("/settings/reset", methods=["POST"])
+@settings_bp.route("/reset", methods=["POST"])
 def reset_settings():
     """Reset all settings to defaults."""
     try:

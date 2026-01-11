@@ -25,15 +25,21 @@ def create_app(config_override: dict = None) -> Flask:
     """
     # Determine template and static paths
     # Support both old structure (app/) and new structure (src/fshare_bridge/web/)
-    base_path = Path(__file__).parent
-    legacy_path = Path("/app")
+    base_dir = Path("/app")
     
-    if (legacy_path / "templates").exists():
-        template_folder = str(legacy_path / "templates")
-        static_folder = str(legacy_path / "static")
+    # Check for legacy structure in standard Docker path
+    if (base_dir / "app" / "templates").exists():
+        template_folder = str(base_dir / "app" / "templates")
+        static_folder = str(base_dir / "app" / "static")
+    # Check for root templates (if running from /app and templates are at root)
+    elif (base_dir / "templates").exists():
+        template_folder = str(base_dir / "templates")
+        static_folder = str(base_dir / "static")
+    # Development/Package fallback
     else:
-        template_folder = str(base_path / "templates")
-        static_folder = str(base_path / "static")
+        pkg_base = Path(__file__).parent
+        template_folder = str(pkg_base / "templates")
+        static_folder = str(pkg_base / "static")
     
     app = Flask(
         __name__,
@@ -59,7 +65,8 @@ def create_app(config_override: dict = None) -> Flask:
     
     app.register_blueprint(main_bp)
     app.register_blueprint(api_bp, url_prefix="/api")
-    app.register_blueprint(settings_bp, url_prefix="/api")
+    # Update settings blueprint to use /api/settings prefix
+    app.register_blueprint(settings_bp, url_prefix="/api/settings")
     app.register_blueprint(indexer_bp, url_prefix="/indexer")
     app.register_blueprint(sabnzbd_bp, url_prefix="/sabnzbd")
     

@@ -267,7 +267,22 @@ class FshareBridge {
             if (data.downloads) {
                 // Save to LocalStorage
                 localStorage.setItem('fshare_downloads', JSON.stringify(data.downloads));
-                this.downloads = data.downloads;
+
+                // DATA NORMALIZATION: Map API structure to UI flat structure
+                this.downloads = data.downloads.map(d => ({
+                    fid: d.id, // Map UUID to fid for compatibility
+                    name: d.filename,
+                    status: d.state, // Map 'state' to 'status'
+                    progress: d.progress,
+                    size: d.size.formatted_total,
+                    size_bytes: d.size.total,     // for sorting
+                    speed: d.speed.formatted,
+                    speed_raw: d.speed.bytes_per_sec, // for sorting
+                    eta: d.eta.formatted,
+                    eta_seconds: d.eta.seconds,   // for sorting
+                    category: d.category || 'Uncategorized',
+                    info: "" // Legacy field, empty for now
+                }));
 
                 // Process data (Sort)
                 this.applySorting();
@@ -639,9 +654,11 @@ class FshareBridge {
     }
 
     createDashboardDownloadRow(d) {
-        const statusClass = d.status === 'Running' ? 'info' :
-            d.status === 'Finished' ? 'success' :
-                d.status === 'Stop' ? 'error' : 'warning';
+        // Normalizes status casing just in case
+        const status = (d.status || '').toLowerCase();
+        const statusClass = status === 'running' || status === 'downloading' ? 'info' :
+            status === 'finished' || status === 'completed' ? 'success' :
+                status === 'stop' || status === 'paused' || status === 'failed' ? 'error' : 'warning';
 
         return `
             <tr>
@@ -656,7 +673,7 @@ class FshareBridge {
                 </td>
                 <td style="text-align: right; padding-right: 1rem;">
                     <div class="download-controls" style="justify-content: flex-end;">
-                        <button class="icon-btn" onclick="bridge.toggleDownload(${d.fid})">${d.status === 'Running' ? '<span class="material-icons" style="font-size: 18px">pause</span>' : '<span class="material-icons" style="font-size: 18px">play_arrow</span>'}</button>
+                        <button class="icon-btn" onclick="bridge.toggleDownload('${d.fid}')">${d.status === 'Running' ? '<span class="material-icons" style="font-size: 18px">pause</span>' : '<span class="material-icons" style="font-size: 18px">play_arrow</span>'}</button>
                     </div>
                 </td>
             </tr>
@@ -688,10 +705,10 @@ class FshareBridge {
                 <td class="eta-cell">${d.eta}</td>
                 <td style="text-align: right; padding-right: 1.5rem;">
                     <div class="download-controls" style="justify-content: flex-end;">
-                        <button class="icon-btn" title="Toggle" onclick="bridge.toggleDownload(${d.fid})">
+                        <button class="icon-btn" title="Toggle" onclick="bridge.toggleDownload('${d.fid}')">
                             <span class="material-icons" style="font-size: 20px">${d.status === 'Running' ? 'pause' : 'play_arrow'}</span>
                         </button>
-                        <button class="icon-btn delete-btn" title="Delete" onclick="bridge.deleteDownload(${d.fid})">
+                        <button class="icon-btn delete-btn" title="Delete" onclick="bridge.deleteDownload('${d.fid}')">
                             <span class="material-icons" style="font-size: 20px">delete_outline</span>
                         </button>
                     </div>
