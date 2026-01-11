@@ -17,17 +17,47 @@ To ensure clean and readable search results, raw Fshare filenames are processed 
     - **Language Stripping**: Vietnamese markers like `Vietsub`, `Thuyết Minh` are removed.
     - **Formatting**: Dots (`.`) and underscores (`_`) are replaced with spaces.
 
-## 2. Score System (Accuracy First)
-Search results are scored from **0 to 100**, heavily prioritizing how well the filename matches your search query.
+## 2. Score System (Multi-Factor Matching)
+Search results are scored from **0 to 100**, using an intelligent multi-factor matching algorithm.
 
 ### Formula
 **Total Score = Accuracy Score (Max 90) + Bonus Score (Max 10)**
 
 #### 1. Accuracy Score (0-90 points)
-- Uses `difflib` pattern matching to compare your **Search Query** vs. the **Cleaned Title**.
-- **Exact Matches** get closer to 90 points.
-- **Partial Matches** (e.g., "Avengers" vs "Avengers Endgame") get lower scores proportional to the mismatch length.
-- *Goal: Ensure the top result is exactly what you typed.*
+Uses **hierarchical matching** to determine relevance, from most to least specific:
+
+**Matching Hierarchy:**
+
+1. **Exact Match (90 points)**
+   - Query exactly matches title (case-insensitive)
+   - Example: "Avengers" → "Avengers"
+
+2. **Word-Perfect Match (75-80 points)**
+   - All query words found in title
+   - **80 pts**: Words in same order → "Iron Man" → "Iron Man 2"
+   - **75 pts**: Words present, different order → "Man Iron" → "Iron Man"
+
+3. **Prefix Match (75 points)**
+   - Title starts with query
+   - Example: "Avengers" → "Avengers Endgame"
+
+4. **Substring Match (70 points)**
+   - Query is substring of title
+   - Example: "endgame" → "Avengers Endgame"
+
+5. **Token-Based Scoring (0-65 points)**
+   - Partial word matches with relevance penalty
+   - Formula: `(matched_words / query_words) × 65 - (extra_words × 2)`
+   - Example: "Iron Man War" → "Iron Man" (43pts)
+
+6. **Fuzzy Fallback (0-40 points)**
+   - Character-based similarity for typos
+   - Example: "Avengrs" → "Avengers" (~35pts)
+
+**Key Features:**
+- Word-based (not character-based) matching
+- Exact matches always rank highest
+- Extra words in title reduce relevance
 
 #### 2. Tie-Breaker Bonus (Max 10 points)
 Used to rank identical titles by quality, mirroring standard **Sonarr/Radarr Quality Profiles**.

@@ -161,31 +161,17 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     
     def calculate_quality_score(parsed, filename, query=''):
         """
-        Calculate score based primarily on Search Accuracy.
+        Calculate score using multi-factor matching algorithm.
         
         Score Breakdown:
-        - Accuracy (0-90): How well the clean title matches the search query.
-        - Quality/Metadata (0-10): Tie-breaker for quality and language.
+        - Accuracy (0-90): Multi-factor matching (exact, word-based, fuzzy)
+        - Quality/Metadata (0-10): Tie-breaker for quality and language
         """
         if not query:
-            return 50 # Default if no query
+            return 50  # Default if no query
             
-        # 1. Accuracy Score (0-90)
-        # Use parsed.title for comparison as it strips quality/year junk
-        query_norm = query.lower().strip()
-        title_norm = parsed.title.lower().strip()
-        
-        # Use SequenceMatcher for fuzzy string comparison
-        matcher = difflib.SequenceMatcher(None, query_norm, title_norm)
-        accuracy_ratio = matcher.ratio() # 0.0 to 1.0
-        
-        # Check for subset match (if query is fully contained in title) implies high relevance
-        if query_norm in title_norm:
-             # Boost ratio for substring matches (e.g. searching 'Avengers' in 'Avengers Endgame')
-             # But keep it relative. If query is small part of title, ratio is naturally lower, which is good.
-             pass
-             
-        accuracy_score = int(accuracy_ratio * 90)
+        # 1. Calculate Accuracy Score (0-90) using improved algorithm
+        accuracy_score = calculate_accuracy_score(query, parsed.title)
         
         # 2. Tie-Breaker Bonuses (0-10)
         bonus_score = get_quality_profile_score(filename)
@@ -198,6 +184,66 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
         final_score = accuracy_score + min(bonus_score, 10)
         
         return min(final_score, 100)
+    
+    def calculate_accuracy_score(query, title):
+        """
+        Multi-factor accuracy scoring algorithm.
+        
+        Returns score 0-90 based on how well query matches title.
+        Uses hierarchical matching: exact > word-perfect > prefix > substring > token > fuzzy
+        """
+        # Normalize inputs
+        q_norm = query.lower().strip()
+        t_norm = title.lower().strip()
+        
+        # 1. Exact Match (90 points)
+        if q_norm == t_norm:
+            return 90
+        
+        # 2. Tokenize for word-based matching
+        q_tokens = q_norm.split()
+        t_tokens = t_norm.split()
+        q_tokens_set = set(q_tokens)
+        t_tokens_set = set(t_tokens)
+        
+        # 3. Word-Perfect Match (80 points)
+        # All query words present in title
+        if q_tokens_set.issubset(t_tokens_set):
+            # Bonus if words appear in same order
+            if is_subsequence(q_tokens, t_tokens):
+                return 80
+            return 75
+        
+        # 4. Prefix Match (75 points)
+        if t_norm.startswith(q_norm):
+            return 75
+        
+        # 5. Substring Match (70 points)
+        if q_norm in t_norm:
+            return 70
+        
+        # 6. Token-Based Scoring (0-65 points)
+        matched_tokens = len(q_tokens_set & t_tokens_set)
+        if matched_tokens > 0:
+            # Base score from match ratio
+            match_ratio = matched_tokens / len(q_tokens)
+            base_score = match_ratio * 65
+            
+            # Penalty for extra words in title (reduces relevance)
+            extra_words = max(0, len(t_tokens) - len(q_tokens))
+            penalty = min(extra_words * 2, 15)  # Cap penalty at 15
+            
+            return int(max(base_score - penalty, 0))
+        
+        # 7. Fuzzy Fallback (0-40 points)
+        # For cases with no word matches, use character-based similarity
+        matcher = difflib.SequenceMatcher(None, q_norm, t_norm)
+        return int(matcher.ratio() * 40)
+    
+    def is_subsequence(subseq, seq):
+        """Check if subseq is a subsequence of seq (maintains order)."""
+        it = iter(seq)
+        return all(item in it for item in subseq)
 
     def get_quality_profile_score(filename):
         """
