@@ -57,8 +57,9 @@
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script>
     document.addEventListener('DOMContentLoaded', () => {
-        const rawContent = `{{ content | safe }}`;
-        document.getElementById('tutorial-content').innerHTML = marked.parse(rawContent);
+        const rawContent = {{ content | tojson | safe
+    }};
+    document.getElementById('tutorial-content').innerHTML = marked.parse(rawContent);
     });
 </script>
 {% endblock %}

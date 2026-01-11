@@ -397,8 +397,11 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     def tutorial():
         """Render tutorial page"""
         try:
-            doc_path = os.path.join(os.path.dirname(__file__), 'static', 'docs', 'Tutorial.md')
-            with open(doc_path, 'r') as f:
+            # Use README.md as the tutorial content
+            root_dir = os.path.dirname(os.path.dirname(__file__))
+            readme_path = os.path.join(root_dir, 'README.md')
+            
+            with open(readme_path, 'r') as f:
                 content = f.read()
             return render_template('tutorial.html', content=content, version=app_version)
         except Exception as e:
