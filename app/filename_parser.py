@@ -186,8 +186,10 @@ class FilenameNormalizer:
         """Clean up title string"""
         # Replace dots and underscores with spaces
         title = re.sub(r'[\._]', ' ', title)
-        # Remove extra spaces
-        title = re.sub(r'\s+', ' ', title)
+        # Remove quality and Vietnamese markers
+        title = self.quality_pattern.sub('', title)
         # Remove year if present
         title = re.sub(r'\b(19\d{2}|20\d{2})\b', '', title)
+        # Clean up extra spaces
+        title = re.sub(r'\s+', ' ', title)
         return title.strip()
