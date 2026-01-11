@@ -8,6 +8,7 @@ import logging
 import psutil
 import time
 import threading
+import difflib
 try:
     import speedtest
 except ImportError:
@@ -159,49 +160,50 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             return jsonify({'error': str(e)}), 500
     
     def calculate_quality_score(parsed, filename, query=''):
-        """Calculate quality score based on resolution, name match, and other factors"""
-        score = 0
+        """
+        Calculate score based primarily on Search Accuracy.
         
-        filename_lower = filename.lower()
-        query_parts = query.lower().split()
-        
-        # Name Match Score (Critical - Max 40)
-        # Check how many query words are in the filename
-        if query_parts:
-            match_count = sum(1 for part in query_parts if part in filename_lower)
-            match_ratio = match_count / len(query_parts)
-            score += int(match_ratio * 40)
-        
-        # Quality Score (Max 60 for non-exact)
-        quality_score = 20  # Base quality score
-        
-        # Resolution scoring
-        if '4k' in filename_lower or '2160p' in filename_lower or 'uhd' in filename_lower:
-            quality_score += 30
-        elif '1080p' in filename_lower:
-            quality_score += 20
-        elif '720p' in filename_lower:
-            quality_score += 10
-        
-        # HDR bonus
-        if 'hdr' in filename_lower:
-            quality_score += 5
-        
-        # Codec bonus
-        if any(codec in filename_lower for codec in ['x265', 'hevc', 'h.265']):
-            quality_score += 2
-        
-        # Audio bonus
-        if any(audio in filename_lower for audio in ['atmos', 'truehd', 'dts']):
-            quality_score += 3
-        
-        # Vietnamese audio bonus (Significant for this user)
-        if any(marker in filename_lower for marker in ['vietsub', 'tvp', 'vietdub', 'tmpđ', 'thuyết minh', 'lồng tiếng']):
-            quality_score += 10 # Boost localized content
+        Score Breakdown:
+        - Accuracy (0-90): How well the clean title matches the search query.
+        - Quality/Metadata (0-10): Tie-breaker for quality and language.
+        """
+        if not query:
+            return 50 # Default if no query
             
-        score += quality_score
+        # 1. Accuracy Score (0-90)
+        # Use parsed.title for comparison as it strips quality/year junk
+        query_norm = query.lower().strip()
+        title_norm = parsed.title.lower().strip()
         
-        return min(score, 100)  # Cap at 100
+        # Use SequenceMatcher for fuzzy string comparison
+        matcher = difflib.SequenceMatcher(None, query_norm, title_norm)
+        accuracy_ratio = matcher.ratio() # 0.0 to 1.0
+        
+        # Check for subset match (if query is fully contained in title) implies high relevance
+        if query_norm in title_norm:
+             # Boost ratio for substring matches (e.g. searching 'Avengers' in 'Avengers Endgame')
+             # But keep it relative. If query is small part of title, ratio is naturally lower, which is good.
+             pass
+             
+        accuracy_score = int(accuracy_ratio * 90)
+        
+        # 2. Tie-Breaker Bonuses (0-10)
+        bonus_score = 0
+        filename_lower = filename.lower()
+        
+        # Resolution Preference (4K/1080p > 720p/SD)
+        if any(q in filename_lower for q in ['4k', '2160p', 'uhd', '1080p']):
+            bonus_score += 5
+        elif '720p' in filename_lower:
+            bonus_score += 3
+            
+        # Language Preference
+        if any(marker in filename_lower for marker in ['vietsub', 'tvp', 'vietdub', 'tmpđ', 'thuyết minh', 'lồng tiếng']):
+             bonus_score += 5
+             
+        final_score = accuracy_score + min(bonus_score, 10)
+        
+        return min(final_score, 100)
     
     def format_file_size(size_bytes):
         """Format file size in human-readable format"""

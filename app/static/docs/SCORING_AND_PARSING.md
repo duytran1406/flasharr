@@ -17,36 +17,39 @@ To ensure clean and readable search results, raw Fshare filenames are processed 
     - **Language Stripping**: Vietnamese markers like `Vietsub`, `Thuyết Minh` are removed.
     - **Formatting**: Dots (`.`) and underscores (`_`) are replaced with spaces.
 
-## 2. Quality Scoring System
+## 2. Score System (Accuracy First)
+Search results are scored from **0 to 100**, heavily prioritizing how well the filename matches your search query.
 
-Each search result is assigned a score from **0 to 100** to help users identify the highest quality releases.
+### Formula
+**Total Score = Accuracy Score (Max 90) + Bonus Score (Max 10)**
 
-**Base Score:** `50 points`
+#### 1. Accuracy Score (0-90 points)
+- Uses `difflib` pattern matching to compare your **Search Query** vs. the **Cleaned Title**.
+- **Exact Matches** get closer to 90 points.
+- **Partial Matches** (e.g., "Avengers" vs "Avengers Endgame") get lower scores proportional to the mismatch length.
+- *Goal: Ensure the top result is exactly what you typed.*
 
-### Bonus Points
-
-| Category | Condition | Points |
-| :--- | :--- | :--- |
-| **Resolution** | `4K`, `2160p`, `UHD` | **+50** |
-| | `1080p` | **+30** |
-| | `720p` | **+15** |
-| **Visual Tech** | `HDR`, `HDR10`, `Dolby Vision`, `DV` | **+10** |
-| **Audio** | `Atmos`, `TrueHD`, `DTS` | **+5** |
-| **Codec** | `x265`, `HEVC`, `H.265` | **+5** |
-| **Localization** | `Vietsub`, `Vietdub`, `Thuyết Minh`, `Lồng Tiếng` | **+10** |
-
-*Note: The total score is capped at 100.*
+#### 2. Tie-Breaker Bonus (Max 10 points)
+Used only to rank identical titles by quality.
+- **Resolution**:
+    - `4K/1080p`: +5 points
+    - `720p`: +3 points
+- **Localization**:
+    - `Vietsub/Vietdub/TVP`: +5 points
 
 ### Example Calculation
+**Query:** "Avengers"
+1. **File A:** "Avengers.2012.4K.Vietsub.mkv"
+   - Clean Title: "Avengers" -> Match Ratio: 1.0 -> Accuracy: **90**
+   - Bonus: 4K (+5) + Vietsub (+5) = **10**
+   - **Total: 100**
 
-**Filename:** `Avengers.Endgame.2019.2160p.HDR.Atmos.Vietsub.mkv`
+2. **File B:** "Avengers.Endgame.2019.1080p.mkv"
+   - Clean Title: "Avengers Endgame" -> Match Ratio: 0.6 -> Accuracy: **54**
+   - Bonus: 1080p (+5) = **5**
+   - **Total: 59**
 
-- **Base**: 50
-- **Resolution (2160p)**: +50
-- **HDR**: +10
-- **Audio (Atmos)**: +5
-- **Localization (Vietsub)**: +10
-- **Total**: 125 -> **Capped at 100**
+*Result: The exact movie match appears much higher than the sequel.*
 
 ## 3. Supported Quality Types
 
