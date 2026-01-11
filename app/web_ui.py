@@ -193,13 +193,17 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
         
         # Resolution Preference (4K/1080p > 720p/SD)
         if any(q in filename_lower for q in ['4k', '2160p', 'uhd', '1080p']):
-            bonus_score += 5
+            bonus_score += 4
         elif '720p' in filename_lower:
-            bonus_score += 3
+            bonus_score += 2
+        
+        # Source/Quality Preference
+        if any(q in filename_lower for q in ['remux', 'iso', 'bluray', 'blu-ray']):
+            bonus_score += 2
             
         # Language Preference
         if any(marker in filename_lower for marker in ['vietsub', 'tvp', 'vietdub', 'tmpđ', 'thuyết minh', 'lồng tiếng']):
-             bonus_score += 5
+             bonus_score += 4
              
         final_score = accuracy_score + min(bonus_score, 10)
         
@@ -223,24 +227,37 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
         """Detect quality badge from filename"""
         filename_lower = filename.lower()
         
-        if '4k' in filename_lower or '2160p' in filename_lower or 'uhd' in filename_lower:
+        # High Def
+        if any(k in filename_lower for k in ['4k', '2160p', 'uhd', '8k', '4320p']):
             return '4K'
-        elif '1080p' in filename_lower:
+        if '1080p' in filename_lower:
             return '1080P'
-        elif '720p' in filename_lower:
+        if '720p' in filename_lower:
             return '720P'
-        elif 'bluray' in filename_lower or 'remux' in filename_lower or 'bdrip' in filename_lower:
+            
+        # Sources
+        if any(k in filename_lower for k in ['remux', 'iso']):
+            return 'BluRay' # Treat Remux/ISO as high quality BluRay category
+        if any(k in filename_lower for k in ['bluray', 'blu-ray', 'bdrip', 'brrip']):
             return 'BluRay'
-        elif 'web-dl' in filename_lower or 'webdl' in filename_lower or 'webrip' in filename_lower:
+        if any(k in filename_lower for k in ['web-dl', 'webdl', 'webrip']):
             return 'WEB-DL'
-        elif 'hdtv' in filename_lower or 'pdtv' in filename_lower:
+        
+        # TV
+        if any(k in filename_lower for k in ['hdtv', 'pdtv', 'tvrip']):
             return 'HDTV'
-        elif 'hdr' in filename_lower or 'dolby vision' in filename_lower or 'dv' in filename_lower:
+            
+        # HDR/SDR
+        if any(k in filename_lower for k in ['hdr', 'dolby vision', 'dv', 'hdr10']):
             return 'HDR'
-        elif '480p' in filename_lower or 'dvd' in filename_lower or 'sd' in filename_lower:
+        if any(k in filename_lower for k in ['cam', 'ts', 'tc']):
+            return 'CAM'
+            
+        # Standard Def / DVD
+        if any(k in filename_lower for k in ['480p', '576p', 'dvd', 'dvdrip', 'sd']):
             return 'SD'
-        else:
-            return '1080P'  # Default fallback
+            
+        return '1080P'  # Default fallback
     
     @web_ui_bp.route('/api/autocomplete')
     def api_autocomplete():

@@ -32,16 +32,32 @@ class FilenameNormalizer:
     """
     
     # Quality keywords that should appear AFTER episode marker
+    # Quality keywords that should appear AFTER episode marker
     QUALITY_KEYWORDS = [
-        '4K', 'UHD', '2160p', '1080p', '720p', '480p', '360p',
-        'HDR', 'HDR10', 'HDR10+', 'Dolby Vision', 'DV',
-        '10Bit', '10bit', '8Bit', '8bit',
-        'BluRay', 'Blu-Ray', 'BDRip', 'BRRip',
-        'WEB-DL', 'WEBDL', 'WEBRip',
+        # Resolutions
+        '2160p', '4K', 'UHD', '8K', '4320p',
+        '1080p', '720p', '576p', '480p', '360p',
+        
+        # Sources
+        'BluRay', 'Blu-Ray', 'BDRip', 'BRRip', 'BD25', 'BD50',
+        'WEB-DL', 'WEBDL', 'WEBRip', 'WebRip',
         'HDTV', 'PDTV', 'TVRip',
-        'DVDRip', 'DVD',
+        'DVDRip', 'DVD', 'DVD5', 'DVD9',
+        'Remux', 'ISO', 'CAM', 'TS', 'TC',
+        
+        # Video
+        'HDR', 'HDR10', 'HDR10+', 'Dolby Vision', 'DV',
+        'SDR', '10Bit', '10bit', '8Bit', '8bit', '12bit',
         'x265', 'x264', 'H.265', 'H.264', 'HEVC', 'AVC',
-        'AAC', 'AC3', 'DTS', 'DD5.1', 'DD+', 'TrueHD', 'Atmos',
+        'XviD', 'DivX', 'VP9', 'AV1',
+        
+        # Audio
+        'AAC', 'AC3', 'DTS', 'DTS-HD', 'DTS-X', 'TrueHD', 'Atmos',
+        'DD5.1', 'DD+', 'EAC3', 'FLAC', 'PCM', 'MP3',
+        
+        # Groups/Tags
+        'Proper', 'Repack', 'Real', 'Rerip', 'Hybrid',
+        'AMZN', 'NF', 'HULU', 'DSNP',
     ]
     
     # Vietnamese-specific markers
