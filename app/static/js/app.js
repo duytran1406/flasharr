@@ -136,14 +136,13 @@ class FshareBridge {
         this.sortColumn = null;
         this.sortDirection = 'asc';
         this.networkGraph = null;
+        this.networkGraphActive = false;
         this.init();
     }
 
     init() {
         this.setupEventListeners();
-        this.networkGraph = new NetworkGraph('network-graph');
-        this.loadDashboardData();
-        this.loadDownloads();
+        this.wakeupDashboardChart();
         this.loadDashboardData();
         this.loadDownloads();
         this.loadSystemLogs();
@@ -159,6 +158,19 @@ class FshareBridge {
 
         // Update ETA countdown every second
         setInterval(() => this.updateETACountdown(), 1000);
+    }
+
+    wakeupDashboardChart() {
+        const canvas = document.getElementById('network-graph');
+        if (canvas && !this.networkGraph) {
+            this.networkGraph = new NetworkGraph('network-graph');
+            this.networkGraphActive = true;
+        }
+    }
+
+    hibernateDashboardChart() {
+        this.networkGraphActive = false;
+        // Keep the instance but mark as inactive
     }
 
     // Dashboard Data & Stats
@@ -204,7 +216,7 @@ class FshareBridge {
     }
 
     async updateNetworkGraph() {
-        if (!this.networkGraph) return;
+        if (!this.networkGraph || !this.networkGraphActive) return;
 
         try {
             const response = await fetch('/api/stats');

@@ -166,6 +166,26 @@
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
+    let speedChart = null;
+    let speedChartActive = false;
+    const maxPoints = 40;
+    let peakSpeed = 0;
+
+    function wakeupSpeedChart() {
+        const ctx = document.getElementById('downloads-speed-graph');
+        if (!ctx) return;
+
+        // Only initialize if not already done
+        if (!speedChart) {
+            initSpeedGraph();
+        }
+        speedChartActive = true;
+    }
+
+    function hibernateSpeedChart() {
+        speedChartActive = false;
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         if (bridge) {
             bridge.currentPage = 1;
@@ -173,7 +193,7 @@
             bridge.loadDownloads();
 
             // Initialize speed graph
-            initSpeedGraph();
+            wakeupSpeedChart();
         }
 
         // Download list refresh (2000ms)
@@ -185,12 +205,11 @@
 
         // Speed graph refresh (250ms)
         setInterval(() => {
-            updateSpeedGraph();
+            if (speedChartActive) {
+                updateSpeedGraph();
+            }
         }, 250);
     });
-
-    let speedChart = null;
-    const maxPoints = 40;
 
     function initSpeedGraph() {
         const ctx = document.getElementById('downloads-speed-graph');
@@ -236,7 +255,6 @@
         });
     }
 
-    let peakSpeed = 0;
     async function updateSpeedGraph() {
         if (!speedChart) return;
 
