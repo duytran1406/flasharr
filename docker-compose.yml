@@ -9,7 +9,7 @@ services:
     ports:
       - "8484:8484"
     env_file:
-      - /bulk-storage/appdata/fshare-arr-bridge/.env
+      - /mnt/appdata/fshare-arr-bridge/.env
     environment:
       # Server configuration
       INDEXER_PORT: 8484
@@ -35,10 +35,14 @@ services:
       - PUID=1000
       - PGID=1000
       - TZ=Asia/Ho_Chi_Minh
+      - PYLOAD_DOWNLOAD_DIR=/fshare-downloader
     volumes:
-      - /bulk-storage/appdata/fshare-arr-bridge/pyload/config:/config
-      - /bulk-storage/data/downloads:/downloads
-      - /bulk-storage/appdata/fshare-arr-bridge/pyload/plugins:/config/pyload/userplugins # Custom Fshare plugins
+      - /mnt/appdata/fshare-arr-bridge/pyload/config:/config
+      - /data/fshare-downloader:/downloads
+      - /data/fshare-downloader:/fshare-downloader
+      - /mnt/appdata/fshare-arr-bridge/pyload/config/custom-cont-init.d:/custom-cont-init.d
+      - /mnt/appdata/fshare-arr-bridge/pyload/config/custom-services.d:/custom-services.d
+      - /mnt/appdata/fshare-arr-bridge/pyload/plugins:/config/pyload/userplugins # Custom Fshare plugins
     networks:
       - fshare-network
     healthcheck:

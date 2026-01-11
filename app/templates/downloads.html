@@ -12,7 +12,7 @@
     </div>
 
     <div class="action-group">
-        <button class="icon-action-btn btn-add" onclick="alert('Add links functionality coming soon')" title="Add Link">
+        <button class="icon-action-btn btn-add" onclick="bridge.showAddModal()" title="Add Link">
             <span class="material-icons">queue</span>
         </button>
         <button class="icon-action-btn btn-start" onclick="bridge.startAllDownloads()" title="Start All">
@@ -37,6 +37,17 @@
             style="position: absolute; top: 0.75rem; left: 1rem; font-size: 0.75rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; display: flex; align-items: center; gap: 0.5rem;">
             <span class="material-icons" style="font-size: 14px; color: rgb(var(--accent-500));">show_chart</span>
             Live Download Speed
+        </div>
+        <div
+            style="position: absolute; top: 0.75rem; right: 1rem; display: flex; gap: 1rem; font-size: 0.7rem; font-weight: 700;">
+            <div style="display: flex; align-items: center; gap: 0.4rem;">
+                <span style="color: var(--text-muted);">CURRENT:</span>
+                <span id="graph-current-speed" style="color: #3b82f6;">0 B/s</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 0.4rem;">
+                <span style="color: var(--text-muted);">PEAK:</span>
+                <span id="graph-peak-speed" style="color: #ef4444;">0 B/s</span>
+            </div>
         </div>
         <canvas id="downloads-speed-graph" style="width: 100%; height: 100%;"></canvas>
     </div>
@@ -106,6 +117,47 @@
                     <span class="material-icons" style="font-size: 18px;">chevron_right</span>
                 </button>
             </div>
+        </div>
+    </div>
+</div>
+<!-- Add Link Modal -->
+<div id="add-link-modal" class="modal"
+    style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); align-items: center; justify-content: center;">
+    <div class="service-card"
+        style="width: 100%; max-width: 500px; padding: 2rem; border-color: rgba(59, 130, 246, 0.3);">
+        <div class="service-header" style="margin-bottom: 1.5rem;">
+            <div class="service-icon" style="background: rgba(59, 130, 246, 0.1); color: #3b82f6;">
+                <span class="material-icons">add_link</span>
+            </div>
+            <div class="service-title">Add Fshare Link</div>
+            <button onclick="bridge.hideAddModal()"
+                style="margin-left: auto; background: none; border: none; color: var(--text-muted); cursor: pointer;">
+                <span class="material-icons">close</span>
+            </button>
+        </div>
+
+        <div style="margin-bottom: 1.5rem;">
+            <label
+                style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.5rem; text-transform: uppercase; font-weight: 700;">Fshare
+                URL</label>
+            <input type="text" id="manual-link-input" class="elegant-search-input" style="padding-left: 1rem;"
+                placeholder="https://www.fshare.vn/file/..." autofocus>
+        </div>
+
+        <div id="modal-error-msg"
+            style="display: none; color: #ef4444; font-size: 0.85rem; margin-bottom: 1rem; padding: 0.75rem; background: rgba(239, 68, 68, 0.1); border-radius: 8px; border: 1px solid rgba(239, 68, 68, 0.2);">
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span class="material-icons" style="font-size: 16px;">error_outline</span>
+                <span id="error-text">Invalid link</span>
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+            <button onclick="bridge.hideAddModal()" class="icon-action-btn"
+                style="width: auto; padding: 0 1.5rem; font-weight: 600; font-size: 0.85rem;">CANCEL</button>
+            <button onclick="bridge.submitManualLink()" id="submit-link-btn" class="icon-action-btn"
+                style="width: auto; padding: 0 1.5rem; background: #3b82f6; color: white; border: none; font-weight: 600; font-size: 0.85rem;">ADD
+                TO QUEUE</button>
         </div>
     </div>
 </div>
@@ -179,25 +231,35 @@
         });
     }
 
+    let peakSpeed = 0;
     async function updateSpeedGraph() {
         if (!speedChart) return;
 
         try {
             const response = await fetch('/api/stats');
             const data = await response.json();
-            // Using download_speed from data.pyload.speed_bytes
             const currentSpeed = data.pyload.speed_bytes || 0;
+            const currentFormatted = data.pyload.speed || '0 B/s';
+
+            if (currentSpeed > peakSpeed) {
+                peakSpeed = currentSpeed;
+                const peakLabel = document.getElementById('graph-peak-speed');
+                if (peakLabel) peakLabel.textContent = currentFormatted;
+            }
+
+            const currentLabel = document.getElementById('graph-current-speed');
+            if (currentLabel) currentLabel.textContent = currentFormatted;
 
             speedChart.data.datasets[0].data.shift();
             speedChart.data.datasets[0].data.push(currentSpeed);
 
-            // Adjust max scale dynamically if needed
+            // Adjust max scale dynamically
             const maxVal = Math.max(...speedChart.data.datasets[0].data);
             if (maxVal > speedChart.options.scales.y.suggestedMax) {
                 speedChart.options.scales.y.suggestedMax = maxVal * 1.2;
             }
 
-            speedChart.update('none'); // Update without animation for smoothness
+            speedChart.update('none');
         } catch (e) {
             console.error("Failed to update speed graph:", e);
         }

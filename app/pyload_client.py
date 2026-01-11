@@ -42,15 +42,20 @@ class PyLoadClient:
         """Add a download to pyLoad"""
         try:
             pkg_name = package_name or filename or "Fshare Download"
+            # Prefix package name with category for internal tracking
+            if category and category != "Uncategorized":
+                pkg_name = f"[{category}] {pkg_name}"
+                
             response = self.session.post(
                 f"{self.base_url}/api/add_package",
                 json={
                     "name": pkg_name,
-                    "links": [url],
-                    "category": category
+                    "links": [url]
                 },
                 timeout=10
             )
+            if response.status_code != 200:
+                logger.error(f"❌ pyLoad add_package failed: {response.status_code} - {response.text}")
             return response.status_code == 200
         except Exception as e:
             logger.error(f"❌ Error adding download to pyLoad: {e}")
@@ -125,6 +130,12 @@ class PyLoadClient:
                         else:
                             progress = 0
 
+                    # Parse category from package name if prefixed
+                    package_name = package.get('name', '')
+                    category = "Uncategorized"
+                    if package_name.startswith("[") and "]" in package_name:
+                        category = package_name[1:package_name.find("]")]
+
                     formatted_queue.append({
                         "fid": fid,
                         "name": link.get('name'),
@@ -137,7 +148,7 @@ class PyLoadClient:
                         "size": link.get('format_size', '0 B'),
                         "size_bytes": link.get('size', 0),
                         "progress": progress,
-                        "category": package.get('category', 'Default')
+                        "category": category
                     })
             
             return formatted_queue
@@ -158,6 +169,33 @@ class PyLoadClient:
         except Exception as e:
             logger.error(f"Error getting status: {e}")
             return None
+
+    def pause_server(self) -> bool:
+        """Pause pyLoad server"""
+        try:
+            response = self.session.get(f"{self.base_url}/api/pause", timeout=5)
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"Error pausing server: {e}")
+            return False
+
+    def unpause_server(self) -> bool:
+        """Unpause pyLoad server"""
+        try:
+            response = self.session.get(f"{self.base_url}/api/unpause", timeout=5)
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"Error unpausing server: {e}")
+            return False
+
+    def stop_all(self) -> bool:
+        """Stop all active downloads"""
+        try:
+            response = self.session.get(f"{self.base_url}/api/stop_all_downloads", timeout=5)
+            return response.status_code == 200
+        except Exception as e:
+            logger.error(f"Error stopping all: {e}")
+            return False
 
     def format_speed(self, speed_bytes: float) -> str:
         """Format speed bytes/s to human readable"""

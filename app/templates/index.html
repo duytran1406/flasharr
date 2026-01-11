@@ -5,8 +5,8 @@
 {% block content %}
 <!-- Status Grid -->
 <div class="dashboard-grid">
-    <!-- Network Graph Card -->
-    <div class="service-card">
+    <!-- Network Traffic Card -->
+    <div class="service-card" id="network-widget">
         <div class="service-header">
             <div class="service-icon">
                 <span class="material-icons">insights</span>
@@ -32,7 +32,7 @@
     </div>
 
     <!-- Downloader Card -->
-    <div class="service-card">
+    <div class="service-card" id="downloader-widget">
         <div class="service-header">
             <div class="service-icon">
                 <span class="material-icons">cloud_download</span>
@@ -58,7 +58,7 @@
     </div>
 
     <!-- Search Engine Card -->
-    <div class="service-card">
+    <div class="service-card" id="indexer-widget">
         <div class="service-header">
             <div class="service-icon">
                 <span class="material-icons">manage_search</span>
@@ -82,7 +82,7 @@
 </div>
 
 <!-- Download Manager -->
-<div class="service-card" style="margin-top: 1.5rem;">
+<div class="service-card" id="active-downloads-widget" style="margin-top: 1.5rem;">
     <div class="service-header">
         <div class="service-icon">
             <span class="material-icons">download</span>

@@ -48,6 +48,11 @@
                     <span class="nav-icon material-icons">settings_applications</span>
                     <span class="nav-text">Settings</span>
                 </a>
+                <a href="/tutorial" class="nav-item {% if request.path == '/tutorial' %}active{% endif %}"
+                    title="Tutorial">
+                    <span class="nav-icon material-icons">help_outline</span>
+                    <span class="nav-text">Tutorial</span>
+                </a>
             </nav>
         </aside>
 
@@ -70,6 +75,9 @@
             <div class="content-area">
                 {% block content %}{% endblock %}
             </div>
+
+            <!-- Version Label -->
+            <div class="version-label">v{{ version }}</div>
         </main>
     </div>
 

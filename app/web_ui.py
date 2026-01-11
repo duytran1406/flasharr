@@ -55,6 +55,13 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     web_ui_bp = Blueprint('web_ui', __name__, 
                           template_folder='templates')
     
+    # Load version
+    try:
+        with open('VERSION', 'r') as f:
+            app_version = f.read().strip()
+    except:
+        app_version = '0.0.0'
+    
     # Persistent stats (mocked for this session)
     boot_time = time.time()
     
@@ -65,17 +72,22 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     def index():
         """Dashboard page"""
         pyload_status = pyload_client.logged_in if hasattr(pyload_client, 'logged_in') else False
-        return render_template('index.html', pyload_status=pyload_status)
+        return render_template('index.html', pyload_status=pyload_status, version=app_version)
     
     @web_ui_bp.route('/search')
     def search_page():
         """Search interface page"""
-        return render_template('search.html')
+        return render_template('search.html', version=app_version)
     
     @web_ui_bp.route('/downloads')
     def downloads_page():
         """Downloads page"""
-        return render_template('downloads.html')
+        return render_template('downloads.html', version=app_version)
+    
+    @web_ui_bp.route('/settings')
+    def settings_page():
+        """Settings page"""
+        return render_template('settings.html', version=app_version)
     
     # API Endpoints
     
@@ -142,6 +154,18 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
         except Exception as e:
             logger.error(f"Download API error: {e}")
             return jsonify({'success': False, 'error': str(e)}), 500
+
+    @web_ui_bp.route('/tutorial')
+    def tutorial():
+        """Render tutorial page"""
+        try:
+            doc_path = os.path.join(os.path.dirname(__file__), 'static', 'docs', 'Tutorial.md')
+            with open(doc_path, 'r') as f:
+                content = f.read()
+            return render_template('tutorial.html', content=content, version=app_version)
+        except Exception as e:
+            logger.error(f"Error loading tutorial: {e}")
+            return render_template('tutorial.html', content="# Tutorial\nGuide coming soon.", version=app_version)
     
     @web_ui_bp.route('/api/downloads')
     def api_downloads():
@@ -158,7 +182,8 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
         """Get statistics for the homepage-style dashboard"""
         try:
             # Get container uptime from Docker
-            container_uptime = "0s"
+            container_uptime = str(int(time.time() - boot_time))
+            """
             try:
                 import subprocess
                 from datetime import datetime
@@ -174,6 +199,7 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             except Exception as e:
                 logger.warning(f"Failed to get container uptime: {e}")
                 container_uptime = str(int(time.time() - boot_time))  # Fallback
+            """
 
             # pyLoad stats
             active_downloads = 0
@@ -339,28 +365,19 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
     @web_ui_bp.route('/api/downloads/start_all', methods=['POST'])
     def api_start_all():
         """Unpause pyLoad server - resumes all downloads"""
-        try:
-            response = pyload_client.session.get(f"{pyload_client.base_url}/api/unpause", timeout=5)
-            return jsonify({'success': response.status_code == 200})
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
+        success = pyload_client.unpause_server()
+        return jsonify({'success': success})
 
     @web_ui_bp.route('/api/downloads/pause_all', methods=['POST'])
     def api_pause_all():
         """Pause pyLoad server - pauses all downloads"""
-        try:
-            response = pyload_client.session.get(f"{pyload_client.base_url}/api/pause", timeout=5)
-            return jsonify({'success': response.status_code == 200})
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
+        success = pyload_client.pause_server()
+        return jsonify({'success': success})
 
     @web_ui_bp.route('/api/downloads/stop_all', methods=['POST'])
     def api_stop_all():
         """Stop all active downloads"""
-        try:
-            response = pyload_client.session.get(f"{pyload_client.base_url}/api/stop_all_downloads", timeout=5)
-            return jsonify({'success': response.status_code == 200})
-        except Exception as e:
-            return jsonify({'success': False, 'error': str(e)}), 500
+        success = pyload_client.stop_all()
+        return jsonify({'success': success})
     
     return web_ui_bp

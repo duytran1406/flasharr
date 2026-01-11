@@ -343,7 +343,7 @@ class FshareBridge {
                 // If we are on the dashboard, only show top 5
                 const dashboardContainer = document.getElementById('download-manager-list');
                 if (dashboardContainer) {
-                    this.renderDashboardDownloads(this.downloads.slice(0, 5));
+                    this.renderDashboardDownloads(this.downloads.slice(0, 3));
                 }
 
                 // If we are on the downloads page, show all and handle search/pagination
@@ -460,7 +460,7 @@ class FshareBridge {
             this.renderFullDownloads(this.getPagedDownloads(filtered));
         }
         if (document.getElementById('download-manager-list')) {
-            this.renderDashboardDownloads(this.downloads.slice(0, 5));
+            this.renderDashboardDownloads(this.downloads.slice(0, 3));
         }
     }
 
@@ -860,6 +860,84 @@ class FshareBridge {
             sidebar.classList.toggle('collapsed');
             const isCollapsed = sidebar.classList.contains('collapsed');
             localStorage.setItem('sidebar-collapsed', isCollapsed);
+        }
+    }
+    // Modal Handling
+    showAddModal() {
+        const modal = document.getElementById('add-link-modal');
+        if (modal) {
+            modal.style.display = 'flex';
+            document.getElementById('manual-link-input').focus();
+        }
+    }
+
+    hideAddModal() {
+        const modal = document.getElementById('add-link-modal');
+        if (modal) {
+            modal.style.display = 'none';
+            document.getElementById('manual-link-input').value = '';
+            document.getElementById('modal-error-msg').style.display = 'none';
+        }
+    }
+
+    async submitManualLink() {
+        const input = document.getElementById('manual-link-input');
+        const errorMsg = document.getElementById('modal-error-msg');
+        const errorText = document.getElementById('error-text');
+        const btn = document.getElementById('submit-link-btn');
+        const url = input.value.trim();
+
+        if (!url) return;
+
+        // Basic validation
+        if (!url.includes('fshare.vn/file/')) {
+            errorText.textContent = "Please enter a valid Fshare file link.";
+            errorMsg.style.display = 'block';
+            return;
+        }
+
+        try {
+            btn.disabled = true;
+            btn.textContent = "ADDING...";
+
+            const response = await fetch('/api/download', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url, name: "Manual Upload" })
+            });
+
+            const result = await response.json();
+            if (result.success) {
+                this.hideAddModal();
+                this.loadDownloads();
+            } else {
+                errorText.textContent = result.error || "Failed to add download.";
+                errorMsg.style.display = 'block';
+            }
+        } catch (e) {
+            errorText.textContent = "Network error. Try again.";
+            errorMsg.style.display = 'block';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "ADD TO QUEUE";
+        }
+    }
+
+    // Global Action Wrappers
+    async startAllDownloads() {
+        await fetch('/api/downloads/start_all', { method: 'POST' });
+        this.loadDownloads();
+    }
+
+    async pauseAllDownloads() {
+        await fetch('/api/downloads/pause_all', { method: 'POST' });
+        this.loadDownloads();
+    }
+
+    async stopAllDownloads() {
+        if (confirm("Are you sure you want to stop all active downloads?")) {
+            await fetch('/api/downloads/stop_all', { method: 'POST' });
+            this.loadDownloads();
         }
     }
 }
