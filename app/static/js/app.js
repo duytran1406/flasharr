@@ -152,6 +152,18 @@ class FshareBridge {
 
     init() {
         this.setupEventListeners();
+
+        // Restore from storage so UI isn't empty on load
+        const storedStats = localStorage.getItem('fshare_stats');
+        if (storedStats) {
+            try { this.stats = JSON.parse(storedStats); } catch (e) { }
+        }
+
+        const storedDownloads = localStorage.getItem('fshare_downloads');
+        if (storedDownloads) {
+            try { this.downloads = JSON.parse(storedDownloads); } catch (e) { }
+        }
+
         this.wakeupDashboardChart();
         this.initSidebar();
 
@@ -160,6 +172,18 @@ class FshareBridge {
 
         // Update ETA countdown every second (local UI update, no API)
         setInterval(() => this.updateETACountdown(), 1000);
+    }
+
+    // Called when navigating BACK to dashboard via SPA
+    wakeupDashboard() {
+        console.log('Wakeup Dashboard (SPA)');
+        // Refresh from storage immediately
+        this.updateDashboard();
+        this.applySorting();
+        this.wakeupDashboardChart();
+
+        // Ensure polling logic is checked
+        this.runFullPollCheck();
     }
 
     // New centralized method to start polling
