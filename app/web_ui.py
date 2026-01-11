@@ -193,8 +193,18 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             return '1080P'
         elif '720p' in filename_lower:
             return '720P'
+        elif 'bluray' in filename_lower or 'remux' in filename_lower or 'bdrip' in filename_lower:
+            return 'BluRay'
+        elif 'web-dl' in filename_lower or 'webdl' in filename_lower or 'webrip' in filename_lower:
+            return 'WEB-DL'
+        elif 'hdtv' in filename_lower or 'pdtv' in filename_lower:
+            return 'HDTV'
+        elif 'hdr' in filename_lower or 'dolby vision' in filename_lower or 'dv' in filename_lower:
+            return 'HDR'
+        elif '480p' in filename_lower or 'dvd' in filename_lower or 'sd' in filename_lower:
+            return 'SD'
         else:
-            return '1080P'  # Default
+            return '1080P'  # Default fallback
     
     @web_ui_bp.route('/api/autocomplete')
     def api_autocomplete():
