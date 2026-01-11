@@ -62,7 +62,8 @@ class FilenameNormalizer:
     def __init__(self):
         # Compile regex patterns for efficiency
         self.quality_pattern = self._build_quality_pattern()
-        self.se_pattern = re.compile('|'.join(self.SE_PATTERNS), re.IGNORECASE)
+        # Compile patterns individually
+        self.se_patterns = [re.compile(p, re.IGNORECASE) for p in self.SE_PATTERNS]
     
     def _build_quality_pattern(self) -> re.Pattern:
         """Build a regex pattern to match all quality keywords"""
@@ -86,7 +87,16 @@ class FilenameNormalizer:
         name, ext = self._split_extension(filename)
         
         # Find season/episode marker
-        se_match = self.se_pattern.search(name)
+        se_match = None
+        matched_pattern_index = -1
+        
+        for i, pattern in enumerate(self.se_patterns):
+            match = pattern.search(name)
+            if match:
+                se_match = match
+                matched_pattern_index = i
+                break
+        
         if not se_match:
             # No season/episode found, return as-is (movie or unknown)
             return ParsedFilename(
@@ -97,13 +107,12 @@ class FilenameNormalizer:
             )
         
         # Extract season and episode
-        # Extract season and episode
-        if se_match.lastindex == 2:
-            # Standard SxxExx pattern
+        if matched_pattern_index < 2:
+            # Standard SxxExx pattern (index 0 and 1 have 2 groups)
             season = int(se_match.group(1))
             episode = int(se_match.group(2))
         else:
-            # Episode only pattern (default to S01)
+            # Episode only pattern (index 2 and 3 have 1 group)
             season = 1
             episode = int(se_match.group(1))
             
