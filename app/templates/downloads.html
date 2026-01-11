@@ -174,7 +174,12 @@
     function wakeupSpeedChart() {
         const ctx = document.getElementById('downloads-speed-graph');
         if (ctx) {
-            // Only initialize if not already done
+            // SPA Navigation check: if chart exists but linked to old canvas, destroy it
+            if (speedChart && (speedChart.canvas !== ctx || !document.body.contains(speedChart.canvas))) {
+                speedChart.destroy();
+                speedChart = null;
+            }
+
             if (!speedChart) {
                 initSpeedGraph();
             }
@@ -184,11 +189,7 @@
         }
     }
 
-    function hibernateSpeedChart() {
-        speedChartActive = false;
-    }
-
-    document.addEventListener('DOMContentLoaded', () => {
+    function initDownloadsPage() {
         if (bridge) {
             bridge.currentPage = 1;
             bridge.itemsPerPage = 6;
@@ -198,15 +199,19 @@
             wakeupSpeedChart();
         }
 
+        // Clean up any existing intervals to prevent leaks on tab switching
+        if (window.downloadsRefreshInterval) clearInterval(window.downloadsRefreshInterval);
+        if (window.speedGraphInterval) clearInterval(window.speedGraphInterval);
+
         // Download list refresh (2000ms)
-        setInterval(() => {
+        window.downloadsRefreshInterval = setInterval(() => {
             if (bridge) {
                 bridge.loadDownloads();
             }
         }, 2000);
 
         // Speed graph refresh (250ms)
-        setInterval(() => {
+        window.speedGraphInterval = setInterval(() => {
             // Try to wake up if not active
             if (!speedChartActive) {
                 wakeupSpeedChart();
@@ -215,7 +220,10 @@
                 updateSpeedGraph();
             }
         }, 250);
-    });
+    }
+
+    // Initialize immediately (handles both cold load and SPA navigation eval)
+    initDownloadsPage();
 
     function initSpeedGraph() {
         const ctx = document.getElementById('downloads-speed-graph');

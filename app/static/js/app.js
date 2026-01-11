@@ -163,6 +163,12 @@ class FshareBridge {
     wakeupDashboardChart() {
         const canvas = document.getElementById('network-graph');
         if (canvas) {
+            // Detection for SPA navigation: if the instance exists but points to a different/detached canvas, recreate it
+            if (this.networkGraph && (this.networkGraph.canvas !== canvas || !document.body.contains(this.networkGraph.canvas))) {
+                console.log('Re-initializing Network Graph (Canvas changed)');
+                this.networkGraph = null;
+            }
+
             if (!this.networkGraph) {
                 this.networkGraph = new NetworkGraph('network-graph');
             }
