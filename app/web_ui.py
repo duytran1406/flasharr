@@ -126,8 +126,8 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
                 
                 # Detect vietsub/vietdub
                 name_lower = raw_name.lower()
-                has_vietsub = any(marker in name_lower for marker in ['vietsub', 'tvp'])
-                has_vietdub = any(marker in name_lower for marker in ['vietdub', 'tmpđ', 'thuyết minh', 'lồng tiếng'])
+                has_vietsub = any(marker in name_lower for marker in ['vietsub', 'tvp', 'vie.sub', 'phụ đề', 'phu de'])
+                has_vietdub = any(marker in name_lower for marker in ['vietdub', 'tmpđ', 'thuyết minh', 'lồng tiếng', 'vie.dub'])
                 
                 formatted_results.append({
                     'name': parsed.title,  # Use parsed title

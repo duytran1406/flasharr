@@ -125,7 +125,7 @@ class TimFshareClient:
                 score += 10
             
             # Vietnamese content boost
-            vietnamese_markers = ['vietsub', 'thuyết minh', 'thuyet minh', 'lồng tiếng', 'long tieng']
+            vietnamese_markers = ['vietsub', 'thuyết minh', 'thuyet minh', 'lồng tiếng', 'long tieng', 'vie.dub', 'vie.sub', 'phụ đề', 'phu de']
             if any(marker in name_lower for marker in vietnamese_markers):
                 score += 15
             
