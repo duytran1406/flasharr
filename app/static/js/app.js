@@ -135,7 +135,8 @@ class FshareBridge {
         this.downloads = [];
         this.stats = null;
         this.statsListeners = {};
-        this.isFetchingStats = false;
+        this.downloadsListeners = {}; // New listener group for download list
+        this.isPolling = false;       // Track polling state
         this.sortColumn = null;
         this.sortDirection = 'asc';
         this.networkGraph = null;
@@ -146,47 +147,110 @@ class FshareBridge {
     init() {
         this.setupEventListeners();
         this.wakeupDashboardChart();
-        this.loadDownloads();
-        this.loadSystemLogs();
         this.initSidebar();
 
-        // Start ping-pong stats polling
-        this.startStatsPolling();
+        // Initial fetch to populate data
+        this.runFullPollCheck();
 
-        setInterval(() => this.loadDownloads(), 2000); // Faster download list refresh
-        setInterval(() => this.loadSystemLogs(), 15000);
-
-        // Update ETA countdown every second
+        // Update ETA countdown every second (local UI update, no API)
         setInterval(() => this.updateETACountdown(), 1000);
     }
 
-    async startStatsPolling() {
-        if (this.isFetchingStats) return;
-        this.isFetchingStats = true;
+    // New centralized method to start polling
+    startConditionalPolling() {
+        if (this.isPolling) return;
 
-        const poll = async () => {
-            try {
-                const response = await fetch('/api/stats');
-                const data = await response.json();
+        console.log('🚀 Starting conditional polling loop...');
+        this.isPolling = true;
+        this.poll();
+    }
 
-                if (data) {
-                    this.stats = data;
-                    // Notify listeners
-                    Object.values(this.statsListeners).forEach(listener => listener(data));
+    async poll() {
+        if (!this.isPolling) return;
 
-                    // Update internal dashboard & graph
-                    this.updateDashboard();
-                    this.updateNetworkGraph();
-                }
-            } catch (error) {
-                console.error('Stats polling error:', error);
-            } finally {
-                // Ping-pong: schedule next poll only after this one finishes
-                setTimeout(poll, 250);
+        try {
+            // 1. Fetch Stats
+            await this.fetchStats();
+
+            // 2. Fetch Downloads
+            const hasActiveDownloads = await this.fetchDownloads();
+
+            // 3. Conditional Loop Logic
+            if (hasActiveDownloads) {
+                // If active, keep polling (ping-pong)
+                setTimeout(() => this.poll(), 250);
+            } else {
+                // If idle, stop polling
+                console.log('💤 No active downloads. Polling paused.');
+                this.isPolling = false;
             }
-        };
+        } catch (error) {
+            console.error('Polling error:', error);
+            // Retry on error after delay to avoid crash loops
+            setTimeout(() => this.poll(), 2000);
+        }
+    }
 
-        poll();
+    // Helper: Single run wrapper for manual actions/init
+    async runFullPollCheck() {
+        try {
+            await this.fetchStats();
+            const hasActive = await this.fetchDownloads();
+
+            // If we found active downloads during this manual check, ensure polling is running
+            if (hasActive) {
+                this.startConditionalPolling();
+            }
+        } catch (e) {
+            console.error('Initial check failed:', e);
+        }
+    }
+
+    async fetchStats() {
+        try {
+            const response = await fetch('/api/stats');
+            const data = await response.json();
+
+            if (data) {
+                this.stats = data;
+                Object.values(this.statsListeners).forEach(listener => listener(data));
+                this.updateDashboard();
+                this.updateNetworkGraph();
+            }
+        } catch (e) {
+            console.error('Fetch stats failed:', e);
+            throw e;
+        }
+    }
+
+    async fetchDownloads() {
+        try {
+            const response = await fetch('/api/downloads');
+            const data = await response.json();
+
+            if (data.downloads) {
+                this.downloads = data.downloads;
+
+                // Process data (Sort)
+                this.applySorting();
+
+                // Notify UI
+                Object.values(this.downloadsListeners).forEach(listener => listener(this.downloads));
+
+                // Check for "Running" status
+                return this.downloads.some(d => d.status === 'Running');
+            }
+        } catch (e) {
+            console.error('Fetch downloads failed:', e);
+            throw e;
+        }
+        return false;
+    }
+
+    // Listener registration
+    onDownloads(name, callback) {
+        this.downloadsListeners[name] = callback;
+        if (this.downloads && this.downloads.length > 0) callback(this.downloads);
     }
 
     // Subscribe to stats updates
@@ -390,67 +454,10 @@ class FshareBridge {
         window.location.href = `/search?q=${encodeURIComponent(query)}`;
     }
 
-    // Download Manager
+    // Download Manager - Legacy loadDownloads method replaced by fetchDownloads
     async loadDownloads() {
-        try {
-            const response = await fetch('/api/downloads');
-            const data = await response.json();
-
-            if (data.downloads) {
-                this.downloads = data.downloads;
-
-                // Always apply priority sort: incomplete (p<100) first, sorted ascending
-                this.downloads.sort((a, b) => {
-                    const aIncomplete = a.progress < 100;
-                    const bIncomplete = b.progress < 100;
-
-                    if (aIncomplete && !bIncomplete) return -1;
-                    if (!aIncomplete && bIncomplete) return 1;
-
-                    if (aIncomplete && bIncomplete) {
-                        return a.progress - b.progress;
-                    }
-
-                    // For others, use sortColumn if set
-                    if (this.sortColumn) {
-                        let aVal, bVal;
-                        switch (this.sortColumn) {
-                            case 'name': aVal = a.name.toLowerCase(); bVal = b.name.toLowerCase(); break;
-                            case 'category': aVal = (a.category || '').toLowerCase(); bVal = (b.category || '').toLowerCase(); break;
-                            case 'size': aVal = a.size_bytes || 0; bVal = b.size_bytes || 0; break;
-                            case 'speed': aVal = a.speed_raw || 0; bVal = b.speed_raw || 0; break;
-                            case 'eta': aVal = a.eta_seconds || 0; bVal = b.eta_seconds || 0; break;
-                            case 'status': aVal = a.status.toLowerCase(); bVal = b.status.toLowerCase(); break;
-                            case 'progress': aVal = a.progress || 0; bVal = b.progress || 0; break;
-                            default: return 0;
-                        }
-                        if (aVal < bVal) return this.sortDirection === 'asc' ? -1 : 1;
-                        if (aVal > bVal) return this.sortDirection === 'asc' ? 1 : -1;
-                    }
-                    return 0;
-                });
-
-                if (this.sortColumn) {
-                    this.updateSortIcons(this.sortColumn);
-                }
-
-                // If we are on the dashboard, only show top 5
-                const dashboardContainer = document.getElementById('download-manager-list');
-                if (dashboardContainer) {
-                    this.renderDashboardDownloads(this.downloads.slice(0, 3));
-                }
-
-                // If we are on the downloads page, show all and handle search/pagination
-                const downloadsPageContainer = document.getElementById('downloads-full-list');
-                if (downloadsPageContainer) {
-                    const filtered = this.getFilteredDownloads();
-                    this.updatePagination(filtered.length);
-                    this.renderFullDownloads(this.getPagedDownloads(filtered));
-                }
-            }
-        } catch (error) {
-            console.error('Load downloads error:', error);
-        }
+        // Wrapper for compatibility with old calls, but routed through new system
+        await this.runFullPollCheck();
     }
 
     getFilteredDownloads() {
@@ -515,18 +522,10 @@ class FshareBridge {
         container.innerHTML = downloads.map(d => this.createFullDownloadRow(d)).join('');
     }
 
-    sortDownloads(column) {
-        if (!this.downloads || this.downloads.length === 0) return;
+    // Sorting helper extracted from old loadDownloads
+    applySorting() {
+        if (!this.downloads) return;
 
-        // Toggle sort direction
-        if (this.sortColumn === column) {
-            this.sortDirection = this.sortDirection === 'asc' ? 'desc' : 'asc';
-        } else {
-            this.sortColumn = column;
-            this.sortDirection = 'asc';
-        }
-
-        // Apply sort with priority for incomplete items
         this.downloads.sort((a, b) => {
             const aIncomplete = a.progress < 100;
             const bIncomplete = b.progress < 100;
@@ -535,36 +534,27 @@ class FshareBridge {
             if (!aIncomplete && bIncomplete) return 1;
 
             if (aIncomplete && bIncomplete) {
-                // If both incomplete, sort ascending by progress
                 return a.progress - b.progress;
             }
 
-            // Tie breaker for non-in-progress items using current sortColumn
-            let aVal, bVal;
-            switch (column) {
-                case 'name': aVal = a.name.toLowerCase(); bVal = b.name.toLowerCase(); break;
-                case 'category': aVal = (a.category || '').toLowerCase(); bVal = (b.category || '').toLowerCase(); break;
-                case 'size': aVal = a.size_bytes || 0; bVal = b.size_bytes || 0; break;
-                case 'speed': aVal = a.speed_raw || 0; bVal = b.speed_raw || 0; break;
-                case 'eta': aVal = a.eta_seconds || 0; bVal = b.eta_seconds || 0; break;
-                case 'status': aVal = a.status.toLowerCase(); bVal = b.status.toLowerCase(); break;
-                case 'progress': aVal = a.progress || 0; bVal = b.progress || 0; break;
-                default: return 0;
+            if (this.sortColumn) {
+                let aVal, bVal;
+                switch (this.sortColumn) {
+                    case 'name': aVal = a.name.toLowerCase(); bVal = b.name.toLowerCase(); break;
+                    case 'category': aVal = (a.category || '').toLowerCase(); bVal = (b.category || '').toLowerCase(); break;
+                    case 'size': aVal = a.size_bytes || 0; bVal = b.size_bytes || 0; break;
+                    case 'speed': aVal = a.speed_raw || 0; bVal = b.speed_raw || 0; break;
+                    case 'eta': aVal = a.eta_seconds || 0; bVal = b.eta_seconds || 0; break;
+                    case 'status': aVal = a.status.toLowerCase(); bVal = b.status.toLowerCase(); break;
+                    case 'progress': aVal = a.progress || 0; bVal = b.progress || 0; break;
+                    default: return 0;
+                }
+                if (aVal < bVal) return this.sortDirection === 'asc' ? -1 : 1;
+                if (aVal > bVal) return this.sortDirection === 'asc' ? 1 : -1;
+                return 0;
             }
-
-            if (aVal < bVal) return this.sortDirection === 'asc' ? -1 : 1;
-            if (aVal > bVal) return this.sortDirection === 'asc' ? 1 : -1;
             return 0;
         });
-
-        this.updateSortIcons(column);
-
-        // Immediate re-render
-        if (document.getElementById('downloads-full-list')) {
-            const filtered = this.getFilteredDownloads();
-            this.updatePagination(filtered.length);
-            this.renderFullDownloads(this.getPagedDownloads(filtered));
-        }
         if (document.getElementById('download-manager-list')) {
             this.renderDashboardDownloads(this.downloads.slice(0, 3));
         }
@@ -656,21 +646,21 @@ class FshareBridge {
     async startAllDownloads() {
         if (confirm('Resume all paused downloads?')) {
             const resp = await fetch('/api/downloads/start_all', { method: 'POST' });
-            if ((await resp.json()).success) this.loadDownloads();
+            if ((await resp.json()).success) await this.runFullPollCheck();
         }
     }
 
     async pauseAllDownloads() {
         if (confirm('Pause all active downloads?')) {
             const resp = await fetch('/api/downloads/pause_all', { method: 'POST' });
-            if ((await resp.json()).success) this.loadDownloads();
+            if ((await resp.json()).success) await this.runFullPollCheck();
         }
     }
 
     async stopAllDownloads() {
         if (confirm('Stop all active downloads?')) {
             const resp = await fetch('/api/downloads/stop_all', { method: 'POST' });
-            if ((await resp.json()).success) this.loadDownloads();
+            if ((await resp.json()).success) await this.runFullPollCheck();
         }
     }
 
@@ -727,7 +717,7 @@ class FshareBridge {
             const data = await response.json();
             if (data.success) {
                 console.log('Download toggled:', fid);
-                this.loadDownloads();
+                await this.runFullPollCheck();
             } else {
                 console.error('Failed to toggle download:', data.error);
             }
@@ -747,7 +737,7 @@ class FshareBridge {
             const data = await response.json();
             if (data.success) {
                 console.log('Download deleted:', fid);
-                this.loadDownloads();
+                await this.runFullPollCheck();
             } else {
                 console.error('Failed to delete download:', data.error);
             }
@@ -879,7 +869,7 @@ class FshareBridge {
 
             if (data.success) {
                 alert(`✅ Added to queue: ${data.normalized}`);
-                this.loadDownloads();
+                await this.runFullPollCheck();
             } else {
                 alert('❌ Failed to add download');
             }
@@ -1035,7 +1025,7 @@ class FshareBridge {
     // Global Action Wrappers
     async startAllDownloads() {
         await fetch('/api/downloads/start_all', { method: 'POST' });
-        this.loadDownloads();
+        await this.runFullPollCheck();
     }
 
     async pauseAllDownloads() {

@@ -191,20 +191,29 @@
 
     function initDownloadsPage() {
         if (bridge) {
+            // Initial call - routed through new system
+            bridge.loadDownloads();
+
             bridge.currentPage = 1;
             bridge.itemsPerPage = 6;
-            bridge.loadDownloads();
 
             // Initialize speed graph
             wakeupSpeedChart();
         }
 
-        // Download list refresh (2000ms)
-        window.downloadsRefreshInterval = setInterval(() => {
-            if (bridge) {
-                bridge.loadDownloads();
-            }
-        }, 2000);
+        // No more local intervals!
+        // Subscribe to bridge events for list updates
+        if (bridge) {
+            bridge.onDownloads('downloads-page-list', (downloads) => {
+                // Sorting and filtering is handled by bridge for internal state
+                // But pagination is UI specific, so we might need to refresh view
+                if (document.getElementById('downloads-full-list')) {
+                    const filtered = bridge.getFilteredDownloads();
+                    bridge.updatePagination(filtered.length);
+                    bridge.renderFullDownloads(bridge.getPagedDownloads(filtered));
+                }
+            });
+        }
 
         // Subscribe to bridge stats for speed graph updates
         if (bridge) {
