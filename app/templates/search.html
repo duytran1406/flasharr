@@ -69,16 +69,20 @@
     </div>
 
     <!-- Pagination Controls -->
-    <div class="pagination-container" id="pagination-container" style="display: none; margin-top: 2rem;">
-        <button class="pagination-btn" id="prev-page" disabled>
-            <span class="material-icons">chevron_left</span>
-            Previous
-        </button>
-        <span class="pagination-info" id="pagination-info">Page 1 of 1</span>
-        <button class="pagination-btn" id="next-page" disabled>
-            Next
-            <span class="material-icons">chevron_right</span>
-        </button>
+    <!-- Pagination Controls -->
+    <div id="pagination-container" class="pagination-container"
+        style="display: none; align-items: center; justify-content: flex-end; gap: 1rem; padding: 1rem 0; margin-top: 1rem; border-top: 1px solid rgba(255,255,255,0.05);">
+        <span id="pagination-info" style="font-size: 0.85rem; color: var(--text-muted);">Showing 0-0 of 0</span>
+        <div style="display: flex; gap: 0.5rem;">
+            <button id="prev-page" class="icon-btn" disabled
+                style="border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px; background: transparent; color: #e2e8f0; cursor: pointer; transition: all 0.2s;">
+                <span class="material-icons" style="font-size: 18px;">chevron_left</span>
+            </button>
+            <button id="next-page" class="icon-btn" disabled
+                style="border: 1px solid rgba(255,255,255,0.1); border-radius: 6px; padding: 4px; background: transparent; color: #e2e8f0; cursor: pointer; transition: all 0.2s;">
+                <span class="material-icons" style="font-size: 18px;">chevron_right</span>
+            </button>
+        </div>
     </div>
 </div>
 
@@ -345,9 +349,21 @@
             // Update pagination controls
             if (totalPages > 1) {
                 paginationContainer.style.display = 'flex';
-                paginationInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+
+                // Update info text to "Showing X-Y of Z"
+                const start = startIndex + 1;
+                const end = endIndex;
+                const total = filtered.length;
+                paginationInfo.textContent = `Showing ${start}-${end} of ${total}`;
+
                 prevPageBtn.disabled = currentPage === 1;
                 nextPageBtn.disabled = currentPage === totalPages;
+
+                // Dim disabled buttons
+                prevPageBtn.style.opacity = prevPageBtn.disabled ? '0.3' : '1';
+                nextPageBtn.style.opacity = nextPageBtn.disabled ? '0.3' : '1';
+                prevPageBtn.style.pointerEvents = prevPageBtn.disabled ? 'none' : 'auto';
+                nextPageBtn.style.pointerEvents = nextPageBtn.disabled ? 'none' : 'auto';
             } else {
                 paginationContainer.style.display = 'none';
             }
