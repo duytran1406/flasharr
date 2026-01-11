@@ -4,22 +4,23 @@
 // Network Graph Class
 class NetworkGraph {
     constructor(canvasId) {
-        this.canvas = document.getElementById(canvasId);
-        if (!this.canvas) {
-            console.warn('Network graph canvas not found');
-            return;
-        }
-
-        this.ctx = this.canvas.getContext('2d');
         this.dataPoints = [];
         this.maxDataPoints = 60;
         this.maxSpeed = 0;
         this.peakSpeed = 0;
 
+        // Initialize with zeros
         for (let i = 0; i < this.maxDataPoints; i++) {
             this.dataPoints.push(0);
         }
 
+        this.canvas = document.getElementById(canvasId);
+        if (!this.canvas) {
+            // console.warn('Network graph canvas not found');
+            return;
+        }
+
+        this.ctx = this.canvas.getContext('2d');
         this.resize();
         window.addEventListener('resize', () => this.resize());
         this.draw();
@@ -41,6 +42,8 @@ class NetworkGraph {
     }
 
     addDataPoint(speedBytes) {
+        if (!this.canvas) return;
+
         this.dataPoints.push(speedBytes);
         if (this.dataPoints.length > this.maxDataPoints) {
             this.dataPoints.shift();
