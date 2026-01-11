@@ -98,6 +98,78 @@
         }
     </script>
     {% block scripts %}{% endblock %}
+
+    <script>
+        // Seamless tab navigation
+        (function () {
+            const navItems = document.querySelectorAll('.nav-item');
+            const contentArea = document.querySelector('.content-area');
+            const header = document.querySelector('.header');
+
+            // Intercept navigation clicks
+            navItems.forEach(item => {
+                item.addEventListener('click', async (e) => {
+                    e.preventDefault();
+                    const url = item.getAttribute('href');
+
+                    // Don't reload if already on this page
+                    if (window.location.pathname === url) return;
+
+                    // Update active state
+                    navItems.forEach(nav => nav.classList.remove('active'));
+                    item.classList.add('active');
+
+                    // Fetch and load new content
+                    try {
+                        const response = await fetch(url);
+                        const html = await response.text();
+
+                        // Parse the response
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(html, 'text/html');
+
+                        // Update content area
+                        const newContent = doc.querySelector('.content-area');
+                        if (newContent) {
+                            contentArea.innerHTML = newContent.innerHTML;
+                        }
+
+                        // Update header
+                        const newHeader = doc.querySelector('.header');
+                        if (newHeader) {
+                            header.innerHTML = newHeader.innerHTML;
+                        }
+
+                        // Execute any scripts in the new content
+                        const scripts = doc.querySelectorAll('script');
+                        scripts.forEach(script => {
+                            if (script.textContent) {
+                                eval(script.textContent);
+                            }
+                        });
+
+                        // Update browser history
+                        window.history.pushState({}, '', url);
+
+                        // Update page title
+                        const newTitle = doc.querySelector('title');
+                        if (newTitle) {
+                            document.title = newTitle.textContent;
+                        }
+                    } catch (error) {
+                        console.error('Navigation error:', error);
+                        // Fallback to normal navigation
+                        window.location.href = url;
+                    }
+                });
+            });
+
+            // Handle browser back/forward buttons
+            window.addEventListener('popstate', () => {
+                window.location.reload();
+            });
+        })();
+    </script>
 </body>
 
 </html>
