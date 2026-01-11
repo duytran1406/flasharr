@@ -130,7 +130,10 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
                     'fcode': result.get('fcode', ''),
                     'quality': quality_badge,
                     'vietsub': has_vietsub,
-                    'vietdub': has_vietdub
+                    'vietdub': has_vietdub,
+                    'is_series': parsed.is_series,
+                    'season': parsed.season,
+                    'episode': parsed.episode
                 })
             return jsonify({'results': formatted_results})
         except Exception as e:

@@ -295,12 +295,18 @@
             const hasVietdub = result.vietdub || false;
             const score = result.score || 0;
 
+            const isSeries = result.is_series || false;
+            const season = result.season !== null ? String(result.season).padStart(2, '0') : '';
+            const episode = result.episode !== null ? String(result.episode).padStart(2, '0') : '';
+            const seriesBadge = isSeries ? `S${season}E${episode}` : '';
+
             card.innerHTML = `
             <div class="result-card-header">
                 <h3 class="result-title">${escapeHtml(result.name)}</h3>
                 <span class="quality-badge quality-${qualityBadge.toLowerCase()}">${qualityBadge}</span>
             </div>
             <div class="result-tags">
+                ${isSeries ? `<span class="tag tag-series">${seriesBadge}</span>` : ''}
                 ${hasVietsub ? '<span class="tag tag-vietsub">#VIETSUB</span>' : ''}
                 ${hasVietdub ? '<span class="tag tag-vietdub">#VIETDUB</span>' : ''}
             </div>

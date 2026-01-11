@@ -954,6 +954,7 @@ body {
   flex: 1;
   display: -webkit-box;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -1008,6 +1009,12 @@ body {
   background: rgba(168, 85, 247, 0.15);
   color: #a855f7;
   border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.tag-series {
+  background: rgba(236, 72, 153, 0.15);
+  color: #ec4899;
+  border: 1px solid rgba(236, 72, 153, 0.3);
 }
 
 .result-meta {
