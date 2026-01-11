@@ -67,6 +67,19 @@
             <span class="empty-hint">Try different keywords or filters</span>
         </div>
     </div>
+
+    <!-- Pagination Controls -->
+    <div class="pagination-container" id="pagination-container" style="display: none; margin-top: 2rem;">
+        <button class="pagination-btn" id="prev-page" disabled>
+            <span class="material-icons">chevron_left</span>
+            Previous
+        </button>
+        <span class="pagination-info" id="pagination-info">Page 1 of 1</span>
+        <button class="pagination-btn" id="next-page" disabled>
+            Next
+            <span class="material-icons">chevron_right</span>
+        </button>
+    </div>
 </div>
 
 {% block scripts %}
@@ -90,6 +103,19 @@
             vietdub: false,   // No vietdub filter by default
             sort: 'score'     // Sort by score (relevance) by default
         };
+
+        // Pagination state
+        let allResults = [];
+        let currentPage = 1;
+        let currentView = 'grid'; // 'grid' or 'list'
+        const paginationContainer = document.getElementById('pagination-container');
+        const prevPageBtn = document.getElementById('prev-page');
+        const nextPageBtn = document.getElementById('next-page');
+        const paginationInfo = document.getElementById('pagination-info');
+
+        function getItemsPerPage() {
+            return currentView === 'grid' ? 12 : 6; // 12 for grid (3 rows × 4), 6 for list
+        }
 
         // Show/hide clear button
         searchInput.addEventListener('input', (e) => {
