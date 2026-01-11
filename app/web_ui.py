@@ -408,6 +408,25 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
             logger.error(f"Error loading tutorial: {e}")
             return render_template('tutorial.html', content="# Tutorial\nGuide coming soon.", version=app_version)
     
+    @web_ui_bp.route('/about')
+    def about():
+        """Render about page with README content"""
+        try:
+            # Use README.md as the documentation content
+            root_dir = os.path.dirname(os.path.dirname(__file__))
+            readme_path = os.path.join(root_dir, 'README.md')
+            
+            with open(readme_path, 'r') as f:
+                md_content = f.read()
+            
+            # Convert markdown to HTML
+            import markdown
+            html_content = markdown.markdown(md_content, extensions=['tables', 'fenced_code'])
+            return render_template('about.html', content=html_content, version=app_version)
+        except Exception as e:
+            logger.error(f"Error loading about page: {e}")
+            return render_template('about.html', content="<p>Documentation coming soon.</p>", version=app_version)
+    
     @web_ui_bp.route('/api/downloads')
     def api_downloads():
         """Get download queue from pyLoad"""
