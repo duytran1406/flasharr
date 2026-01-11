@@ -3,8 +3,8 @@
 {% block title %}Search - Fshare Nexus{% endblock %}
 
 {% block custom_header %}
-<div class="search-header-container">
-    <div class="search-input-wrapper">
+<div class="search-header-container" style="display: flex; align-items: center; gap: 1rem; width: 100%;">
+    <div class="search-input-wrapper" style="flex: 1;">
         <span class="material-icons search-icon">search</span>
         <input type="text" id="search-page-input" class="search-query-input"
             placeholder="Search movies, series, or files..." value="{{ query or '' }}" autofocus>
@@ -12,103 +12,43 @@
             <span class="material-icons">close</span>
         </button>
     </div>
+
+    <!-- Filters in header -->
+    <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <button class="filter-btn" data-filter="vietsub">
+            <span class="filter-label">Vietsub</span>
+            <span class="material-icons check-icon">cancel</span>
+        </button>
+
+        <button class="filter-btn" data-filter="vietdub">
+            <span class="filter-label">Vietdub</span>
+            <span class="material-icons check-icon">cancel</span>
+        </button>
+
+        <button class="filter-btn" data-filter="sort">
+            <span class="filter-label">Sort: Relevance</span>
+            <span class="material-icons">expand_more</span>
+        </button>
+        <div class="filter-dropdown" id="sort-dropdown">
+            <label class="filter-option">
+                <input type="radio" name="sort" value="score" checked>
+                <span>Relevance</span>
+            </label>
+            <label class="filter-option">
+                <input type="radio" name="sort" value="size_desc">
+                <span>Size (Largest)</span>
+            </label>
+            <label class="filter-option">
+                <input type="radio" name="sort" value="size_asc">
+                <span>Size (Smallest)</span>
+            </label>
+        </div>
+    </div>
 </div>
 {% endblock %}
 
 {% block content %}
 <div class="search-page-container">
-    <!-- Filter Bar -->
-    <div class="search-filters">
-        <div class="filter-group" style="display: none;">
-            <button class="filter-btn" data-filter="quality">
-                <span class="filter-label">Quality: All</span>
-                <span class="material-icons">expand_more</span>
-            </button>
-            <div class="filter-dropdown" id="quality-dropdown">
-                <label class="filter-option">
-                    <input type="checkbox" value="4k">
-                    <span>4K</span>
-                </label>
-                <label class="filter-option">
-                    <input type="checkbox" value="1080p">
-                    <span>1080P</span>
-                </label>
-                <label class="filter-option">
-                    <input type="checkbox" value="720p">
-                    <span>720P</span>
-                </label>
-                <label class="filter-option">
-                    <input type="checkbox" value="sd">
-                    <span>SD</span>
-                </label>
-                <label class="filter-option">
-                    <input type="checkbox" value="hdr">
-                    <span>HDR</span>
-                </label>
-                <label class="filter-option">
-                    <input type="checkbox" value="bluray">
-                    <span>BluRay</span>
-                </label>
-                <label class="filter-option">
-                    <input type="checkbox" value="web-dl">
-                    <span>WEB-DL</span>
-                </label>
-                <label class="filter-option">
-                    <input type="checkbox" value="hdtv">
-                    <span>HDTV</span>
-                </label>
-            </div>
-        </div>
-
-        <div class="filter-group">
-            <button class="filter-btn" data-filter="vietsub">
-                <span class="filter-label">Vietsub</span>
-                <span class="material-icons check-icon">cancel</span>
-            </button>
-        </div>
-
-        <div class="filter-group">
-            <button class="filter-btn" data-filter="vietdub">
-                <span class="filter-label">Vietdub</span>
-                <span class="material-icons check-icon">cancel</span>
-            </button>
-        </div>
-
-        <div class="filter-group">
-            <button class="filter-btn" data-filter="sort">
-                <span class="filter-label">Sort: Relevance</span>
-                <span class="material-icons">expand_more</span>
-            </button>
-            <div class="filter-dropdown" id="sort-dropdown">
-                <label class="filter-option">
-                    <input type="radio" name="sort" value="score" checked>
-                    <span>Relevance</span>
-                </label>
-                <label class="filter-option">
-                    <input type="radio" name="sort" value="size_desc">
-                    <span>Size (Largest)</span>
-                </label>
-                <label class="filter-option">
-                    <input type="radio" name="sort" value="size_asc">
-                    <span>Size (Smallest)</span>
-                </label>
-                <label class="filter-option">
-                    <input type="radio" name="sort" value="smallest">
-                    <span>Smallest</span>
-                </label>
-            </div>
-        </div>
-
-        <div class="view-toggle">
-            <button class="view-btn active" data-view="grid">
-                <span class="material-icons">grid_view</span>
-            </button>
-            <button class="view-btn" data-view="list">
-                <span class="material-icons">view_list</span>
-            </button>
-        </div>
-    </div>
-
     <!-- Results Count -->
     <div class="results-header">
         <span class="results-count" id="results-count">Found 0 results</span>
