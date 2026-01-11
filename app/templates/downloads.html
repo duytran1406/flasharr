@@ -199,10 +199,6 @@
             wakeupSpeedChart();
         }
 
-        // Clean up any existing intervals to prevent leaks on tab switching
-        if (window.downloadsRefreshInterval) clearInterval(window.downloadsRefreshInterval);
-        if (window.speedGraphInterval) clearInterval(window.speedGraphInterval);
-
         // Download list refresh (2000ms)
         window.downloadsRefreshInterval = setInterval(() => {
             if (bridge) {
@@ -210,16 +206,17 @@
             }
         }, 2000);
 
-        // Speed graph refresh (250ms)
-        window.speedGraphInterval = setInterval(() => {
-            // Try to wake up if not active
-            if (!speedChartActive) {
-                wakeupSpeedChart();
-            }
-            if (speedChartActive) {
-                updateSpeedGraph();
-            }
-        }, 250);
+        // Subscribe to bridge stats for speed graph updates
+        if (bridge) {
+            bridge.onStats('downloads-page', (data) => {
+                if (!speedChartActive) {
+                    wakeupSpeedChart();
+                }
+                if (speedChartActive) {
+                    updateSpeedGraph(data);
+                }
+            });
+        }
     }
 
     // Initialize immediately (handles both cold load and SPA navigation eval)
@@ -269,12 +266,10 @@
         });
     }
 
-    async function updateSpeedGraph() {
-        if (!speedChart) return;
+    function updateSpeedGraph(data) {
+        if (!speedChart || !data) return;
 
         try {
-            const response = await fetch('/api/stats');
-            const data = await response.json();
             const currentSpeed = data.pyload.speed_bytes || 0;
             const currentFormatted = data.pyload.speed || '0 B/s';
 

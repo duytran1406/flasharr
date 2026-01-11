@@ -133,6 +133,9 @@ class NetworkGraph {
 class FshareBridge {
     constructor() {
         this.downloads = [];
+        this.stats = null;
+        this.statsListeners = {};
+        this.isFetchingStats = false;
         this.sortColumn = null;
         this.sortDirection = 'asc';
         this.networkGraph = null;
@@ -143,21 +146,54 @@ class FshareBridge {
     init() {
         this.setupEventListeners();
         this.wakeupDashboardChart();
-        this.loadDashboardData();
         this.loadDownloads();
         this.loadSystemLogs();
         this.initSidebar();
 
-        // Auto-refresh stats every 250ms for responsive UI
-        setInterval(() => this.loadDashboardData(), 250);
+        // Start ping-pong stats polling
+        this.startStatsPolling();
+
         setInterval(() => this.loadDownloads(), 2000); // Faster download list refresh
         setInterval(() => this.loadSystemLogs(), 15000);
 
-        // Update network graph every 250ms
-        setInterval(() => this.updateNetworkGraph(), 250);
-
         // Update ETA countdown every second
         setInterval(() => this.updateETACountdown(), 1000);
+    }
+
+    async startStatsPolling() {
+        if (this.isFetchingStats) return;
+        this.isFetchingStats = true;
+
+        const poll = async () => {
+            try {
+                const response = await fetch('/api/stats');
+                const data = await response.json();
+
+                if (data) {
+                    this.stats = data;
+                    // Notify listeners
+                    Object.values(this.statsListeners).forEach(listener => listener(data));
+
+                    // Update internal dashboard & graph
+                    this.updateDashboard();
+                    this.updateNetworkGraph();
+                }
+            } catch (error) {
+                console.error('Stats polling error:', error);
+            } finally {
+                // Ping-pong: schedule next poll only after this one finishes
+                setTimeout(poll, 250);
+            }
+        };
+
+        poll();
+    }
+
+    // Subscribe to stats updates
+    onStats(name, callback) {
+        this.statsListeners[name] = callback;
+        // If we already have stats, send them immediately
+        if (this.stats) callback(this.stats);
     }
 
     wakeupDashboardChart() {
@@ -179,26 +215,16 @@ class FshareBridge {
     }
 
     // Dashboard Data & Stats
-    async loadDashboardData() {
-        try {
-            const response = await fetch('/api/stats');
-            const data = await response.json();
+    updateDashboard() {
+        const data = this.stats;
+        if (!data) return;
 
-            if (data) {
-                this.updateDashboard(data);
-            }
-        } catch (error) {
-            console.error('Load stats error:', error);
-        }
-    }
-
-    updateDashboard(data) {
         // Header stats
         this.setText('header-speed', data.system.speedtest);
         this.setText('header-active', data.pyload.active);
         this.setText('header-uptime', this.formatUptime(data.system.uptime));
 
-        // Widget 1: Network Graph - handled by updateNetworkGraph()
+        // Widget 1: Network Graph - handled by updateNetworkGraph() using this.stats
         this.updateStatusIndicator('network-status-indicator', data.pyload.connected);
 
         // Widget 2: Downloader
@@ -220,35 +246,29 @@ class FshareBridge {
         this.setText('api-ping', '45ms');
     }
 
-    async updateNetworkGraph() {
+    updateNetworkGraph() {
         // Try to wake up chart if not active
         if (!this.networkGraphActive) {
             this.wakeupDashboardChart();
         }
 
-        if (!this.networkGraph || !this.networkGraphActive) return;
+        if (!this.networkGraph || !this.networkGraphActive || !this.stats) return;
 
-        try {
-            const response = await fetch('/api/stats');
-            const data = await response.json();
+        const data = this.stats;
+        if (data.pyload) {
+            const activeDownloads = data.pyload.active || 0;
+            const speedBytes = data.pyload.speed_bytes || 0;
 
-            if (data && data.pyload) {
-                const activeDownloads = data.pyload.active || 0;
-                const speedBytes = data.pyload.speed_bytes || 0;
+            // Always update graph to show current state (even if 0)
+            this.networkGraph.addDataPoint(speedBytes);
 
-                // Always update graph to show current state (even if 0)
-                this.networkGraph.addDataPoint(speedBytes);
+            // Update speed displays
+            const currentSpeed = this.networkGraph.formatSpeed(speedBytes);
+            // Only update peak if > 0 or keep previous
+            const peakSpeed = this.networkGraph.formatSpeed(this.networkGraph.peakSpeed);
 
-                // Update speed displays
-                const currentSpeed = this.networkGraph.formatSpeed(speedBytes);
-                // Only update peak if > 0 or keep previous
-                const peakSpeed = this.networkGraph.formatSpeed(this.networkGraph.peakSpeed);
-
-                this.setText('current-speed', currentSpeed);
-                this.setText('peak-speed', peakSpeed);
-            }
-        } catch (error) {
-            console.error('Network graph update error:', error);
+            this.setText('current-speed', currentSpeed);
+            this.setText('peak-speed', peakSpeed);
         }
     }
 
