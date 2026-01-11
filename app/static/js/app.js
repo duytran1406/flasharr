@@ -146,13 +146,16 @@ class FshareBridge {
         this.loadSystemLogs();
         this.initSidebar();
 
-        // Auto-refresh stats every 10s
-        setInterval(() => this.loadDashboardData(), 10000);
+        // Auto-refresh stats every 1.5s for responsive UI
+        setInterval(() => this.loadDashboardData(), 1500);
         setInterval(() => this.loadDownloads(), 5000);
         setInterval(() => this.loadSystemLogs(), 15000);
 
         // Update network graph every 1000ms
         setInterval(() => this.updateNetworkGraph(), 1000);
+
+        // Update ETA countdown every second
+        setInterval(() => this.updateETACountdown(), 1000);
     }
 
     // Dashboard Data & Stats
@@ -223,6 +226,42 @@ class FshareBridge {
         } catch (error) {
             console.error('Network graph update error:', error);
         }
+    }
+
+    updateETACountdown() {
+        // Find all ETA elements in the downloads table
+        const etaElements = document.querySelectorAll('.download-table .download-name + div');
+
+        etaElements.forEach(el => {
+            const text = el.textContent;
+            const match = text.match(/ETA:\s*([\d:]+)/);
+
+            if (match && match[1] !== '-') {
+                const parts = match[1].split(':').map(Number);
+                let totalSeconds = 0;
+
+                if (parts.length === 3) {
+                    totalSeconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+                } else if (parts.length === 2) {
+                    totalSeconds = parts[0] * 60 + parts[1];
+                } else if (parts.length === 1) {
+                    totalSeconds = parts[0];
+                }
+
+                if (totalSeconds > 0) {
+                    totalSeconds--;
+                    const hours = Math.floor(totalSeconds / 3600);
+                    const minutes = Math.floor((totalSeconds % 3600) / 60);
+                    const seconds = totalSeconds % 60;
+
+                    const newETA = hours > 0
+                        ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+                        : `${minutes}:${String(seconds).padStart(2, '0')}`;
+
+                    el.innerHTML = el.innerHTML.replace(/ETA:\s*[\d:]+/, `ETA: ${newETA}`);
+                }
+            }
+        });
     }
 
     updateStatusIndicator(id, isOnline) {
