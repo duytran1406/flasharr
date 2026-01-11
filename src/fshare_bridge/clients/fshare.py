@@ -61,6 +61,7 @@ class FshareClient:
     - File search
     - Download link generation
     - File info retrieval
+    - Folder enumeration (from pyLoad FshareVnFolder plugin)
     
     Example:
         >>> client = FshareClient.from_config()
@@ -70,7 +71,16 @@ class FshareClient:
         ...         print(f"{file.name}: {file.size} bytes")
     """
     
+    # API endpoints
     API_BASE = "https://www.fshare.vn/api"
+    API_V3_BASE = "https://www.fshare.vn/api/v3"
+    API_FSHARE_BASE = "https://api.fshare.vn/api"
+    
+    # From pyLoad FshareVn plugin
+    API_KEY = "dMnqMMZMUnN5YpvKENaEhdQQ5jxDqddt"
+    API_USERAGENT = "pyLoad-B1RS5N"
+    
+    # Default app key (original bridge)
     DEFAULT_APP_KEY = "L2S7R6ZMagggC5wWkQhX2+aDi467PPuftWUMRoK"
     DEFAULT_TIMEOUT = 15
     TOKEN_LIFETIME_HOURS = 24
@@ -341,4 +351,165 @@ class FshareClient:
             
         except requests.exceptions.RequestException as e:
             logger.error(f"Error getting file info: {e}")
+            return None
+    
+    def get_file_info_v3(self, fcode: str) -> Optional[FshareFile]:
+        """
+        Get file information using V3 API (from pyLoad FshareVn plugin).
+        
+        Args:
+            fcode: Fshare file code (linkcode)
+            
+        Returns:
+            FshareFile object or None if failed
+        """
+        try:
+            response = self.session.get(
+                f"{self.API_V3_BASE}/files/folder",
+                params={"linkcode": fcode},
+                headers={"Accept": "application/json, text/plain, */*"},
+                timeout=self.timeout,
+            )
+            
+            if response.status_code != 200:
+                return None
+            
+            data = response.json()
+            
+            if data.get("status") == 404:
+                return None
+            
+            current = data.get("current", {})
+            return FshareFile(
+                name=current.get("name", "Unknown"),
+                size=int(current.get("size", 0)),
+                fcode=fcode,
+                url=f"https://www.fshare.vn/file/{fcode}",
+            )
+            
+        except Exception as e:
+            logger.error(f"V3 API error: {e}")
+            return None
+    
+    def enumerate_folder(
+        self,
+        folder_code: str,
+        include_subfolders: bool = False,
+    ) -> List[FshareFile]:
+        """
+        Enumerate all files in a folder (from pyLoad FshareVnFolder plugin).
+        
+        Args:
+            folder_code: Fshare folder code
+            include_subfolders: Whether to recursively include subfolders
+            
+        Returns:
+            List of FshareFile objects
+        """
+        files = []
+        current_page = 1
+        
+        try:
+            while True:
+                response = self.session.get(
+                    f"{self.API_V3_BASE}/files/folder",
+                    params={"linkcode": folder_code, "page": current_page},
+                    headers={"Accept": "application/json, text/plain, */*"},
+                    timeout=self.timeout,
+                )
+                
+                if response.status_code != 200:
+                    break
+                
+                data = response.json()
+                items = data.get("items", [])
+                
+                for item in items:
+                    item_type = int(item.get("type", 0))
+                    linkcode = item.get("linkcode", "")
+                    
+                    if item_type == 1:
+                        # File
+                        files.append(FshareFile(
+                            name=item.get("name", "Unknown"),
+                            size=int(item.get("size", 0)),
+                            fcode=linkcode,
+                            url=f"https://www.fshare.vn/file/{linkcode}",
+                            file_type=1,
+                        ))
+                    elif item_type == 0 and include_subfolders:
+                        # Folder - recursively enumerate
+                        files.extend(self.enumerate_folder(linkcode, include_subfolders))
+                
+                # Check for more pages
+                links = data.get("_links", {})
+                last_link = links.get("last", "")
+                
+                import re
+                last_page_match = re.search(r"&page=(\d+)", last_link)
+                last_page = int(last_page_match.group(1)) if last_page_match else 1
+                
+                current_page += 1
+                if current_page > last_page:
+                    break
+            
+            logger.info(f"Enumerated {len(files)} files from folder {folder_code}")
+            return files
+            
+        except Exception as e:
+            logger.error(f"Folder enumeration error: {e}")
+            return files
+    
+    def get_download_link_premium(
+        self,
+        url: str,
+        password: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Get direct download link using premium API (from pyLoad FshareVn plugin).
+        
+        Args:
+            url: Fshare file URL
+            password: Optional file password
+            
+        Returns:
+            Direct download URL or None if failed
+        """
+        self.ensure_authenticated()
+        
+        try:
+            payload = {
+                "url": url,
+                "token": self._token,
+            }
+            if password:
+                payload["password"] = password
+            
+            response = self.session.post(
+                f"{self.API_FSHARE_BASE}/session/download",
+                json=payload,
+                headers={
+                    "User-Agent": self.API_USERAGENT,
+                    "Content-Type": "application/json",
+                },
+                cookies={"session_id": self._session_id} if self._session_id else None,
+                timeout=self.timeout,
+            )
+            
+            if response.status_code == 403:
+                if password:
+                    logger.error("Wrong password")
+                else:
+                    logger.error("Download is password protected")
+                return None
+            
+            if response.status_code != 200:
+                logger.error(f"Premium download failed: {response.status_code}")
+                return None
+            
+            data = response.json()
+            return data.get("location")
+            
+        except Exception as e:
+            logger.error(f"Premium download error: {e}")
             return None
