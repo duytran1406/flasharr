@@ -25,78 +25,39 @@ class TimFshareClient:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
     
-    def get_autocomplete_value(self, query: str) -> Optional[str]:
+    def smart_search(self, query: str, limit: int = 50, extensions: tuple = None) -> List[Dict]:
         """
-        Get the best autocomplete suggestion for a query
-        
-        Args:
-            query: Search query
-            
-        Returns:
-            Best matching filename from autocomplete, or None
-        """
-        try:
-            url = f"{self.AUTOCOMPLETE_API}?query={urllib.parse.quote(query)}"
-            headers = {
-                'accept': '*/*',
-                'user-agent': 'Mozilla/5.0',
-                'referer': f'https://timfshare.com/search?key={urllib.parse.quote(query)}'
-            }
-            
-            response = self.session.get(url, headers=headers, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json().get('data', [])
-                if data:
-                    # Return the first (best) suggestion
-                    return data[0].get('value')
-            
-        except Exception as e:
-            logger.error(f"Autocomplete error: {e}")
-        
-        return None
-    
-    def smart_search(self, query: str, limit: int = 50) -> List[Dict]:
-        """
-        Smart search with two-step process and scoring
-        
-        1. Get autocomplete suggestion for exact filename
-        2. Search with exact filename
-        3. Score and rank results
+        Smart search with filtering and scoring
         
         Args:
             query: Search query
             limit: Maximum number of results
+            extensions: Optional tuple of allowed file extensions (e.g. ('.mp4', '.mkv'))
             
         Returns:
             List of scored and ranked results
         """
         logger.info(f"Smart Search starting for: {query}")
         
-        # Step 1: Try to get exact filename from autocomplete
-        refinement_queries = [query, f"{query} vie"]
-        best_filename = None
+        # Execute search directly with query (Removed autocomplete hijacking)
+        raw_results = self._execute_search(query)
         
-        for q in refinement_queries:
-            val = self.get_autocomplete_value(q)
-            if val and len(val) > 5:
-                best_filename = val
-                logger.info(f"Autocomplete found: {val}")
-                break
-        
-        # Step 2: Search with best filename or original query
-        search_query = best_filename if best_filename else query
-        raw_results = self._execute_search(search_query)
-        
-        # Fallback: if autocomplete search fails, try original query
-        if not raw_results and search_query != query:
-            logger.info("Autocomplete search failed, trying original query")
-            raw_results = self._execute_search(query)
+        if not raw_results:
+            return []
+            
+        # Filter by extension if specified
+        if extensions:
+            original_count = len(raw_results)
+            raw_results = [
+                r for r in raw_results 
+                if r.get('name', '').lower().endswith(extensions)
+            ]
+            logger.info(f"Filtered {original_count} -> {len(raw_results)} results by extension")
         
         if not raw_results:
             return []
         
-        # Step 3: Score and rank results
+        # Score and rank results
         scored_results = self._score_results(raw_results, query)
         
         # Sort by score and return top results
@@ -207,15 +168,16 @@ class TimFshareClient:
             logger.error(f"Autocomplete error: {e}")
             return []
     
-    def search(self, query: str, limit: int = 50) -> List[Dict]:
+    def search(self, query: str, limit: int = 50, extensions: tuple = None) -> List[Dict]:
         """
         Main search method (uses smart_search)
         
         Args:
             query: Search query
             limit: Maximum number of results
+            extensions: Optional tuple of allowed file extensions
             
         Returns:
             List of file dictionaries with keys: name, url, size, fcode, score
         """
-        return self.smart_search(query, limit)
+        return self.smart_search(query, limit, extensions)
