@@ -212,8 +212,14 @@ class FshareBridge {
             const data = await response.json();
 
             if (data) {
-                this.stats = data;
-                Object.values(this.statsListeners).forEach(listener => listener(data));
+                // Save to LocalStorage
+                localStorage.setItem('fshare_stats', JSON.stringify(data));
+                this.stats = data; // Keep memory copy active for simple access
+
+                // Notify listeners (they can read from LS or use passed data)
+                Object.values(this.statsListeners).forEach(listener => listener());
+
+                // Update internal dashboard & graph
                 this.updateDashboard();
                 this.updateNetworkGraph();
             }
@@ -229,13 +235,15 @@ class FshareBridge {
             const data = await response.json();
 
             if (data.downloads) {
+                // Save to LocalStorage
+                localStorage.setItem('fshare_downloads', JSON.stringify(data.downloads));
                 this.downloads = data.downloads;
 
                 // Process data (Sort)
                 this.applySorting();
 
                 // Notify UI
-                Object.values(this.downloadsListeners).forEach(listener => listener(this.downloads));
+                Object.values(this.downloadsListeners).forEach(listener => listener());
 
                 // Check for "Running" status
                 return this.downloads.some(d => d.status === 'Running');
@@ -250,14 +258,17 @@ class FshareBridge {
     // Listener registration
     onDownloads(name, callback) {
         this.downloadsListeners[name] = callback;
-        if (this.downloads && this.downloads.length > 0) callback(this.downloads);
+        // If we have data, trigger immediately
+        const stored = localStorage.getItem('fshare_downloads');
+        if (stored) callback();
     }
 
     // Subscribe to stats updates
     onStats(name, callback) {
         this.statsListeners[name] = callback;
-        // If we already have stats, send them immediately
-        if (this.stats) callback(this.stats);
+        // If we have data, trigger immediately
+        const stored = localStorage.getItem('fshare_stats');
+        if (stored) callback();
     }
 
     wakeupDashboardChart() {
@@ -273,6 +284,11 @@ class FshareBridge {
                 this.networkGraph = new NetworkGraph('network-graph');
             }
             this.networkGraphActive = true;
+
+            // Immediately attempt update from storage
+            if (localStorage.getItem('fshare_stats')) {
+                this.updateNetworkGraph();
+            }
         } else {
             this.networkGraphActive = false;
         }
@@ -280,34 +296,40 @@ class FshareBridge {
 
     // Dashboard Data & Stats
     updateDashboard() {
-        const data = this.stats;
-        if (!data) return;
+        const stored = localStorage.getItem('fshare_stats');
+        if (!stored) return;
 
-        // Header stats
-        this.setText('header-speed', data.system.speedtest);
-        this.setText('header-active', data.pyload.active);
-        this.setText('header-uptime', this.formatUptime(data.system.uptime));
+        try {
+            const data = JSON.parse(stored);
 
-        // Widget 1: Network Graph - handled by updateNetworkGraph() using this.stats
-        this.updateStatusIndicator('network-status-indicator', data.pyload.connected);
+            // Header stats
+            this.setText('header-speed', data.system.speedtest);
+            this.setText('header-active', data.pyload.active);
+            this.setText('header-uptime', this.formatUptime(data.system.uptime));
 
-        // Widget 2: Downloader
-        const pyloadConnected = data.pyload.connected;
-        this.updateStatusIndicator('pyload-status-indicator', pyloadConnected);
+            // Widget 1: Network Graph - handled by updateNetworkGraph() using storage
+            this.updateStatusIndicator('network-status-indicator', data.pyload.connected);
 
-        // Fshare Account Status from pyLoad
-        const fshareStatus = data.pyload.fshare_account || {};
-        const isPremium = fshareStatus.valid && fshareStatus.premium;
-        this.updateBadge('fshare-account-status', isPremium, isPremium ? 'PREMIUM' : 'N/A');
+            // Widget 2: Downloader
+            const pyloadConnected = data.pyload.connected;
+            this.updateStatusIndicator('pyload-status-indicator', pyloadConnected);
 
-        this.setText('active-downloads-count', String(data.pyload.active).padStart(2, '0'));
-        this.setText('queue-count', data.pyload.total);
+            // Fshare Account Status from pyLoad
+            const fshareStatus = data.pyload.fshare_account || {};
+            const isPremium = fshareStatus.valid && fshareStatus.premium;
+            this.updateBadge('fshare-account-status', isPremium, isPremium ? 'PREMIUM' : 'N/A');
 
-        // Widget 3: Search Engine
-        this.updateStatusIndicator('timfshare-status-indicator', true);
-        this.updateBadge('timfshare-status', true, 'ONLINE');
-        this.setText('api-health', '100%');
-        this.setText('api-ping', '45ms');
+            this.setText('active-downloads-count', String(data.pyload.active).padStart(2, '0'));
+            this.setText('queue-count', data.pyload.total);
+
+            // Widget 3: Search Engine
+            this.updateStatusIndicator('timfshare-status-indicator', true);
+            this.updateBadge('timfshare-status', true, 'ONLINE');
+            this.setText('api-health', '100%');
+            this.setText('api-ping', '45ms');
+        } catch (e) {
+            console.error('Error parsing dashboard stats from storage', e);
+        }
     }
 
     updateNetworkGraph() {
@@ -316,23 +338,29 @@ class FshareBridge {
             this.wakeupDashboardChart();
         }
 
-        if (!this.networkGraph || !this.networkGraphActive || !this.stats) return;
+        if (!this.networkGraph || !this.networkGraphActive) return;
 
-        const data = this.stats;
-        if (data.pyload) {
-            const activeDownloads = data.pyload.active || 0;
-            const speedBytes = data.pyload.speed_bytes || 0;
+        const stored = localStorage.getItem('fshare_stats');
+        if (!stored) return;
 
-            // Always update graph to show current state (even if 0)
-            this.networkGraph.addDataPoint(speedBytes);
+        try {
+            const data = JSON.parse(stored);
+            if (data.pyload) {
+                const speedBytes = data.pyload.speed_bytes || 0;
 
-            // Update speed displays
-            const currentSpeed = this.networkGraph.formatSpeed(speedBytes);
-            // Only update peak if > 0 or keep previous
-            const peakSpeed = this.networkGraph.formatSpeed(this.networkGraph.peakSpeed);
+                // Always update graph to show current state (even if 0)
+                this.networkGraph.addDataPoint(speedBytes);
 
-            this.setText('current-speed', currentSpeed);
-            this.setText('peak-speed', peakSpeed);
+                // Update speed displays
+                const currentSpeed = this.networkGraph.formatSpeed(speedBytes);
+                // Only update peak if > 0 or keep previous
+                const peakSpeed = this.networkGraph.formatSpeed(this.networkGraph.peakSpeed);
+
+                this.setText('current-speed', currentSpeed);
+                this.setText('peak-speed', peakSpeed);
+            }
+        } catch (e) {
+            console.error('Error parsing network graph stats from storage', e);
         }
     }
 

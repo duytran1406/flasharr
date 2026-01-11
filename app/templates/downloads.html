@@ -217,12 +217,20 @@
 
         // Subscribe to bridge stats for speed graph updates
         if (bridge) {
-            bridge.onStats('downloads-page', (data) => {
-                if (!speedChartActive) {
-                    wakeupSpeedChart();
-                }
-                if (speedChartActive) {
-                    updateSpeedGraph(data);
+            bridge.onStats('downloads-page', () => {
+                const stored = localStorage.getItem('fshare_stats');
+                if (!stored) return;
+
+                try {
+                    const data = JSON.parse(stored);
+                    if (!speedChartActive) {
+                        wakeupSpeedChart();
+                    }
+                    if (speedChartActive) {
+                        updateSpeedGraph(data);
+                    }
+                } catch (e) {
+                    console.error('Error parsing stats from storage for speed graph', e);
                 }
             });
         }
