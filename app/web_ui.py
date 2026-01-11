@@ -135,7 +135,25 @@ def create_web_ui(timfshare_client, pyload_client, filename_normalizer):
                     'season': parsed.season,
                     'episode': parsed.episode
                 })
-            return jsonify({'results': formatted_results})
+            
+            # Separate Series and Movies
+            series_results = [r for r in formatted_results if r['is_series']]
+            movie_results = [r for r in formatted_results if not r['is_series']]
+            
+            # Sort Series: Season ASC -> Episode ASC -> Score DESC
+            series_results.sort(key=lambda x: (
+                x['season'] if x['season'] is not None else 9999,
+                x['episode'] if x['episode'] is not None else 9999,
+                -x['score']
+            ))
+            
+            # Sort Movies: Score DESC -> Name ASC
+            movie_results.sort(key=lambda x: (-x['score'], x['name']))
+            
+            # Combine: Series first (likely intent if detected), then Movies
+            final_results = series_results + movie_results
+            
+            return jsonify({'results': final_results})
         except Exception as e:
             logger.error(f"Search API error: {e}")
             return jsonify({'error': str(e)}), 500
