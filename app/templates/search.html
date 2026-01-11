@@ -148,8 +148,9 @@
                     icon.textContent = currentFilters[filterType] ? 'check_circle' : 'cancel';
                     btn.classList.toggle('active', currentFilters[filterType]);
 
-                    if (searchInput.value) {
-                        performSearch(searchInput.value);
+                    if (allResults.length > 0) {
+                        currentPage = 1;
+                        renderCurrentPage();
                     }
                 } else {
                     // Toggle dropdown
@@ -178,8 +179,9 @@
                     qualityBtn.textContent = `Quality: ${currentFilters.quality.length} selected`;
                 }
 
-                if (searchInput.value) {
-                    performSearch(searchInput.value);
+                if (allResults.length > 0) {
+                    currentPage = 1;
+                    renderCurrentPage();
                 }
             });
         });
@@ -198,8 +200,9 @@
                 const label = sortLabels[e.target.value] || e.target.value;
                 document.querySelector('[data-filter="sort"] .filter-label').textContent = `Sort: ${label}`;
 
-                if (searchInput.value) {
-                    performSearch(searchInput.value);
+                if (allResults.length > 0) {
+                    currentPage = 1;
+                    renderCurrentPage();
                 }
             });
         });
@@ -209,9 +212,46 @@
             btn.addEventListener('click', () => {
                 document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
+                currentView = btn.dataset.view; // Update current view
                 resultsGrid.className = `search-results-${btn.dataset.view}`;
+                currentPage = 1; // Reset to first page when changing view
+                renderCurrentPage(); // Re-render with new items per page
             });
         });
+
+        // Pagination event handlers
+        prevPageBtn.addEventListener('click', () => {
+            if (currentPage > 1) {
+                currentPage--;
+                renderCurrentPage();
+            }
+        });
+
+        nextPageBtn.addEventListener('click', () => {
+            const totalPages = getTotalPages();
+            if (currentPage < totalPages) {
+                currentPage++;
+                renderCurrentPage();
+            }
+        });
+
+        function getTotalPages() {
+            const filtered = getFilteredResults();
+            const itemsPerPage = getItemsPerPage();
+            return Math.ceil(filtered.length / itemsPerPage);
+        }
+
+        function getFilteredResults() {
+            return allResults.filter(result => {
+                if (currentFilters.quality.length > 0) {
+                    const resultQuality = (result.quality || '').toLowerCase();
+                    if (!currentFilters.quality.includes(resultQuality)) return false;
+                }
+                if (currentFilters.vietsub && !result.vietsub) return false;
+                if (currentFilters.vietdub && !result.vietdub) return false;
+                return true;
+            });
+        }
 
         // Close dropdowns when clicking outside
         document.addEventListener('click', (e) => {
@@ -260,32 +300,19 @@
         }
 
         function displayResults(results) {
+            // Store all results for pagination
+            allResults = results;
+            currentPage = 1; // Reset to first page on new search
+            renderCurrentPage();
+        }
+
+        function renderCurrentPage() {
             resultsGrid.innerHTML = '';
 
-            // Filter results
-            const filtered = results.filter(result => {
-                // Quality filter
-                if (currentFilters.quality.length > 0) {
-                    const resultQuality = (result.quality || '').toLowerCase();
-                    if (!currentFilters.quality.includes(resultQuality)) {
-                        return false;
-                    }
-                }
+            // Get filtered and sorted results
+            const filtered = getFilteredResults();
 
-                // Vietsub filter
-                if (currentFilters.vietsub && !result.vietsub) {
-                    return false;
-                }
-
-                // Vietdub filter
-                if (currentFilters.vietdub && !result.vietdub) {
-                    return false;
-                }
-
-                return true;
-            });
-
-            // Sort results (Backend already does smart sort, but client sort overrides if changed)
+            // Sort results
             if (currentFilters.sort === 'size_desc') {
                 filtered.sort((a, b) => b.size_bytes - a.size_bytes);
             } else if (currentFilters.sort === 'size_asc') {
@@ -293,19 +320,37 @@
             } else if (currentFilters.sort === 'score') {
                 filtered.sort((a, b) => b.score - a.score);
             }
-            // 'newest' uses default backend sort order (Smart Sort) which is usually what we want
 
             resultsCount.textContent = `Found ${filtered.length} result${filtered.length !== 1 ? 's' : ''}`;
 
             if (filtered.length === 0) {
                 resultsGrid.innerHTML = '<div class="no-results">No results match your filters</div>';
+                paginationContainer.style.display = 'none';
                 return;
             }
 
-            filtered.forEach(result => {
+            // Calculate pagination
+            const itemsPerPage = getItemsPerPage();
+            const totalPages = Math.ceil(filtered.length / itemsPerPage);
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = Math.min(startIndex + itemsPerPage, filtered.length);
+            const pageResults = filtered.slice(startIndex, endIndex);
+
+            // Display results for current page
+            pageResults.forEach(result => {
                 const card = createResultCard(result);
                 resultsGrid.appendChild(card);
             });
+
+            // Update pagination controls
+            if (totalPages > 1) {
+                paginationContainer.style.display = 'flex';
+                paginationInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+                prevPageBtn.disabled = currentPage === 1;
+                nextPageBtn.disabled = currentPage === totalPages;
+            } else {
+                paginationContainer.style.display = 'none';
+            }
         }
 
         function createResultCard(result) {
