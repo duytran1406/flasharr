@@ -184,33 +184,49 @@ def create_app():
             client = FshareClient.from_config(config)
             
             # Attempt login
-            success = client.login()
-            
-            if success:
-                # Get account info
-                account_info = {
-                    "email": email,
-                    "premium": client.is_premium,
-                    "validuntil": getattr(client, 'premium_expiry', None),
-                    "logged_in": True
-                }
+            try:
+                success = client.login()
                 
-                # TODO: Save credentials to config file for persistence
-                # For now, store in app context
-                app.fshare_account = account_info
-                app.fshare_credentials = {"email": email, "password": password}
+                if success:
+                    # Get account info
+                    account_info = {
+                        "email": email,
+                        "premium": client.is_premium,
+                        "validuntil": getattr(client, 'premium_expiry', None),
+                        "logged_in": True
+                    }
+                    
+                    # TODO: Save credentials to config file for persistence
+                    # For now, store in app context
+                    app.fshare_account = account_info
+                    app.fshare_credentials = {"email": email, "password": password}
+                    
+                    return jsonify({
+                        "status": "ok",
+                        "message": "Login successful",
+                        "account": account_info
+                    })
+                else:
+                    return jsonify({"status": "error", "message": "Login failed"})
+                    
+            except Exception as login_error:
+                # Log the detailed error
+                logger.error(f"Fshare login error: {login_error}", exc_info=True)
                 
-                return jsonify({
-                    "status": "ok",
-                    "message": "Login successful",
-                    "account": account_info
-                })
-            else:
-                return jsonify({"status": "error", "message": "Invalid credentials"})
+                # Return user-friendly error message
+                error_msg = str(login_error)
+                if "AuthenticationError" in type(login_error).__name__:
+                    error_msg = "Invalid email or password"
+                elif "FshareConnectionError" in type(login_error).__name__:
+                    error_msg = "Could not connect to Fshare"
+                elif "Login request failed" in error_msg:
+                    error_msg = "Invalid credentials or Fshare API error"
+                
+                return jsonify({"status": "error", "message": error_msg})
                 
         except Exception as e:
-            logger.error(f"Fshare login error: {e}")
-            return jsonify({"status": "error", "message": str(e)})
+            logger.error(f"Fshare login error: {e}", exc_info=True)
+            return jsonify({"status": "error", "message": f"Login error: {str(e)}"})
     
     @app.route('/api/settings/logout-fshare', methods=['POST'])
     def api_logout_fshare():
