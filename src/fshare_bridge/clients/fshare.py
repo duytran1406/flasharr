@@ -121,6 +121,11 @@ class FshareClient:
     def is_premium(self) -> bool:
         """Check if account is premium/VIP."""
         return self._is_premium
+    @property
+    def premium_expiry(self) -> Optional[int]:
+        """Get premium account expiration timestamp (Unix timestamp), -1 for lifetime."""
+        return self._premium_expiry
+
         self._is_premium: bool = False
     
     @classmethod
@@ -215,6 +220,34 @@ class FshareClient:
                 # Check for VIP status
                 self._is_premium = 'VIP' in response.text or 'img alt="VIP"' in response.text
                 logger.info(f"Premium status: {self._is_premium}")
+                
+                # Fetch account info to get expiration date
+                try:
+                    account_info = self.session.get(
+                        "https://www.fshare.vn/account_info.php",
+                        timeout=self.timeout
+                    )
+                    
+                    if account_info.status_code == 200:
+                        # Parse expiration date (format: HH:MM:SS AM/PM DD-MM-YYYY)
+                        valid_match = re.search(r'<dt>Thời hạn dùng:</dt>\s*<dd>(.+?)</dd>', account_info.text)
+                        if valid_match:
+                            import time
+                            try:
+                                expiry_str = valid_match.group(1).strip()
+                                expiry_time = time.mktime(time.strptime(expiry_str, '%I:%M:%S %p %d-%m-%Y'))
+                                self._premium_expiry = int(expiry_time)
+                                logger.info(f"Account expires: {expiry_str}")
+                            except:
+                                self._premium_expiry = None
+                        
+                        # Check for lifetime account
+                        if re.search(r'<dt>Lần đăng nhập trước:</dt>', account_info.text):
+                            self._premium_expiry = -1  # Lifetime
+                            logger.info("Lifetime premium account detected")
+                except Exception as e:
+                    logger.warning(f"Could not fetch account expiration: {e}")
+                    self._premium_expiry = None
                 
                 return True
             else:
