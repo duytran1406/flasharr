@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}Downloads - Fshare-Arr-Bridge{% endblock %}
+
+{% block content %}
+<div class="card mb-lg">
+    <h2 class="card-title">Active Downloads</h2>
+    <div id="active-downloads">
+        <div class="text-center text-muted" style="padding: 2rem;">
+            <div class="spinner" style="margin: 0 auto var(--spacing-sm);"></div>
+            Loading downloads...
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <h2 class="card-title">Download History</h2>
+    <div id="download-history">
+        <div class="text-center text-muted" style="padding: 2rem;">
+            <div class="spinner" style="margin: 0 auto var(--spacing-sm);"></div>
+            Loading history...
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const { api, formatSize, formatDuration } = window.FshareApp;
+
+    async function loadDownloads() {
+        try {
+            // Load active downloads
+            const queue = await api.get('/sabnzbd/api?mode=queue');
+            displayActiveDownloads(queue);
+
+            // Load history
+            const history = await api.get('/sabnzbd/api?mode=history');
+            displayHistory(history);
+        } catch (error) {
+            console.error('Failed to load downloads:', error);
+            document.getElementById('active-downloads').innerHTML =
+                '<div class="text-center text-muted" style="padding: 2rem;">Failed to load downloads</div>';
+            document.getElementById('download-history').innerHTML =
+                '<div class="text-center text-muted" style="padding: 2rem;">Failed to load history</div>';
+        }
+    }
+
+    function displayActiveDownloads(data) {
+        const container = document.getElementById('active-downloads');
+        const slots = data?.queue?.slots || [];
+
+        if (slots.length === 0) {
+            container.innerHTML = '<div class="text-center text-muted" style="padding: 2rem;">No active downloads</div>';
+            return;
+        }
+
+        let html = '';
+        slots.forEach(slot => {
+            const percentage = parseInt(slot.percentage) || 0;
+
+            html += `
+            <div class="glass-container" style="padding: var(--spacing-md); margin-bottom: var(--spacing-sm);">
+                <div class="flex justify-between items-center mb-sm">
+                    <div style="flex: 1;">
+                        <div style="font-weight: 600; margin-bottom: 0.25rem;">${slot.filename}</div>
+                        <div class="text-small text-muted">${slot.mb} - ${slot.cat || 'Unknown'}</div>
+                    </div>
+                    <span class="status-badge success">
+                        ${slot.status}
+                    </span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: ${percentage}%;"></div>
+                </div>
+                <div class="flex justify-between text-small text-muted" style="margin-top: 0.5rem;">
+                    <span>${percentage}%</span>
+                    <span>ETA: ${slot.eta || 'Unknown'}</span>
+                </div>
+            </div>
+        `;
+        });
+
+        container.innerHTML = html;
+    }
+
+    function displayHistory(data) {
+        const container = document.getElementById('download-history');
+        const slots = data?.history?.slots || [];
+
+        if (slots.length === 0) {
+            container.innerHTML = '<div class="text-center text-muted" style="padding: 2rem;">No download history</div>';
+            return;
+        }
+
+        let html = '<div style="display: flex; flex-direction: column; gap: var(--spacing-sm);">';
+
+        slots.forEach(slot => {
+            const isCompleted = slot.status === 'Completed';
+
+            html += `
+            <div class="flex justify-between items-center" style="padding: var(--spacing-sm); background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+                <div style="flex: 1;">
+                    <div style="font-weight: 500;">${slot.name}</div>
+                    <div class="text-small text-muted">${slot.size} - ${slot.category || 'Unknown'}</div>
+                </div>
+                <span class="status-badge ${isCompleted ? 'success' : 'danger'}">
+                    ${isCompleted ? '✓' : '✗'} ${slot.status}
+                </span>
+            </div>
+        `;
+        });
+
+        html += '</div>';
+        container.innerHTML = html;
+    }
+
+    // Load downloads on page load
+    loadDownloads();
+
+    // Refresh every 2 seconds
+    setInterval(loadDownloads, 2000);
+</script>
+{% endblock %}

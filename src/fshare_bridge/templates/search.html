@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block title %}Search - Fshare-Arr-Bridge{% endblock %}
+
+{% block content %}
+<div class="card" style="margin-bottom: var(--spacing-lg);">
+    <h2 class="card-title">Search Fshare</h2>
+
+    <form id="search-form" onsubmit="performSearch(event)">
+        <div class="input-group">
+            <label class="input-label" for="search-query">Search Query</label>
+            <input type="text" id="search-query" class="input-field" placeholder="Enter movie or TV show name..."
+                required>
+        </div>
+
+        <div class="grid grid-2 gap-sm mb-md">
+            <div class="input-group mb-0">
+                <label class="input-label" for="season">Season (optional)</label>
+                <input type="number" id="season" class="input-field" placeholder="e.g. 1" min="1">
+            </div>
+            <div class="input-group mb-0">
+                <label class="input-label" for="episode">Episode (optional)</label>
+                <input type="number" id="episode" class="input-field" placeholder="e.g. 5" min="1">
+            </div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" id="search-btn">
+            <span>🔍</span> Search
+        </button>
+    </form>
+</div>
+
+<div id="search-results"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const { api, formatSize, showNotification } = window.FshareApp;
+
+    async function performSearch(event) {
+        event.preventDefault();
+
+        const query = document.getElementById('search-query').value;
+        const season = document.getElementById('season').value;
+        const episode = document.getElementById('episode').value;
+
+        const searchBtn = document.getElementById('search-btn');
+        searchBtn.disabled = true;
+        searchBtn.innerHTML = '<span class="spinner"></span> Searching...';
+
+        try {
+            // Build search URL
+            let searchUrl = `/indexer/api?t=tvsearch&q=${encodeURIComponent(query)}`;
+            if (season) searchUrl += `&season=${season}`;
+            if (episode) searchUrl += `&ep=${episode}`;
+
+            const response = await fetch(searchUrl);
+            const xmlText = await response.text();
+
+            // Parse XML
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+            const items = xmlDoc.querySelectorAll('item');
+
+            displayResults(items);
+            showNotification(`Found ${items.length} results`, 'success');
+        } catch (error) {
+            showNotification('Search failed: ' + error.message, 'error');
+        } finally {
+            searchBtn.disabled = false;
+            searchBtn.innerHTML = '<span>🔍</span> Search';
+        }
+    }
+
+    function displayResults(items) {
+        const container = document.getElementById('search-results');
+
+        if (items.length === 0) {
+            container.innerHTML = '<div class="card"><div class="text-center text-muted" style="padding: 2rem;">No results found</div></div>';
+            return;
+        }
+
+        let html = '';
+
+        items.forEach(item => {
+            const title = item.querySelector('title')?.textContent || 'Unknown';
+            const size = item.querySelector('size')?.textContent || '0';
+            const description = item.querySelector('description')?.textContent || '';
+            const link = item.querySelector('link')?.textContent || '';
+
+            // Get quality attributes
+            const attrs = item.querySelectorAll('newznab\\:attr, attr');
+            let season = '', episode = '', video = '', category = '';
+
+            attrs.forEach(attr => {
+                const name = attr.getAttribute('name');
+                const value = attr.getAttribute('value');
+                if (name === 'season') season = value;
+                if (name === 'episode') episode = value;
+                if (name === 'video') video = value;
+                if (name === 'category') category = value;
+            });
+
+            const isTv = category === '5000' || category === '5040' || category === '5030';
+
+            html += `
+            <div class="card" style="margin-bottom: var(--spacing-md);">
+                <div class="flex justify-between items-center">
+                    <div style="flex: 1;">
+                        <h3 style="font-size: 1.1rem; margin-bottom: var(--spacing-xs); font-weight: 600;">${title}</h3>
+                        <div class="flex gap-sm" style="flex-wrap: wrap; margin-bottom: var(--spacing-xs);">
+                            ${isTv && season ? `<span class="status-badge"style="background: var(--bg-tertiary);">S${season.padStart(2, '0')}</span>` : ''}
+                            ${episode ? `<span class="status-badge" style="background: var(--bg-tertiary);">E${episode.padStart(2, '0')}</span>` : ''}
+                            ${video ? `<span class="status-badge" style="background: var(--bg-tertiary);">${video}</span>` : ''}
+                            <span class="status-badge" style="background: var(--bg-tertiary);">${formatSize(parseInt(size))}</span>
+                        </div>
+                        <div class="text-small text-muted">${description}</div>
+                    </div>
+                    <button class="btn btn-primary" onclick="downloadFile('${link}', '${title}')" style="margin-left: var(--spacing-md);">
+                        ⬇️ Download
+                    </button>
+                </div>
+            </div>
+        `;
+        });
+
+        container.innerHTML = html;
+    }
+
+    function downloadFile(url, title) {
+        showNotification('Starting download: ' + title, 'success');
+        // TODO: Trigger download via SABnzbd API
+        console.log('Download:', url);
+    }
+</script>
+{% endblock %}

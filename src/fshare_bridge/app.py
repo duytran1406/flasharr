@@ -9,7 +9,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 
 from .factory import create_indexer_service, create_sabnzbd_service
@@ -24,7 +24,12 @@ logger = logging.getLogger(__name__)
 
 def create_app():
     """Create and configure the Flask application."""
-    app = Flask(__name__)
+    # Get the directory where this file is located
+    base_dir = Path(__file__).parent
+    
+    app = Flask(__name__,
+                template_folder=str(base_dir / 'templates'),
+                static_folder=str(base_dir / 'static'))
     CORS(app)
     
     # Create services
@@ -39,6 +44,47 @@ def create_app():
             "services": {
                 "indexer": "ready",
                 "sabnzbd": "ready" if app.sabnzbd else "initializing",
+            }
+        })
+    
+    @app.route('/')
+    def index():
+        """Dashboard - main web interface."""
+        return render_template('dashboard.html', active_page='dashboard')
+    
+    @app.route('/search')
+    def search_page():
+        """Search interface for manual searches."""
+        return render_template('search.html', active_page='search')
+    
+    @app.route('/downloads')
+    def downloads_page():
+        """Downloads page showing queue and history."""
+        return render_template('downloads.html', active_page='downloads')
+    
+    @app.route('/settings')
+    def settings_page():
+        """Settings page for configuration."""
+        return render_template('settings.html', active_page='settings')
+    
+    @app.route('/api/info')
+    def api_info():
+        """API information endpoint."""
+        return jsonify({
+            "name": "Fshare-Arr-Bridge",
+            "version": "2.0.0-alpha",
+            "description": "Integration bridge for Fshare.vn with Sonarr/Radarr",
+            "endpoints": {
+                "health": "/health",
+                "indexer_api": "/indexer/api (Newznab compatible)",
+                "indexer_caps": "/indexer/api?t=caps",
+                "indexer_search": "/indexer/api?t=search&q=query",
+                "sabnzbd_api": "/sabnzbd/api (SABnzbd compatible)",
+                "nzb_download": "/nzb/{guid}"
+            },
+            "documentation": {
+                "newznab": "https://newznab.readthedocs.io/",
+                "sabnzbd": "https://sabnzbd.org/wiki/advanced/api"
             }
         })
     

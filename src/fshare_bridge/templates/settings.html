@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Fshare-Arr-Bridge{% endblock %}
+
+{% block content %}
+<div class="card mb-lg">
+    <h2 class="card-title">Fshare Configuration</h2>
+    <form id="fshare-settings" onsubmit="saveFshareSettings(event)">
+        <div class="input-group">
+            <label class="input-label" for="fshare-email">Fshare Email</label>
+            <input type="email" id="fshare-email" class="input-field" placeholder="your@email.com" required>
+        </div>
+
+        <div class="input-group">
+            <label class="input-label" for="fshare-password">Fshare Password</label>
+            <input type="password" id="fshare-password" class="input-field" placeholder="••••••••" required>
+        </div>
+
+        <button type="submit" class="btn btn-primary">
+            💾 Save Fshare Settings
+        </button>
+    </form>
+</div>
+
+<div class="card mb-lg">
+    <h2 class="card-title">Download Settings</h2>
+    <form id="download-settings" onsubmit="saveDownloadSettings(event)">
+        <div class="input-group">
+            <label class="input-label" for="download-dir">Download Directory</label>
+            <input type="text" id="download-dir" class="input-field" placeholder="/downloads" value="/downloads">
+        </div>
+
+        <div class="input-group">
+            <label class="input-label" for="max-concurrent">Max Concurrent Downloads</label>
+            <input type="number" id="max-concurrent" class="input-field" min="1" max="10" value="3">
+        </div>
+
+        <button type="submit" class="btn btn-primary">
+            💾 Save Download Settings
+        </button>
+    </form>
+</div>
+
+<div class="card">
+    <h2 class="card-title">System Information</h2>
+    <div id="system-info" class="grid grid-2 gap-sm">
+        <div style="padding: var(--spacing-sm); background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+            <div class="text-small text-muted mb-sm">Version</div>
+            <div style="font-weight: 600;">v2.0.0-alpha</div>
+        </div>
+        <div style="padding: var(--spacing-sm); background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+            <div class="text-small text-muted mb-sm">Download Engine</div>
+            <div style="font-weight: 600;">Built-in (Async)</div>
+        </div>
+        <div style="padding: var(--spacing-sm); background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+            <div class="text-small text-muted mb-sm">Indexer Type</div>
+            <div style="font-weight: 600;">Newznab Compatible</div>
+        </div>
+        <div style="padding: var(--spacing-sm); background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+            <div class="text-small text-muted mb-sm">Download Client</div>
+            <div style="font-weight: 600;">SABnzbd Compatible</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const { showNotification } = window.FshareApp;
+
+    function saveFshareSettings(event) {
+        event.preventDefault();
+
+        const email = document.getElementById('fshare-email').value;
+        const password = document.getElementById('fshare-password').value;
+
+        // TODO: Send to backend to update .env
+        console.log('Save Fshare settings:', { email, password: '***' });
+
+        showNotification('⚠️ Settings saved locally. Please update .env file on server and restart service.', 'warning');
+    }
+
+    function saveDownloadSettings(event) {
+        event.preventDefault();
+
+        const downloadDir = document.getElementById('download-dir').value;
+        const maxConcurrent = document.getElementById('max-concurrent').value;
+
+        // TODO: Send to backend
+        console.log('Save download settings:', { downloadDir, maxConcurrent });
+
+        showNotification('⚠️ Settings saved locally. Please update .env file on server and restart service.', 'warning');
+    }
+
+    // Load current settings from .env (if available)
+    async function loadSettings() {
+        // TODO: Load from backend API
+    }
+
+    loadSettings();
+</script>
+{% endblock %}

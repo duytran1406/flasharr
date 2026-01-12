@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Fshare-Arr-Bridge{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% block extra_css %}{% endblock %}
+</head>
+
+<body>
+    <header>
+        <div class="header-content">
+            <div class="logo">🌉 Fshare-Arr-Bridge</div>
+            <nav>
+                <a href="/" class="nav-link {% if active_page == 'dashboard' %}active{% endif %}">Dashboard</a>
+                <a href="/search" class="nav-link {% if active_page == 'search' %}active{% endif %}">Search</a>
+                <a href="/downloads" class="nav-link {% if active_page == 'downloads' %}active{% endif %}">Downloads</a>
+                <a href="/settings" class="nav-link {% if active_page == 'settings' %}active{% endif %}">Settings</a>
+            </nav>
+        </div>
+    </header>
+
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+
+</html>
