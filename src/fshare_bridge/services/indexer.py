@@ -302,10 +302,10 @@ class IndexerService:
         # Size
         ET.SubElement(item, "size").text = str(result.size)
         
-        # Description
+        # Description - include relevance score for debugging
         description = f"{title} - {format_size(result.size)}"
         if result.score > 0:
-            description += f" [Score: {result.score}]"
+            description += f" [Relevance: {result.score}]"
         ET.SubElement(item, "description").text = description
         
         # Enclosure
@@ -316,14 +316,59 @@ class IndexerService:
             "type": "application/x-nzb",
         })
         
-        # Newznab attributes
-        category = "5000" if parsed.is_series else "2000"
-        ET.SubElement(item, "newznab:attr", {"name": "category", "value": category})
+        # Newznab attributes - Categories with quality-based subcategories
+        is_tv = parsed.is_series
+        is_hd = parsed.quality_attrs.is_hd if parsed.quality_attrs else False
+        resolution = parsed.quality_attrs.resolution if parsed.quality_attrs else None
+        source = parsed.quality_attrs.source if parsed.quality_attrs else None
+        
+        if is_tv:
+            # TV Main category
+            ET.SubElement(item, "newznab:attr", {"name": "category", "value": "5000"})
+            # TV Sub-category (HD/SD)
+            if is_hd:
+                ET.SubElement(item, "newznab:attr", {"name": "category", "value": "5040"})
+            else:
+                ET.SubElement(item, "newznab:attr", {"name": "category", "value": "5030"})
+        else:
+            # Movies Main category
+            ET.SubElement(item, "newznab:attr", {"name": "category", "value": "2000"})
+            # Movies Sub-category (BluRay/HD/SD)
+            if source and "bluray" in source.lower():
+                ET.SubElement(item, "newznab:attr", {"name": "category", "value": "2050"})
+            elif is_hd:
+                ET.SubElement(item, "newznab:attr", {"name": "category", "value": "2040"})
+            else:
+                ET.SubElement(item, "newznab:attr", {"name": "category", "value": "2030"})
+        
+        # Newznab attributes - Size
         ET.SubElement(item, "newznab:attr", {"name": "size", "value": str(result.size)})
         
+        
+        # Newznab attributes - TV specific
         if parsed.season is not None:
             ET.SubElement(item, "newznab:attr", {"name": "season", "value": str(parsed.season)})
         if parsed.episode is not None:
             ET.SubElement(item, "newznab:attr", {"name": "episode", "value": str(parsed.episode)})
+        
+        # Newznab attributes - Year
         if parsed.year:
             ET.SubElement(item, "newznab:attr", {"name": "year", "value": str(parsed.year)})
+        
+        # Newznab attributes - Quality (from extracted attributes)
+        if parsed.quality_attrs:
+            attrs = parsed.quality_attrs
+            
+            # Video codec
+            if attrs.video_codec:
+                ET.SubElement(item, "newznab:attr", {
+                    "name": "video",
+                    "value": attrs.video_codec,
+                })
+            
+            # Audio codec
+            if attrs.audio_codec:
+                ET.SubElement(item, "newznab:attr", {
+                    "name": "audio",
+                    "value": attrs.audio_codec,
+                })

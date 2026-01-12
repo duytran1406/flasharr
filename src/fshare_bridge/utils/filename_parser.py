@@ -6,8 +6,60 @@ Refactored with improved typing and structure.
 """
 
 import re
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Set
 from dataclasses import dataclass, field
+
+
+@dataclass
+class QualityAttributes:
+    """Quality attributes for Newznab API reporting."""
+    
+    # Resolution/Source
+    resolution: Optional[str] = None  # 2160p, 1080p, 720p, 480p, SD
+    source: Optional[str] = None      # BluRay, WEB-DL, HDTV, DVDRip, etc.
+    
+    # Codecs
+    video_codec: Optional[str] = None  # x264, x265, HEVC, AVC, etc.
+    audio_codec: Optional[str] = None  # AAC, AC3, DTS, etc.
+    
+    # HDR/Color
+    hdr: bool = False
+    dolby_vision: bool = False
+    
+    # Size (from file if available)
+    size_bytes: Optional[int] = None
+    
+    # Newznab categories
+    is_tv: bool = False
+    is_movie: bool = False
+    is_hd: bool = False  # HD quality (720p or higher)
+    
+    def to_newznab_attrs(self) -> List[Tuple[str, str]]:
+        """Convert to Newznab attribute name/value pairs."""
+        attrs = []
+        
+        if self.size_bytes:
+            attrs.append(("size", str(self.size_bytes)))
+        
+        if self.video_codec:
+            attrs.append(("video", self.video_codec))
+        
+        if self.audio_codec:
+            attrs.append(("audio", self.audio_codec))
+        
+        return attrs
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "resolution": self.resolution,
+            "source": self.source,
+            "video_codec": self.video_codec,
+            "audio_codec": self.audio_codec,
+            "hdr": self.hdr,
+            "dolby_vision": self.dolby_vision,
+            "is_hd": self.is_hd,
+        }
 
 
 @dataclass
@@ -22,10 +74,11 @@ class ParsedFilename:
     year: Optional[int] = None
     quality: Optional[str] = None
     is_series: bool = False
+    quality_attrs: Optional[QualityAttributes] = None
     
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
-        return {
+        result = {
             "original_filename": self.original_filename,
             "normalized_filename": self.normalized_filename,
             "title": self.title,
@@ -35,6 +88,11 @@ class ParsedFilename:
             "quality": self.quality,
             "is_series": self.is_series,
         }
+        
+        if self.quality_attrs:
+            result["quality_attrs"] = self.quality_attrs.to_dict()
+        
+        return result
 
 
 @dataclass
@@ -146,12 +204,16 @@ class FilenameParser:
         
         if not se_match:
             # No S/E found - treat as movie
+            quality_attrs = self.extract_quality_attributes(filename)
+            quality_attrs.is_movie = True
+            
             return ParsedFilename(
                 original_filename=filename,
                 normalized_filename=filename,
                 title=self._clean_title(name),
                 year=self._extract_year(name),
                 is_series=False,
+                quality_attrs=quality_attrs,
             )
         
         # Extract season and episode numbers
@@ -202,6 +264,10 @@ class FilenameParser:
             quality_parts.append(after_clean)
         quality_str = " ".join(quality_parts) if quality_parts else None
         
+        # Extract quality attributes
+        quality_attrs = self.extract_quality_attributes(normalized)
+        quality_attrs.is_tv = True
+        
         return ParsedFilename(
             original_filename=filename,
             normalized_filename=normalized,
@@ -211,6 +277,7 @@ class FilenameParser:
             year=year,
             quality=quality_str,
             is_series=True,
+            quality_attrs=quality_attrs,
         )
     
     def _find_se_marker(self, name: str) -> Tuple[Optional[re.Match], int]:
@@ -257,6 +324,98 @@ class FilenameParser:
         title = self._year_pattern.sub("", title)
         title = re.sub(r"\s+", " ", title)
         return title.strip()
+    
+    def extract_quality_attributes(self, filename: str) -> QualityAttributes:
+        """
+        Extract quality attributes from filename for Newznab reporting.
+        
+        Args:
+            filename: Original or normalized filename
+            
+        Returns:
+            QualityAttributes with extracted quality information
+        """
+        filename_lower = filename.lower()
+        attrs = QualityAttributes()
+        
+        # Resolution detection
+        if "2160p" in filename_lower or "4k" in filename_lower or "uhd" in filename_lower:
+            attrs.resolution = "2160p"
+            attrs.is_hd = True
+        elif "1080p" in filename_lower:
+            attrs.resolution = "1080p"
+            attrs.is_hd = True
+        elif "720p" in filename_lower:
+            attrs.resolution = "720p"
+            attrs.is_hd = True
+        elif "480p" in filename_lower or "576p" in filename_lower:
+            attrs.resolution = "480p"
+        elif "sd" in filename_lower or "dvd" in filename_lower:
+            attrs.resolution = "SD"
+        
+        # Source detection (priority order)
+        if "remux" in filename_lower or "blu-ray" in filename_lower or "bluray" in filename_lower:
+            attrs.source = "BluRay"
+        elif "web-dl" in filename_lower or "webdl" in filename_lower:
+            attrs.source = "WEB-DL"
+        elif "webrip" in filename_lower:
+            attrs.source = "WEBRip"
+        elif "hdtv" in filename_lower:
+            attrs.source = "HDTV"
+        elif "bdrip" in filename_lower or "brrip" in filename_lower:
+            attrs.source = "BDRip"
+        elif "dvdrip" in filename_lower:
+            attrs.source = "DVDRip"
+        elif "cam" in filename_lower:
+            attrs.source = "CAM"
+        elif "ts" in filename_lower:
+            attrs.source = "TS"
+        
+        # Video codec detection
+        if "x265" in filename_lower or "hevc" in filename_lower or "h.265" in filename_lower or "h265" in filename_lower:
+            attrs.video_codec = "x265"
+        elif "x264" in filename_lower or "avc" in filename_lower or "h.264" in filename_lower or "h264" in filename_lower:
+            attrs.video_codec = "x264"
+        elif "xvid" in filename_lower:
+            attrs.video_codec = "XviD"
+        elif "av1" in filename_lower:
+            attrs.video_codec = "AV1"
+        elif "vp9" in filename_lower:
+            attrs.video_codec = "VP9"
+        
+        # Infer codec from resolution + bit depth if not explicitly stated
+        if not attrs.video_codec:
+            if "10bit" in filename_lower or "10-bit" in filename_lower:
+                if attrs.resolution in ["2160p", "1080p"]:
+                    attrs.video_codec = "x265"  # 10-bit usually indicates HEVC
+        
+        # Audio codec detection
+        if "dts-hd" in filename_lower or "dts-x" in filename_lower:
+            attrs.audio_codec = "DTS-HD"
+        elif "dts" in filename_lower:
+            attrs.audio_codec = "DTS"
+        elif "truehd" in filename_lower or "atmos" in filename_lower:
+            attrs.audio_codec = "TrueHD"
+        elif "dd+" in filename_lower or "eac3" in filename_lower:
+            attrs.audio_codec = "EAC3"
+        elif "ac3" in filename_lower or "dd5.1" in filename_lower:
+            attrs.audio_codec = "AC3"
+        elif "aac" in filename_lower:
+            attrs.audio_codec = "AAC"
+        elif "flac" in filename_lower:
+            attrs.audio_codec = "FLAC"
+        
+        # HDR detection
+        if "hdr10+" in filename_lower:
+            attrs.hdr = True
+        elif "hdr10" in filename_lower or "hdr" in filename_lower:
+            attrs.hdr = True
+        
+        if "dolby vision" in filename_lower or "dv" in filename_lower:
+            attrs.dolby_vision = True
+            attrs.hdr = True  # DV implies HDR
+        
+        return attrs
 
 
 # Convenience alias for backwards compatibility
