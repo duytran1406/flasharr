@@ -116,6 +116,12 @@ class FshareClient:
         self._token: Optional[str] = None
         self._session_id: Optional[str] = None
         self._token_expires: Optional[datetime] = None
+
+    @property
+    def is_premium(self) -> bool:
+        """Check if account is premium/VIP."""
+        return self._is_premium
+        self._is_premium: bool = False
     
     @classmethod
     def from_config(cls, config: Optional[FshareConfig] = None) -> "FshareClient":
