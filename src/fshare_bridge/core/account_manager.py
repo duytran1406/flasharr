@@ -1,0 +1,195 @@
+"""
+Account Manager for Multiple Fshare Accounts
+
+Manages multiple Fshare account credentials with primary account selection.
+"""
+
+import json
+import logging
+from pathlib import Path
+from typing import List, Dict, Optional
+from datetime import datetime
+
+from ..clients.fshare import FshareClient
+from .config import FshareConfig
+
+logger = logging.getLogger(__name__)
+
+
+class AccountManager:
+    """Manage multiple Fshare accounts with persistent storage."""
+    
+    def __init__(self, storage_path: Optional[Path] = None):
+        """
+        Initialize account manager.
+        
+        Args:
+            storage_path: Path to JSON file for storing accounts
+        """
+        if storage_path is None:
+            storage_path = Path(__file__).parent.parent.parent.parent / "data" / "accounts.json"
+        
+        self.storage_path = Path(storage_path)
+        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        self.accounts: List[Dict] = []
+        self.primary_email: Optional[str] = None
+        
+        self._load()
+    
+    def _load(self):
+        """Load accounts from storage."""
+        if not self.storage_path.exists():
+            logger.info("No existing accounts file, starting fresh")
+            return
+        
+        try:
+            with open(self.storage_path, 'r') as f:
+                data = json.load(f)
+                self.accounts = data.get('accounts', [])
+                self.primary_email = data.get('primary_email')
+            logger.info(f"Loaded {len(self.accounts)} accounts")
+        except Exception as e:
+            logger.error(f"Error loading accounts: {e}")
+           
+self.accounts = []
+             self.primary_email = None
+    
+    def _save(self):
+        """Save accounts to storage."""
+        try:
+            data = {
+                'accounts': self.accounts,
+                'primary_email': self.primary_email
+            }
+            with open(self.storage_path, 'w') as f:
+                json.dump(data, f, indent=2)
+            logger.debug("Accounts saved")
+        except Exception as e:
+            logger.error(f"Error saving accounts: {e}")
+    
+    def add_account(self, email: str, password: str) -> Dict:
+        """
+        Add new account and login.
+        
+        Args:
+            email: Account email
+            password: Account password
+            
+        Returns:
+            Account info dict
+            
+        Raises:
+            Exception: If login fails
+        """
+        # Check if already exists
+        existing = next((a for a in self.accounts if a['email'] == email), None)
+        if existing:
+            raise ValueError(f"Account {email} already exists")
+        
+        # Attempt login
+        config = FshareConfig(email=email, password=password)
+        client = FshareClient.from_config(config)
+        
+        if not client.login():
+            raise Exception("Login failed")
+        
+        # Create account record
+        account = {
+            'email': email,
+            'password': password,  # TODO: Encrypt this
+            'premium': client.is_premium,
+            'validuntil': getattr(client, 'premium_expiry', None),
+            'is_primary': len(self.accounts) == 0,  # First account is primary
+            'last_refresh': int(datetime.now().timestamp())
+        }
+        
+        self.accounts.append(account)
+        
+        if len(self.accounts) == 1:
+            self.primary_email = email
+        
+        self._save()
+        logger.info(f"Added account: {email}")
+        
+        return self._sanitize_account(account)
+    
+    def remove_account(self, email: str):
+        """Remove account."""
+        self.accounts = [a for a in self.accounts if a['email'] != email]
+        
+        if self.primary_email == email:
+            self.primary_email = self.accounts[0]['email'] if self.accounts else None
+        
+        self._save()
+        logger.info(f"Removed account: {email}")
+    
+    def set_primary(self, email: str):
+        """Set primary account."""
+        account = next((a for a in self.accounts if a['email'] == email), None)
+        if not account:
+            raise ValueError(f"Account {email} not found")
+        
+        # Update all accounts
+        for a in self.accounts:
+            a['is_primary'] = (a['email'] == email)
+        
+        self.primary_email = email
+        self._save()
+        logger.info(f"Set primary account: {email}")
+    
+    def get_primary(self) -> Optional[Dict]:
+        """Get primary account."""
+        if not self.primary_email:
+            return None
+        
+        account = next((a for a in self.accounts if a['email'] == self.primary_email), None)
+        return self._sanitize_account(account) if account else None
+    
+    def list_accounts(self) -> List[Dict]:
+        """List all accounts (sanitized)."""
+        return [self._sanitize_account(a) for a in self.accounts]
+    
+    def refresh_account(self, email: str) -> Dict:
+        """
+        Refresh account info by re-logging in.
+        
+        Args:
+            email: Account email
+            
+        Returns:
+            Updated account info
+        """
+        account = next((a for a in self.accounts if a['email'] == email), None)
+        if not account:
+            raise ValueError(f"Account {email} not found")
+        
+        # Re-login
+        config = FshareConfig(email=email, password=account['password'])
+        client = FshareClient.from_config(config)
+        
+        if not client.login():
+            raise Exception("Login failed")
+        
+        # Update info
+        account['premium'] = client.is_premium
+        account['validuntil'] = getattr(client, 'premium_expiry', None)
+        account['last_refresh'] = int(datetime.now().timestamp())
+        
+        self._save()
+        logger.info(f"Refreshed account: {email}")
+        
+        return self._sanitize_account(account)
+    
+    def _sanitize_account(self, account: Optional[Dict]) -> Optional[Dict]:
+        """Remove sensitive data from account dict."""
+        if not account:
+            return None
+        
+        return {
+            'email': account['email'],
+            'premium': account.get('premium', False),
+            'validuntil': account.get('validuntil'),
+            'is_primary': account.get('is_primary', False),
+            'last_refresh': account.get('last_refresh')
+        }

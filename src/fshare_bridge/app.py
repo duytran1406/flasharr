@@ -21,6 +21,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Load version
+VERSION = "Unknown"
+try:
+    version_file = Path(__file__).parent.parent.parent / "VERSION"
+    if version_file.exists():
+        VERSION = version_file.read_text().strip()
+except Exception as e:
+    logger.warning(f"Could not load VERSION: {e}")
+
 
 def create_app():
     """Create and configure the Flask application."""
@@ -287,32 +296,32 @@ def create_app():
     @app.route('/')
     def index():
         """Main dashboard."""
-        return render_template('index.html')
+        return render_template('index.html', version=VERSION)
     
     @app.route('/search')
     def search_page():
         """Search interface page"""
-        return render_template('search.html')
+        return render_template('search.html', version=VERSION)
     
     @app.route('/downloads')
     def downloads_page():
         """Downloads page"""
-        return render_template('downloads.html')
+        return render_template('downloads.html', version=VERSION)
     
     @app.route('/settings')
     def settings_page():
         """Settings page"""
-        return render_template('settings.html')
+        return render_template('settings.html', version=VERSION)
     
     @app.route('/tutorial')
     def tutorial_page():
         """Tutorial page"""
-        return render_template('tutorial.html')
+        return render_template('tutorial.html', version=VERSION)
     
     @app.route('/about')
     def about_page():
         """About page"""
-        return render_template('about.html')
+        return render_template('about.html', version=VERSION)
     
     @app.route('/api/info')
     def api_info():
