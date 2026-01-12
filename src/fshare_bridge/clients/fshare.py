@@ -7,6 +7,7 @@ Refactored version with proper typing, error handling, and integration with core
 
 import requests
 import logging
+import re
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from dataclasses import dataclass
