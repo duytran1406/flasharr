@@ -145,7 +145,8 @@ class FshareClient:
     
     def login(self) -> bool:
         """
-        Login to Fshare and obtain session token.
+        Login to Fshare using web form (like pyload plugin).
+        API login is suspended for individual users.
         
         Returns:
             True if login successful
@@ -157,52 +158,51 @@ class FshareClient:
         try:
             logger.info("Logging into Fshare...")
             
+            # Use web form login like pyload plugin
             response = self.session.post(
-                f"{self.API_BASE}/user/login",
-                json={
-                    "user_email": self.email,
-                    "password": self.password,
-                    "app_key": self.app_key,
+                "https://www.fshare.vn/login.php",
+                data={
+                    "LoginForm[email]": self.email,
+                    "LoginForm[password]": self.password,
+                    "LoginForm[rememberMe]": 1,
+                    "yt0": "Login"
                 },
                 timeout=self.timeout,
             )
             
             # Debug logging
-            logger.info(f"Fshare API response status: {response.status_code}")
-            logger.info(f"Fshare API response: {response.text[:500]}")
+            logger.info(f"Fshare login response status: {response.status_code}")
+            logger.debug(f"Fshare login response: {response.text[:500]}")
             
             if response.status_code != 200:
+                logger.error(f"Fshare login HTTP error: {response.status_code}")
                 raise APIError(
-                    f"Login request failed",
+                    f"Login request failed with status {response.status_code}",
                     status_code=response.status_code,
                     response=response.text,
                 )
             
-            data = response.json()
-            
-            if data.get("code") != 200:
-                error_msg = data.get("msg", "Unknown error")
-                logger.error(f"❌ Fshare login failed: {error_msg}")
-                raise AuthenticationError(f"Fshare login failed: {error_msg}")
-            
-            self._token = data.get("token")
-            self._session_id = data.get("session_id")
-            
-            # Update session cookie
-            self.session.headers.update({
-                "Cookie": f"session_id={self._session_id}"
-            })
-            
-            # Set token expiration
-            self._token_expires = datetime.now() + timedelta(hours=self.TOKEN_LIFETIME_HOURS)
-            
-            logger.info("✅ Fshare login successful")
-            return True
-            
+            # Check if login was successful by looking for VIP badge or account info
+            if '<img' in response.text and 'VIP' in response.text:
+                logger.info("✅ Fshare login successful (VIP account detected)")
+                self._token = "web_session"  # Placeholder since we use cookies
+                self._is_premium = True
+                return True
+            elif 'account_info.php' in response.text or 'profile' in response.text.lower():
+                # Free account login successful
+                logger.info("✅ Fshare login successful (Free account)")
+                self._token = "web_session"
+                self._is_premium = False
+                return True
+            else:
+                logger.error("❌ Fshare login failed: Invalid credentials")
+                raise AuthenticationError("Fshare login failed: Invalid credentials")
+        
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Fshare connection error: {e}")
             raise FshareConnectionError(f"Failed to connect to Fshare: {e}")
-    
+
+
     def ensure_authenticated(self) -> bool:
         """
         Ensure we have a valid session, login if needed.
