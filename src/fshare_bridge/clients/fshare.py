@@ -145,8 +145,7 @@ class FshareClient:
     
     def login(self) -> bool:
         """
-        Login to Fshare using web form (like pyload plugin).
-        API login is suspended for individual users.
+        Login to Fshare using /site/login endpoint with CSRF token.
         
         Returns:
             True if login successful
@@ -158,44 +157,61 @@ class FshareClient:
         try:
             logger.info("Logging into Fshare...")
             
-            # Use web form login like pyload plugin
-            response = self.session.post(
-                "https://www.fshare.vn/login.php",
-                data={
-                    "LoginForm[email]": self.email,
-                    "LoginForm[password]": self.password,
-                    "LoginForm[rememberMe]": 1,
-                    "yt0": "Login"
-                },
-                timeout=self.timeout,
+           # Step 1: Get CSRF token from homepage
+            homepage = self.session.get(
+                "https://www.fshare.vn/",
+                timeout=self.timeout
             )
             
-            # Debug logging
-            logger.info(f"Fshare login response status: {response.status_code}")
-            logger.debug(f"Fshare login response: {response.text[:500]}")
+            # Extract CSRF token
+            csrf_match = re.search(r'name="_csrf-app" value="([^"]+)"', homepage.text)
+            if not csrf_match:
+                logger.error("Could not find CSRF token")
+                raise AuthenticationError("Could not find CSRF token")
             
-            if response.status_code != 200:
+            csrf_token = csrf_match.group(1)
+            logger.debug(f"Got CSRF token: {csrf_token[:20]}...")
+            
+            # Step 2: Submit login form with CSRF token
+            response = self.session.post(
+                "https://www.fshare.vn/site/login",
+                data={
+                    "_csrf-app": csrf_token,
+                    "LoginForm[email]": self.email,
+                    "LoginForm[password]": self.password,
+                    "LoginForm[rememberMe]": 1
+                },
+                headers={
+                    "Referer": "https://www.fshare.vn/",
+                    "Content-Type": "application/x-www-form-urlencoded"
+                },
+                timeout=self.timeout,
+                allow_redirects=True
+            )
+            
+            logger.info(f"Fshare login response status: {response.status_code}")
+            logger.debug(f"Fshare login response URL: {response.url}")
+            
+            if response.status_code not in [200, 302]:
                 logger.error(f"Fshare login HTTP error: {response.status_code}")
                 raise APIError(
                     f"Login request failed with status {response.status_code}",
                     status_code=response.status_code,
-                    response=response.text,
+                    response=response.text[:200],
                 )
             
-            # Check if login was successful by looking for VIP badge or account info
-            if '<img' in response.text and 'VIP' in response.text:
-                logger.info("✅ Fshare login successful (VIP account detected)")
+            # Check if login was successful by looking for profile or VIP indicators
+            if 'profile' in response.text.lower() or 'user__profile' in response.text:
+                logger.info("✅ Fshare login successful")
                 self._token = "web_session"  # Placeholder since we use cookies
-                self._is_premium = True
-                return True
-            elif 'account_info.php' in response.text or 'profile' in response.text.lower():
-                # Free account login successful
-                logger.info("✅ Fshare login successful (Free account)")
-                self._token = "web_session"
-                self._is_premium = False
+                
+                # Check for VIP status
+                self._is_premium = 'VIP' in response.text or 'img alt="VIP"' in response.text
+                logger.info(f"Premium status: {self._is_premium}")
+                
                 return True
             else:
-                logger.error("❌ Fshare login failed: Invalid credentials")
+                logger.error("❌ Fshare login failed: Invalid credentials or unexpected response")
                 raise AuthenticationError("Fshare login failed: Invalid credentials")
         
         except requests.exceptions.RequestException as e:
