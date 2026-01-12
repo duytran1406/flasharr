@@ -469,17 +469,20 @@
         });
 
         // Reset settings
-        document.getElementById('btn-reset').addEventListener('click', async () => {
-            if (!confirm('Are you sure you want to reset all settings to defaults?')) return;
+        const resetBtn = document.getElementById('btn-reset');
+        if (resetBtn) {
+            resetBtn.addEventListener('click', async () => {
+                if (!confirm('Are you sure you want to reset all settings to defaults?')) return;
 
-            const response = await fetch('/api/settings/reset', { method: 'POST' });
-            const data = await response.json();
+                const response = await fetch('/api/settings/reset', { method: 'POST' });
+                const data = await response.json();
 
-            if (data.status === 'ok') {
-                showToast('Settings reset to defaults');
-                loadSettings();
-            }
-        });
+                if (data.status === 'ok') {
+                    showToast('Settings reset to defaults');
+                    loadSettings();
+                }
+            });
+        }
 
         // Initial load
         loadSettings();

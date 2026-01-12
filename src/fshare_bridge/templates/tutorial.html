@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+
+{% block title %}Tutorial - Fshare Nexus{% endblock %}
+
+{% block content %}
+<div class="service-card" style="padding: 2.5rem; max-width: 900px; margin: 0 auto; line-height: 1.6;">
+    <div id="tutorial-content" class="markdown-body">
+        <!-- Content will be rendered here -->
+    </div>
+</div>
+
+<style>
+    .markdown-body h1 {
+        border-bottom: 1px solid var(--border-color);
+        padding-bottom: 0.5rem;
+        margin-bottom: 1.5rem;
+        color: white;
+    }
+
+    .markdown-body h2 {
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+        color: #3b82f6;
+    }
+
+    .markdown-body h3 {
+        margin-top: 1.5rem;
+        margin-bottom: 0.75rem;
+        color: #60a5fa;
+    }
+
+    .markdown-body ul,
+    .markdown-body ol {
+        margin-bottom: 1rem;
+        padding-left: 1.5rem;
+    }
+
+    .markdown-body li {
+        margin-bottom: 0.5rem;
+    }
+
+    .markdown-body code {
+        background: rgba(255, 255, 255, 0.05);
+        padding: 0.2rem 0.4rem;
+        border-radius: 4px;
+        font-family: monospace;
+    }
+
+    .markdown-body p {
+        margin-bottom: 1rem;
+        color: var(--text-color);
+    }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const rawContent = {{ content | tojson | safe
+    }};
+    document.getElementById('tutorial-content').innerHTML = marked.parse(rawContent);
+    });
+</script>
+{% endblock %}
