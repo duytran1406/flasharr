@@ -13,6 +13,8 @@ services:
     environment:
       # Server configuration
       INDEXER_PORT: 8484
+    dns:
+      - 8.8.8.8
     networks:
       - fshare-network
     depends_on:
