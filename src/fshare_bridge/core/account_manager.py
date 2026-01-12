@@ -11,6 +11,7 @@ from typing import List, Dict, Optional
 from datetime import datetime
 
 from ..clients.fshare import FshareClient
+from ..clients.fshare import FshareClient
 from .config import FshareConfig
 
 logger = logging.getLogger(__name__)
@@ -83,8 +84,7 @@ class AccountManager:
         """
         # Check if already exists
         existing = next((a for a in self.accounts if a['email'] == email), None)
-        if existing:
-            raise ValueError(f"Account {email} already exists")
+        # If exists, we will update it instead of failing
         
         # Attempt login
         config = FshareConfig(email=email, password=password)
@@ -93,22 +93,29 @@ class AccountManager:
         if not client.login():
             raise Exception("Login failed")
         
-        # Create account record
+        # Create or update account record
         account = {
             'email': email,
-            'password': password,  # TODO: Encrypt this
+            'password': password,
             'premium': client.is_premium,
             'validuntil': getattr(client, 'premium_expiry', None),
             'traffic_left': getattr(client, 'traffic_left', None),
             'account_type': getattr(client, 'account_type', None),
-            'is_primary': len(self.accounts) == 0,  # First account is primary
-            'last_refresh': int(datetime.now().timestamp())
+            'is_primary': existing['is_primary'] if existing else (len(self.accounts) == 0),
+            'last_refresh': int(datetime.now().timestamp()),
+            'cookies': client.get_cookies(),
+            'token_expires': client._token_expires.timestamp() if client._token_expires else None
         }
         
-        self.accounts.append(account)
-        
-        if len(self.accounts) == 1:
-            self.primary_email = email
+        if existing:
+            # Update existing in place
+            existing.update(account)
+            logger.info(f"Updated existing account: {email}")
+        else:
+            self.accounts.append(account)
+            if len(self.accounts) == 1:
+                self.primary_email = email
+            logger.info(f"Added new account: {email}")
         
         self._save()
         logger.info(f"Added account: {email}")
@@ -160,6 +167,18 @@ class AccountManager:
         client = FshareClient.from_config(config)
         # Note: In a real app, we might want to cache logged-in clients or handle tokens/cookies better
         # For now, we rely on the fact that login() is called or cookies are managed in session
+        client = FshareClient.from_config(config)
+        
+        # Restore session if available
+        if account.get('cookies'):
+             client.set_cookies(account['cookies'])
+        if account.get('token_expires'):
+             try:
+                 client._token_expires = datetime.fromtimestamp(account['token_expires'])
+                 client._token = "web_session" # Mark as having token
+             except:
+                 pass
+                 
         return client
     
     def list_accounts(self) -> List[Dict]:
@@ -193,6 +212,11 @@ class AccountManager:
         account['traffic_left'] = getattr(client, 'traffic_left', None)
         account['account_type'] = getattr(client, 'account_type', None)
         account['last_refresh'] = int(datetime.now().timestamp())
+        
+        # Save session data
+        account['cookies'] = client.get_cookies()
+        if getattr(client, '_token_expires', None):
+            account['token_expires'] = client._token_expires.timestamp()
         
         self._save()
         logger.info(f"Refreshed account: {email}")

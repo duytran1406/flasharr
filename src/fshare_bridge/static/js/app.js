@@ -137,6 +137,7 @@ class FshareBridge {
             return window.fshareBridgeInstance;
         }
         window.fshareBridgeInstance = this;
+        window.bridge = this; // Explicit global access for SPA hooks
 
         this.downloads = [];
         this.stats = null;
@@ -167,7 +168,10 @@ class FshareBridge {
         this.wakeupDashboardChart();
         this.initSidebar();
 
-        // Initial fetch to populate data
+        // Immediately render from storage
+        this.updateDashboard();
+
+        // Initial fetch to populate data in background
         this.runFullPollCheck();
 
         // Update ETA countdown every second (local UI update, no API)
@@ -199,32 +203,50 @@ class FshareBridge {
         if (!this.isPolling) return;
 
         try {
-            // 1. Fetch Stats
-            await this.fetchStats();
+            // Ping-Pong: Wait for results before next request
+            // 1. Fetch Stats - REMOVED (Calculated from downloads)
 
             // 2. Fetch Downloads
             const hasActiveDownloads = await this.fetchDownloads();
 
-            // 3. Conditional Loop Logic
-            if (hasActiveDownloads) {
-                // If active, keep polling (ping-pong)
-                setTimeout(() => this.poll(), 250);
+            // 3. Conditional Loop Logic: Ping again if active
+            if (hasActiveDownloads && this.isPolling) {
+                // Short delay to avoid CPU spike, then continue ping-pong
+                setTimeout(() => this.poll(), 1000);
             } else {
-                // If idle, stop polling
-                console.log('💤 No active downloads. Polling paused.');
+                console.log('💤 No active downloads or polling stopped. Polling paused.');
                 this.isPolling = false;
             }
         } catch (error) {
-            console.error('Polling error:', error);
-            // Retry on error after delay to avoid crash loops
-            setTimeout(() => this.poll(), 2000);
+            console.error('Polling error (Connection Lost?):', error);
+
+            // Mark items as STOPPED if connection is lost
+            this.handleConnectionLost();
+
+            // Retry on error after long delay
+            setTimeout(() => this.poll(), 5000);
+        }
+    }
+
+    handleConnectionLost() {
+        console.warn('⚠️ Connection lost to backend. Marking active downloads as STOPPED.');
+        if (this.downloads) {
+            this.downloads = this.downloads.map(d => {
+                const status = d.status.toLowerCase();
+                if (status === 'running' || status === 'downloading') {
+                    return { ...d, status: 'STOPPED' };
+                }
+                return d;
+            });
+            // Update UI
+            Object.values(this.downloadsListeners).forEach(listener => listener());
         }
     }
 
     // Helper: Single run wrapper for manual actions/init
     async runFullPollCheck() {
         try {
-            await this.fetchStats();
+            // await this.fetchStats(); // REMOVED
             const hasActive = await this.fetchDownloads();
 
             // If we found active downloads during this manual check, ensure polling is running
@@ -237,8 +259,12 @@ class FshareBridge {
     }
 
     async fetchStats() {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
         try {
-            const response = await fetch('/api/stats');
+            const response = await fetch('/api/stats', { signal: controller.signal });
+            clearTimeout(timeoutId);
             const data = await response.json();
 
             if (data) {
@@ -246,7 +272,7 @@ class FshareBridge {
                 localStorage.setItem('fshare_stats', JSON.stringify(data));
                 this.stats = data; // Keep memory copy active for simple access
 
-                // Notify listeners (they can read from LS or use passed data)
+                // Notify listeners
                 Object.values(this.statsListeners).forEach(listener => listener());
 
                 // Update internal dashboard & graph
@@ -254,35 +280,61 @@ class FshareBridge {
                 this.updateNetworkGraph();
             }
         } catch (e) {
-            console.error('Fetch stats failed:', e);
+            clearTimeout(timeoutId);
+            console.error('Fetch stats failed:', e.name === 'AbortError' ? 'Timeout (5s)' : e);
             throw e;
         }
     }
 
     async fetchDownloads() {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+
         try {
-            const response = await fetch('/api/downloads');
+            const response = await fetch('/api/downloads', { signal: controller.signal });
+            clearTimeout(timeoutId);
             const data = await response.json();
 
             if (data.downloads) {
                 // Save to LocalStorage
                 localStorage.setItem('fshare_downloads', JSON.stringify(data.downloads));
 
+                // Track previous download count and statuses for change detection
+                const prevDownloads = this.downloads || [];
+                const prevCount = prevDownloads.length;
+                const prevStatuses = new Set(prevDownloads.map(d => `${d.fid}:${d.status}`));
+
                 // DATA NORMALIZATION: Map API structure to UI flat structure
                 this.downloads = data.downloads.map(d => ({
-                    fid: d.id, // Map UUID to fid for compatibility
+                    fid: d.id,
                     name: d.filename,
-                    status: d.state, // Map 'state' to 'status'
-                    progress: d.progress,
+                    status: d.state,
+                    progress: parseFloat(d.progress || 0).toFixed(1),
                     size: d.size.formatted_total,
-                    size_bytes: d.size.total,     // for sorting
+                    size_bytes: d.size.total,
                     speed: d.speed.formatted,
-                    speed_raw: d.speed.bytes_per_sec, // for sorting
+                    speed_raw: d.speed.bytes_per_sec,
                     eta: d.eta.formatted,
-                    eta_seconds: d.eta.seconds,   // for sorting
+                    eta_seconds: d.eta.seconds,
                     category: d.category || 'Uncategorized',
-                    info: "" // Legacy field, empty for now
+                    error_message: d.error_message || '',
+                    info: ""
                 }));
+
+
+                // Calculate total speed from items for graph
+                const totalSpeedBytes = this.downloads.reduce((acc, d) => acc + (d.speed_raw || 0), 0);
+                const totalSpeedFormatted = this.formatSpeed(totalSpeedBytes);
+
+                // Notify stats listeners with computed data (avoids extra API call and inconsistencies)
+                const computedStats = {
+                    fshare_downloader: {
+                        speed_bytes: totalSpeedBytes,
+                        speed: totalSpeedFormatted
+                    }
+                };
+
+                Object.values(this.statsListeners).forEach(listener => listener(computedStats));
 
                 // Process data (Sort)
                 this.applySorting();
@@ -290,11 +342,15 @@ class FshareBridge {
                 // Notify UI
                 Object.values(this.downloadsListeners).forEach(listener => listener());
 
-                // Check for "Running" status
-                return this.downloads.some(d => d.status === 'Running');
+                // Check for active status to continue polling
+                return this.downloads.some(d => {
+                    const status = (d.status || '').toLowerCase();
+                    return status === 'running' || status === 'downloading' || status === 'starting';
+                });
             }
         } catch (e) {
-            console.error('Fetch downloads failed:', e);
+            clearTimeout(timeoutId);
+            console.error('Fetch downloads failed:', e.name === 'AbortError' ? 'Timeout (5s)' : e);
             throw e;
         }
         return false;
@@ -346,26 +402,24 @@ class FshareBridge {
 
         try {
             const data = JSON.parse(stored);
+            const fd = data.fshare_downloader || {};
 
-            // Header stats
-            this.setText('header-speed', data.system.speedtest);
-            this.setText('header-active', data.pyload.active);
-            this.setText('header-uptime', this.formatUptime(data.system.uptime));
+            // Header stats - removed system.speedtest and system.uptime dependencies
+            this.setText('header-active', fd.active || 0);
 
-            // Widget 1: Network Graph - handled by updateNetworkGraph() using storage
-            this.updateStatusIndicator('network-status-indicator', data.pyload.connected);
+            // Widget 1: Network Graph - handled by updateNetworkGraph()
+            this.updateStatusIndicator('network-status-indicator', fd.connected);
 
             // Widget 2: Downloader
-            const pyloadConnected = data.pyload.connected;
-            this.updateStatusIndicator('pyload-status-indicator', pyloadConnected);
+            this.updateStatusIndicator('pyload-status-indicator', fd.connected);
 
-            // Fshare Account Status from pyLoad
-            const fshareStatus = data.pyload.fshare_account || {};
-            const isPremium = fshareStatus.valid && fshareStatus.premium;
+            // Fshare Account Status
+            const primary = fd.primary_account || {};
+            const isPremium = primary.valid && primary.premium;
             this.updateBadge('fshare-account-status', isPremium, isPremium ? 'PREMIUM' : 'N/A');
 
-            this.setText('active-downloads-count', String(data.pyload.active).padStart(2, '0'));
-            this.setText('queue-count', data.pyload.total);
+            this.setText('active-downloads-count', String(fd.active || 0).padStart(2, '0'));
+            this.setText('queue-count', fd.total || 0);
 
             // Widget 3: Search Engine
             this.updateStatusIndicator('timfshare-status-indicator', true);
@@ -390,8 +444,8 @@ class FshareBridge {
 
         try {
             const data = JSON.parse(stored);
-            if (data.pyload) {
-                const speedBytes = data.pyload.speed_bytes || 0;
+            if (data.fshare_downloader) {
+                const speedBytes = data.fshare_downloader.speed_bytes || 0;
 
                 // Always update graph to show current state (even if 0)
                 this.networkGraph.addDataPoint(speedBytes);
@@ -673,7 +727,7 @@ class FshareBridge {
                 </td>
                 <td style="text-align: right; padding-right: 1rem;">
                     <div class="download-controls" style="justify-content: flex-end;">
-                        <button class="icon-btn" onclick="bridge.toggleDownload('${d.fid}')">${d.status === 'Running' ? '<span class="material-icons" style="font-size: 18px">pause</span>' : '<span class="material-icons" style="font-size: 18px">play_arrow</span>'}</button>
+                        <button class="icon-btn" onclick="bridge.toggleDownload('${d.fid}')">${(d.status === 'Running' || d.status === 'Downloading') ? '<span class="material-icons" style="font-size: 18px">pause</span>' : '<span class="material-icons" style="font-size: 18px">play_arrow</span>'}</button>
                     </div>
                 </td>
             </tr>
@@ -681,9 +735,9 @@ class FshareBridge {
     }
 
     createFullDownloadRow(d) {
-        const statusClass = d.status === 'Running' ? 'running' :
-            d.status === 'Finished' ? 'success' :
-                d.status === 'Stop' ? 'error' : 'warning';
+        const statusClass = (d.status === 'Running' || d.status === 'Downloading') ? 'running' :
+            (d.status === 'Finished' || d.status === 'Completed') ? 'success' :
+                (d.status === 'Stop' || d.status === 'Paused' || d.status === 'Failed') ? 'error' : 'warning';
         const catClass = (d.category || 'Uncategorized').toLowerCase();
         const catLabel = d.category || 'Uncategorized';
 
@@ -700,13 +754,21 @@ class FshareBridge {
                         <span style="font-size: 0.8rem; font-weight: 600; min-width: 40px;">${d.progress}%</span>
                     </div>
                 </td>
-                <td><span class="status-badge ${statusClass}">${d.status.toUpperCase()}</span></td>
+                <td>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span class="status-badge ${statusClass}">${d.status.toUpperCase()}</span>
+                        ${d.status.toLowerCase() === 'failed' && d.error_message ? `
+                        <button class="icon-btn" onclick="bridge.showError('${this.escapeHtml(d.error_message)}')" title="View Error" style="color: #ef4444;">
+                            <span class="material-icons" style="font-size: 18px;">error</span>
+                        </button>` : ''}
+                    </div>
+                </td>
                 <td>${d.speed}</td>
                 <td class="eta-cell">${d.eta}</td>
                 <td style="text-align: right; padding-right: 1.5rem;">
                     <div class="download-controls" style="justify-content: flex-end;">
                         <button class="icon-btn" title="Toggle" onclick="bridge.toggleDownload('${d.fid}')">
-                            <span class="material-icons" style="font-size: 20px">${d.status === 'Running' ? 'pause' : 'play_arrow'}</span>
+                            <span class="material-icons" style="font-size: 20px">${(d.status === 'Running' || d.status === 'Downloading') ? 'pause' : 'play_arrow'}</span>
                         </button>
                         <button class="icon-btn delete-btn" title="Delete" onclick="bridge.deleteDownload('${d.fid}')">
                             <span class="material-icons" style="font-size: 20px">delete_outline</span>
@@ -737,6 +799,22 @@ class FshareBridge {
             const resp = await fetch('/api/downloads/stop_all', { method: 'POST' });
             if ((await resp.json()).success) await this.runFullPollCheck();
         }
+    }
+
+    showError(msg) {
+        const modal = document.getElementById('error-modal');
+        const text = document.getElementById('error-modal-text');
+        if (modal && text) {
+            text.textContent = msg;
+            modal.style.display = 'flex';
+        } else {
+            alert(msg);
+        }
+    }
+
+    closeErrorModal() {
+        const modal = document.getElementById('error-modal');
+        if (modal) modal.style.display = 'none';
     }
 
     createDownloadRow(d) {
@@ -888,7 +966,7 @@ class FshareBridge {
 
     createResultCard(result) {
         const { name, score, url, size } = result;
-        const metadata = this.parseMetadata(name);
+        const metadata = result.metadata || this.parseMetadata(name);
         const sizeStr = this.formatSize(size);
 
         return `
@@ -903,10 +981,11 @@ class FshareBridge {
                         <span class="status-badge success">Score: ${score}</span>
                         <span class="status-badge info">${sizeStr}</span>
                         ${metadata.resolution ? `<span class="status-badge info">${metadata.resolution}</span>` : ''}
-                        ${metadata.vietnamese ? `<span class="status-badge success">${metadata.vietnamese}</span>` : ''}
+                        ${metadata.viet_sub ? `<span class="status-badge success" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">VIET SUB</span>` : ''}
+                        ${metadata.viet_dub ? `<span class="status-badge success" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);">VIET DUB</span>` : ''}
                     </div>
                     <button class="btn-primary" style="width: 100%; justify-content: center;" 
-                            onclick="bridge.download('${this.escapeHtml(url)}', '${this.escapeHtml(name)}')">
+                            onclick="bridge.download(event, '${this.escapeHtml(url)}', '${this.escapeHtml(name)}')">
                         Download
                     </button>
                 </div>
@@ -915,11 +994,18 @@ class FshareBridge {
     }
 
     parseMetadata(filename) {
-        const metadata = {};
-        if (filename.match(/2160p|4K/i)) metadata.resolution = '4K';
+        // Fallback local parser for UI-only elements if needed
+        const metadata = { resolution: null, viet_sub: false, viet_dub: false };
+        if (filename.match(/2160p|4K|UHD/i)) metadata.resolution = '4K';
         else if (filename.match(/1080p/i)) metadata.resolution = '1080p';
-        if (filename.match(/vietsub/i)) metadata.vietnamese = 'Vietsub';
-        else if (filename.match(/thuyết minh|thuyet minh/i)) metadata.vietnamese = 'Thuyết Minh';
+        else if (filename.match(/720p/i)) metadata.resolution = '720p';
+
+        const vietSubMarkers = /vietsub|viet\.sub|vie\.sub|phụ đề|phu de/i;
+        const vietDubMarkers = /thuyết minh|thuyet minh|viet\.dub|vie\.dub|lồng tiếng|long tieng|tvp|tmpđ/i;
+
+        if (filename.match(vietSubMarkers)) metadata.viet_sub = true;
+        if (filename.match(vietDubMarkers)) metadata.viet_dub = true;
+
         return metadata;
     }
 
@@ -932,7 +1018,25 @@ class FshareBridge {
     }
 
     // Download Operations
-    async download(url, name) {
+    async download(event, url, name) {
+        let btn = null;
+        let originalHtml = '';
+
+        if (event && event.currentTarget) {
+            btn = event.currentTarget;
+        } else if (event && event.target) {
+            btn = event.target.closest('button');
+        }
+
+        if (btn) {
+            btn.disabled = true;
+            originalHtml = btn.innerHTML;
+            btn.innerHTML = `<span class="material-icons spin" style="font-size: 1.2rem;">sync</span> Adding...`;
+        }
+
+        console.log(`[FshareBridge] Initiating download for: ${name}`);
+        console.log(`[FshareBridge] Fshare URL: ${url}`);
+
         try {
             const response = await fetch('/api/download', {
                 method: 'POST',
@@ -943,13 +1047,23 @@ class FshareBridge {
             const data = await response.json();
 
             if (data.success) {
+                // Keep button disabled if successful to prevent double clicks, but update text
+                if (btn) btn.innerHTML = `✅ Added`;
                 alert(`✅ Added to queue: ${data.normalized}`);
                 await this.runFullPollCheck();
             } else {
-                alert('❌ Failed to add download');
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalHtml;
+                }
+                alert('❌ Failed to add download: ' + (data.error || 'Unknown error'));
             }
         } catch (error) {
             console.error('Download error:', error);
+            if (btn) {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
         }
     }
 
@@ -1033,6 +1147,15 @@ class FshareBridge {
             localStorage.setItem('sidebar-collapsed', isCollapsed);
         }
     }
+    // Helper: Format Bytes/Speed
+    formatSpeed(bytes) {
+        if (bytes === 0) return '0 B/s';
+        const k = 1024;
+        const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
     // Modal Handling
     showAddModal() {
         const modal = document.getElementById('add-link-modal');

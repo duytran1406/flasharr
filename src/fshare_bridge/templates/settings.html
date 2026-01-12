@@ -11,18 +11,7 @@
             Settings
         </h1>
         <div class="settings-actions">
-            <button class="btn btn-secondary" id="btn-reset">
-                <span class="material-icons">restart_alt</span>
-                Reset
-            </button>
-            <button class="btn btn-secondary" id="btn-export">
-                <span class="material-icons">download</span>
-                Export
-            </button>
-            <button class="btn btn-primary" id="btn-save">
-                <span class="material-icons">save</span>
-                Save Changes
-            </button>
+            <!-- Header buttons removed as per request -->
         </div>
     </div>
 
@@ -99,30 +88,37 @@
                                 <span class="category-label">Sonarr (TV)</span>
                                 <input type="text" id="path_sonarr" class="form-input" placeholder="tv">
                             </div>
-                            <div class="category-row">
-                                <span class="category-label">Lidarr (Music)</span>
-                                <input type="text" id="path_lidarr" class="form-input" placeholder="music">
+                            <!-- Lidarr removed -->
+                        </div>
+                    </div>
+                    <div class="form-row" style="display: flex; gap: 1rem; align-items: flex-end;">
+                        <div class="form-group" style="width: 80%; margin-bottom: 0;">
+                            <label for="max_concurrent">Max Concurrent Downloads</label>
+                            <div style="display: flex; align-items: center; gap: 1rem; width: 100%;">
+                                <input type="range" id="max_concurrent" class="form-range" min="1" max="10" value="3"
+                                    style="flex: 1;">
+                                <span class="range-value" id="max_concurrent_value" style="min-width: 20px;">3</span>
                             </div>
                         </div>
-                    </div>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="max_concurrent">Max Concurrent Downloads</label>
-                            <input type="range" id="max_concurrent" class="form-range" min="1" max="10" value="3">
-                            <span class="range-value" id="max_concurrent_value">3</span>
-                        </div>
-                        <div class="form-group">
+                        <div class="form-group" style="width: 20%; margin-bottom: 0;">
                             <label for="speed_limit">Speed Limit (KB/s)</label>
-                            <input type="number" id="speed_limit" class="form-input" placeholder="0 = Unlimited"
-                                min="0">
+                            <input type="number" id="speed_limit" class="form-input" placeholder="0 = Unlimited" min="0"
+                                style="width: 100%;">
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label class="toggle-label">
+                    <div class="form-group flex-between" style="padding-right: 1.5rem;">
+                        <span class="toggle-text">Auto-resume interrupted downloads</span>
+                        <label class="toggle-label-right">
                             <input type="checkbox" id="auto_resume" class="toggle-input" checked>
                             <span class="toggle-switch"></span>
-                            <span class="toggle-text">Auto-resume interrupted downloads</span>
                         </label>
+                    </div>
+
+                    <div style="margin-top: 2rem; display: flex; justify-content: flex-end;">
+                        <button class="btn btn-primary" id="btn-save-downloads">
+                            <span class="material-icons">save</span>
+                            Save Settings
+                        </button>
                     </div>
                 </div>
             </div>
@@ -315,6 +311,11 @@
 
                 btn.classList.add('active');
                 document.getElementById(`tab-${tab}`).classList.add('active');
+
+                // Refresh accounts when switching to account tab
+                if (tab === 'account') {
+                    loadAccounts();
+                }
             });
         });
 
@@ -604,7 +605,7 @@
                     if (s.category_paths) {
                         document.getElementById('path_radarr').value = s.category_paths.radarr || 'movies';
                         document.getElementById('path_sonarr').value = s.category_paths.sonarr || 'tv';
-                        document.getElementById('path_lidarr').value = s.category_paths.lidarr || 'music';
+                        // path_lidarr removed
                     }
 
                     // Integration
@@ -625,23 +626,15 @@
             }
         }
 
-        // Save settings
-        document.getElementById('btn-save').addEventListener('click', async () => {
-            const settings = {
-                category_paths: {
-                    radarr: document.getElementById('path_radarr').value,
-                    sonarr: document.getElementById('path_sonarr').value,
-                    lidarr: document.getElementById('path_lidarr').value,
-                },
-                base_url: document.getElementById('base_url').value,
-                enable_indexer: document.getElementById('enable_indexer').checked,
-                enable_sabnzbd: document.getElementById('enable_sabnzbd').checked,
-                theme: document.querySelector('input[name="theme"]:checked').value,
-                language: document.getElementById('language').value,
-                refresh_interval: parseInt(document.getElementById('refresh_interval').value),
-            };
-
+        // Save settings (Global helper)
+        async function saveSettings(settings, btn = null) {
             try {
+                if (btn) {
+                    btn.disabled = true;
+                    btn._oldHTML = btn.innerHTML;
+                    btn.innerHTML = '<span class="material-icons spin">sync</span> Saving...';
+                }
+
                 const response = await fetch('/api/settings', {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
@@ -655,9 +648,53 @@
                     showToast(data.message || 'Failed to save', 'error');
                 }
             } catch (error) {
+                console.error('Save error:', error);
                 showToast('Error saving settings', 'error');
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = btn._oldHTML;
+                }
             }
-        });
+        }
+
+        // Save Download settings (specific button)
+        const btnSaveDownloads = document.getElementById('btn-save-downloads');
+        if (btnSaveDownloads) {
+            btnSaveDownloads.addEventListener('click', () => {
+                const settings = {
+                    download_path: document.getElementById('download_path').value,
+                    category_paths: {
+                        radarr: document.getElementById('path_radarr').value,
+                        sonarr: document.getElementById('path_sonarr').value,
+                    },
+                    max_concurrent_downloads: parseInt(document.getElementById('max_concurrent').value),
+                    speed_limit_kbps: parseInt(document.getElementById('speed_limit').value) || 0,
+                    auto_resume: document.getElementById('auto_resume').checked,
+                };
+                saveSettings(settings, btnSaveDownloads);
+            });
+        }
+
+        // Global Save button removed from header, functionality moved to specific tabs if needed
+        const btnSave = document.getElementById('btn-save');
+        if (btnSave) {
+            btnSave.addEventListener('click', async () => {
+                const settings = {
+                    category_paths: {
+                        radarr: document.getElementById('path_radarr').value,
+                        sonarr: document.getElementById('path_sonarr').value,
+                    },
+                    base_url: document.getElementById('base_url').value,
+                    enable_indexer: document.getElementById('enable_indexer').checked,
+                    enable_sabnzbd: document.getElementById('enable_sabnzbd').checked,
+                    theme: document.querySelector('input[name="theme"]:checked').value,
+                    language: document.getElementById('language').value,
+                    refresh_interval: parseInt(document.getElementById('refresh_interval').value),
+                };
+                saveSettings(settings, btnSave);
+            });
+        }
 
         // Removed btn-test-connection as it's now handled in the modal login
 
@@ -688,34 +725,7 @@
             }
         });
 
-        // Export settings
-        document.getElementById('btn-export').addEventListener('click', async () => {
-            const response = await fetch('/api/settings/export');
-            const data = await response.json();
-
-            if (data.status === 'ok') {
-                const blob = new Blob([data.data], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'fshare-nexus-settings.json';
-                a.click();
-                showToast('Settings exported');
-            }
-        });
-
-        // Reset settings
-        document.getElementById('btn-reset').addEventListener('click', async () => {
-            if (!confirm('Are you sure you want to reset all settings to defaults?')) return;
-
-            const response = await fetch('/api/settings/reset', { method: 'POST' });
-            const data = await response.json();
-
-            if (data.status === 'ok') {
-                showToast('Settings reset to defaults');
-                loadSettings();
-            }
-        });
+        // Export and Reset buttons removed from UI, listeners removed to prevent JS errors
 
         // Initial load
         loadSettings();

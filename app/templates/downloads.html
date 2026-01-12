@@ -161,6 +161,34 @@
         </div>
     </div>
 </div>
+
+<!-- Error Modal -->
+<div id="error-modal" class="modal"
+    style="display: none; position: fixed; z-index: 2000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); align-items: center; justify-content: center;">
+    <div class="service-card"
+        style="width: 100%; max-width: 500px; padding: 2rem; border-color: rgba(239, 68, 68, 0.3);">
+        <div class="service-header" style="margin-bottom: 1.5rem;">
+            <div class="service-icon" style="background: rgba(239, 68, 68, 0.1); color: #ef4444;">
+                <span class="material-icons">error_outline</span>
+            </div>
+            <div class="service-title" style="color: #ef4444;">Download Failed</div>
+            <button onclick="bridge.closeErrorModal()"
+                style="margin-left: auto; background: none; border: none; color: var(--text-muted); cursor: pointer;">
+                <span class="material-icons">close</span>
+            </button>
+        </div>
+
+        <div style="background: rgba(15, 23, 42, 0.5); padding: 1rem; border-radius: 8px; border: 1px solid var(--border-color); font-family: monospace; font-size: 0.85rem; color: #f87171; overflow-x: auto; white-space: pre-wrap; max-height: 300px; overflow-y: auto;"
+            id="error-modal-text">
+            Unknown Error
+        </div>
+
+        <div style="display: flex; gap: 1rem; justify-content: flex-end; margin-top: 1.5rem;">
+            <button onclick="bridge.closeErrorModal()" class="icon-action-btn"
+                style="width: auto; padding: 0 1.5rem; background: #374151; color: white; border: none; font-weight: 600; font-size: 0.85rem;">CLOSE</button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}

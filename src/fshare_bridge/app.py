@@ -9,6 +9,7 @@ import os
 import json
 import asyncio
 import logging
+import threading
 from pathlib import Path
 
 from flask import Flask, request, jsonify, send_file, render_template
@@ -25,11 +26,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Load version
-VERSION = "Unknown"
+VERSION = "v2.0.0-beta.8"  # Fallback
 try:
-    version_file = Path(__file__).parent.parent.parent / "VERSION"
-    if version_file.exists():
-        VERSION = version_file.read_text().strip()
+    # Check package root first
+    pkg_version = Path(__file__).parent / "VERSION"
+    if pkg_version.exists():
+        VERSION = pkg_version.read_text().strip()
+    else:
+        # Check app root
+        app_version = Path(__file__).parent.parent.parent / "VERSION"
+        if app_version.exists():
+            VERSION = app_version.read_text().strip()
 except Exception as e:
     logger.warning(f"Could not load VERSION: {e}")
 
@@ -48,6 +55,20 @@ def create_app():
     app.indexer = create_indexer_service()
     app.sabnzbd = None  # Will be initialized async
     app.account_manager = AccountManager()
+    
+    # Inject version into all templates
+    @app.context_processor
+    def inject_version():
+        return dict(version=VERSION)
+    
+    def format_size(bytes):
+        if bytes == 0: return '0 B'
+        import math
+        units = ['B', 'KB', 'MB', 'GB', 'TB']
+        i = int(math.floor(math.log(bytes) / math.log(1024)))
+        p = math.pow(1024, i)
+        s = round(bytes / p, 2)
+        return f"{s} {units[i]}"
     
     # Temporarily add Web UI stub APIs for compatibility
     # These will eventually be replaced with proper implementations
@@ -79,17 +100,32 @@ def create_app():
             fshare_data['account_type'] = primary.get('account_type')
             fshare_data['email'] = primary.get('email')
 
+        # Get downloader status
+        sab_status = {"active": 0, "speed": 0, "total_size": 0, "connected": False}
+        if app.sabnzbd:
+            try:
+                sab_status = app.sabnzbd.get_status()
+            except:
+                pass
+
+        total_speed = sab_status.get('speed', 0)
+        formatted_speed = "0 B/s"
+        if total_speed > 1024 * 1024:
+            formatted_speed = f"{total_speed / (1024 * 1024):.1f} MB/s"
+        elif total_speed > 1024:
+            formatted_speed = f"{total_speed / 1024:.1f} KB/s"
+        else:
+            formatted_speed = f"{total_speed} B/s"
+
         return jsonify({
-            "system": {"uptime": "0", "speedtest": "0 Mbps"},
-            "pyload": {
-                "active": 0,  # TODO: get from sabnzbd
-                "speed": "0 B/s",
-                "speed_bytes": 0,
-                "total": 0,
-                "connected": app.sabnzbd is not None,
-                "fshare_account": fshare_data
-            },
-            "bridge": {"searches": 0, "success_rate": "100%"}
+            "fshare_downloader": {
+                "active": sab_status.get('active', 0),
+                "speed": formatted_speed,
+                "speed_bytes": total_speed,
+                "total": sab_status.get('queued', 0) + sab_status.get('active', 0),
+                "connected": sab_status.get('connected', False),
+                "primary_account": fshare_data
+            }
         })
     
     @app.route('/api/downloads')
@@ -101,14 +137,26 @@ def create_app():
             queue = app.sabnzbd.get_queue()
             downloads = []
             for slot in queue.get('queue', {}).get('slots', []):
+                speed_bytes = slot.get('speed_bytes', 0)
+                formatted_speed = "0 B/s"
+                if speed_bytes > 1024 * 1024:
+                    formatted_speed = f"{speed_bytes / (1024 * 1024):.1f} MB/s"
+                elif speed_bytes > 1024:
+                    formatted_speed = f"{speed_bytes / 1024:.1f} KB/s"
+                else:
+                    formatted_speed = f"{speed_bytes} B/s"
+
+                total_bytes = slot.get('total_bytes', 0)
+                formatted_total = format_size(total_bytes) if total_bytes > 0 else slot.get('mb', 'N/A')
+
                 downloads.append({
                     "id": slot.get('nzo_id'),
                     "filename": slot.get('filename'),
                     "state": slot.get('status'),
                     "progress": int(slot.get('percentage', 0)),
-                    "size": {"formatted_total": slot.get('mb', 'N/A'), "total": 0},
-                    "speed": {"formatted": slot.get('speed', '0 B/s'), "bytes_per_sec": 0},
-                    "eta": {"formatted": slot.get('eta', '--:--'), "seconds": 0},
+                    "size": {"formatted_total": formatted_total, "total": total_bytes},
+                    "speed": {"formatted": formatted_speed, "bytes_per_sec": speed_bytes},
+                    "eta": {"formatted": slot.get('timeleft', '--:--'), "seconds": slot.get('eta_seconds', 0)},
                     "category": slot.get('cat', 'Unknown')
                 })
             return jsonify({"downloads": downloads})
@@ -130,13 +178,24 @@ def create_app():
             # Format for UI
             formatted_results = []
             for item in results:
+                # Use the parser from indexer service
+                parsed = app.indexer.parser.parse(item.name)
+                
                 formatted_results.append({
                     "id": item.fcode,
-                    "name": item.name,
+                    "name": parsed.title or item.name,
+                    "original_filename": item.name,
                     "size": item.size,
-                    "link": item.url,
-                    "folder": False,  # TimFshare results are files
-                    "score": item.score
+                    "url": item.url,
+                    "folder": False,
+                    "score": item.score,
+                    "is_series": parsed.is_series,
+                    "season": parsed.season,
+                    "episode": parsed.episode,
+                    "quality": parsed.quality,
+                    "vietsub": parsed.quality_attrs.viet_sub if parsed.quality_attrs else False,
+                    "vietdub": parsed.quality_attrs.viet_dub if parsed.quality_attrs else False,
+                    "metadata": parsed.quality_attrs.to_dict() if parsed.quality_attrs else {}
                 })
                 
             return jsonify({"results": formatted_results})
@@ -152,8 +211,32 @@ def create_app():
     
     @app.route('/api/download', methods=['POST'])
     def api_download():
-        """Download API stub"""
-        return jsonify({"success": False, "error": "Not implemented"})
+        """Download API: Start a download from search results"""
+        if not app.sabnzbd:
+            error_msg = getattr(app, 'init_error', 'Download engine not initialized')
+            return jsonify({"success": False, "error": error_msg}), 503
+            
+        data = request.get_json()
+        url = data.get('url')
+        name = data.get('name')
+        
+        if not url:
+            return jsonify({"success": False, "error": "URL is required"}), 400
+            
+        try:
+            # Add to download engine
+            # We don't always have a category from search, default to 'manual'
+            nzo_id = app.sabnzbd.add_url(url, category='manual')
+            
+            if nzo_id:
+                logger.info(f"Added download from search: {name or url} ({nzo_id})")
+                return jsonify({"success": True, "nzo_id": nzo_id})
+            else:
+                return jsonify({"success": False, "error": "Failed to add to queue"})
+                
+        except Exception as e:
+            logger.error(f"Error adding download: {e}")
+            return jsonify({"success": False, "error": str(e)}), 500
     
     @app.route('/api/logs')
     def api_logs():
@@ -184,12 +267,16 @@ def create_app():
     @app.route('/api/download/toggle/<nzo_id>', methods=['POST'])
     def api_toggle_download(nzo_id):
         """Toggle download pause/resume"""
-        return jsonify({"success": True, "action": "toggled"})
+        if app.sabnzbd and app.sabnzbd.toggle_item(nzo_id):
+            return jsonify({"success": True, "action": "toggled"})
+        return jsonify({"success": False, "error": "Item not found"}), 404
     
     @app.route('/api/download/delete/<nzo_id>', methods=['DELETE'])
     def api_delete_download(nzo_id):
         """Delete a download"""
-        return jsonify({"success": True})
+        if app.sabnzbd and app.sabnzbd.delete_item(nzo_id):
+            return jsonify({"success": True})
+        return jsonify({"success": False, "error": "Item not found"}), 404
     
     @app.route('/api/settings', methods=['GET'])
     def api_get_settings():
@@ -429,7 +516,7 @@ def create_app():
         """API information endpoint."""
         return jsonify({
             "name": "Fshare-Arr-Bridge",
-            "version": "2.0.0-alpha",
+            "version": VERSION,
             "description": "Integration bridge for Fshare.vn with Sonarr/Radarr",
             "endpoints": {
                 "health": "/health",
@@ -550,6 +637,7 @@ async def initialize_sabnzbd(app):
         app.sabnzbd = await create_sabnzbd_service(account_manager=app.account_manager)
         logger.info("✅ SABnzbd service initialized")
     except Exception as e:
+        app.init_error = str(e)
         logger.error(f"Failed to initialize SABnzbd service: {e}", exc_info=True)
 
 
@@ -557,11 +645,29 @@ def run_app():
     """Run the application."""
     config = get_config()
     app = create_app()
+    app.init_error = None
     
-    # Initialize SABnzbd in background
+    # Initialize SABnzbd in background thread to keep loop running
+    def start_loop(loop):
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_forever()
+        except Exception as e:
+            logger.error(f"Async loop exited: {e}")
+    
     loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(initialize_sabnzbd(app))
+    app.async_loop = loop  # Store loop reference for builtin_client access
+    t = threading.Thread(target=start_loop, args=(loop,), daemon=True)
+    t.start()
+    
+    # Schedule initialization
+    future = asyncio.run_coroutine_threadsafe(initialize_sabnzbd(app), loop)
+    
+    # Wait briefly for initialization to complete (optional, just for cleaner logs on startup)
+    try:
+        future.result(timeout=5)
+    except Exception as e:
+        logger.warning(f"Initialization still in progress or failed: {e}")
     
     # Run Flask app
     logger.info(f"Starting Fshare-Arr-Bridge on port {config.server.port}")
@@ -569,6 +675,7 @@ def run_app():
         host='0.0.0.0',
         port=config.server.port,
         debug=config.server.debug,
+        use_reloader=False # Disable reloader to prevent creating two loops
     )
 
 

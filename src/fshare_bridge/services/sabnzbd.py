@@ -12,6 +12,8 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any, Protocol
 from dataclasses import dataclass, field
 from enum import Enum
+import json
+from pathlib import Path
 
 from ..core.exceptions import DownloadError, APIError
 from ..utils.filename_parser import FilenameParser, ParsedFilename
@@ -44,6 +46,10 @@ class QueueItem:
     category: str = "Uncategorized"
     fshare_url: Optional[str] = None
     guid: Optional[str] = None
+    speed: float = 0.0
+    size_bytes: int = 0
+    downloaded_bytes: int = 0
+    eta_seconds: float = 0.0
     added: str = field(default_factory=lambda: datetime.now().isoformat())
     completed: Optional[str] = None
     
@@ -52,7 +58,7 @@ class QueueItem:
         return {
             "nzo_id": self.nzo_id,
             "filename": self.filename,
-            "status": self.status.value,
+            "status": "Running" if self.status == DownloadStatus.DOWNLOADING else self.status.value,
             "percentage": str(int(self.percentage)),
             "mb": f"{self.mb_total:.2f}",
             "mbleft": f"{self.mb_left:.2f}",
@@ -60,6 +66,10 @@ class QueueItem:
             "eta": self.eta,
             "priority": self.priority,
             "cat": self.category,
+            "speed_bytes": self.speed,
+            "total_bytes": self.size_bytes,
+            "downloaded": self.downloaded_bytes,
+            "eta_seconds": self.eta_seconds,
         }
     
     def to_history_slot(self) -> Dict[str, Any]:
@@ -149,6 +159,13 @@ class SABnzbdEmulator:
         # In-memory storage
         self._queue: Dict[str, QueueItem] = {}
         self._history: Dict[str, QueueItem] = {}
+        
+        # Persistence
+        self._queue_file = Path("/app/data/queue.json")
+        self._queue_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Load persisted queue
+        self._load_queue()
 
     @property
     def fshare(self) -> FshareClientProtocol:
@@ -226,13 +243,13 @@ class SABnzbdEmulator:
                 logger.error("Failed to get file info from Fshare")
                 return None
             
-            # Parse and normalize filename
-            original_name = file_info.get("name", "Unknown")
+            # Parse and normalize filename (file_info is now a FshareFile object)
+            original_name = file_info.name
             parsed = self.parser.parse(original_name)
             normalized_filename = filename or parsed.normalized_filename
             
             # Get direct download link
-            fcode = file_info.get("fcode", "")
+            fcode = file_info.fcode
             download_url = self.fshare.get_download_link(fcode)
             if not download_url:
                 logger.error("Failed to get download link from Fshare")
@@ -241,21 +258,22 @@ class SABnzbdEmulator:
             # Determine category
             resolved_category = self._resolve_category(category, parsed)
             
+            # Generate NZO ID
+            nzo_id = str(uuid.uuid4())
+            
             # Send to download client
             success = self.downloader.add_download(
                 download_url,
                 filename=normalized_filename,
                 package_name=parsed.title,
                 category=resolved_category,
+                task_id=nzo_id,
             )
             
             if not success:
                 logger.error("Failed to add download to client")
                 return None
-            
-            # Generate NZO ID and add to queue
-            nzo_id = str(uuid.uuid4())
-            size_bytes = file_info.get("size", 0)
+            size_bytes = file_info.size
             
             queue_item = QueueItem(
                 nzo_id=nzo_id,
@@ -271,6 +289,7 @@ class SABnzbdEmulator:
             self._queue[nzo_id] = queue_item
             
             logger.info(f"✅ Download started with NZO ID: {nzo_id}")
+            self._save_queue()
             return nzo_id
             
         except Exception as e:
@@ -284,20 +303,108 @@ class SABnzbdEmulator:
         Returns:
             Queue data dictionary
         """
-        slots = [item.to_queue_slot() for item in self._queue.values()]
+        # Sync with downloader
+        downloader_queue = self.downloader.get_queue()
+        active_ids = []
         
-        total_size = sum(item.mb_total for item in self._queue.values())
-        total_left = sum(item.mb_left for item in self._queue.values())
+        for item in downloader_queue:
+            nzo_id = item.get('id')
+            active_ids.append(nzo_id)
+            
+            if nzo_id in self._queue:
+                q_item = self._queue[nzo_id]
+                q_item.percentage = item.get('progress', 0.0)
+                
+                size_bytes = item.get('size', 0)
+                downloaded_bytes = item.get('downloaded', 0)
+                
+                q_item.mb_total = size_bytes / (1024 * 1024)
+                q_item.mb_left = max(0, (size_bytes - downloaded_bytes) / (1024 * 1024))
+                
+                # Sync raw values
+                q_item.size_bytes = size_bytes
+                q_item.downloaded_bytes = downloaded_bytes
+                q_item.speed = item.get('speed', 0.0)
+                q_item.eta_seconds = item.get('eta', 0.0)
+                
+                # Map engine status to SABnzbd status
+                status_str = str(item.get('status')).lower()
+                if status_str == "downloading":
+                    q_item.status = DownloadStatus.DOWNLOADING
+                elif status_str == "queued":
+                    q_item.status = DownloadStatus.QUEUED
+                elif status_str == "paused":
+                    q_item.status = DownloadStatus.PAUSED
+                elif status_str == "completed":
+                    q_item.status = DownloadStatus.COMPLETED
+                elif status_str == "failed":
+                    q_item.status = DownloadStatus.FAILED
+                
+                # Update time info
+                eta_seconds = item.get('eta')
+                if eta_seconds and eta_seconds > 0:
+                    hours, rem = divmod(int(eta_seconds), 3600)
+                    minutes, seconds = divmod(rem, 60)
+                    q_item.time_left = f"{hours}:{minutes:02d}:{seconds:02d}"
+                    q_item.eta = datetime.now().isoformat() # Placeholder for simplified ETA
+            else:
+                # Item in downloader but not in emulator? 
+                # Could happen if added directly to engine.
+                pass
         
+        # Check for completed/failed items that are no longer in downloader queue
+        current_queue_ids = list(self._queue.keys())
+        for nzo_id in current_queue_ids:
+            if nzo_id not in active_ids:
+                # If it was downloading/queued, it might have finished or failed
+                # The engine marks them as COMPLETED/FAILED but we might need to move them to history
+                item = self._queue[nzo_id]
+                if item.status in (DownloadStatus.DOWNLOADING, DownloadStatus.QUEUED):
+                     # Verify if it completed or failed by checking all engine tasks
+                     # For now, let's keep it simple and check engine tasks directly if possible
+                     pass
+
+        slots = [item.to_queue_slot() for item in self._queue.values() if item.status != DownloadStatus.COMPLETED]
+        
+        total_size = sum(item.mb_total for item in self._queue.values() if item.status != DownloadStatus.COMPLETED)
+        total_left = sum(item.mb_left for item in self._queue.values() if item.status != DownloadStatus.COMPLETED)
+        
+        # Calculate speed
+        status = self.downloader.get_status()
+        total_speed = status.get('total_speed', 0)
+        formatted_speed = "0 B/s"
+        if total_speed > 1024 * 1024:
+            formatted_speed = f"{total_speed / (1024 * 1024):.1f} MB/s"
+        elif total_speed > 1024:
+            formatted_speed = f"{total_speed / 1024:.1f} KB/s"
+        else:
+            formatted_speed = f"{total_speed} B/s"
+
         return {
             "queue": {
-                "status": "Downloading" if slots else "Idle",
-                "speed": "0",
+                "status": "Downloading" if any(i.status == DownloadStatus.DOWNLOADING for i in self._queue.values()) else "Idle",
+                "speed": formatted_speed,
                 "size": f"{total_size:.2f}",
                 "sizeleft": f"{total_left:.2f}",
                 "slots": slots,
                 "noofslots": len(slots),
             }
+        }
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get emulator status including downloader engine status."""
+        status = self.downloader.get_status()
+        
+        total_size = sum(item.mb_total for item in self._queue.values() if item.status != DownloadStatus.COMPLETED)
+        total_left = sum(item.mb_left for item in self._queue.values() if item.status != DownloadStatus.COMPLETED)
+        
+        return {
+            "active": status.get('active', 0),
+            "speed": status.get('total_speed', 0),
+            "queued": status.get('queued', 0),
+            "total_size": total_size,
+            "total_left": total_left,
+            "connected": status.get('running', False)
         }
     
     def get_history(self, limit: int = 50) -> Dict[str, Any]:
@@ -327,33 +434,76 @@ class SABnzbdEmulator:
     def pause_queue(self) -> bool:
         """Pause the download queue."""
         logger.info("Queue paused")
-        for item in self._queue.values():
-            if item.status == DownloadStatus.DOWNLOADING:
-                item.status = DownloadStatus.PAUSED
-        return True
+        success = True
+        for item in list(self._queue.values()):
+            if item.status in (DownloadStatus.DOWNLOADING, DownloadStatus.QUEUED):
+                if self.downloader.pause_download(item.nzo_id):
+                    item.status = DownloadStatus.PAUSED
+                else:
+                    success = False
+        self._save_queue()
+        return success
     
     def resume_queue(self) -> bool:
         """Resume the download queue."""
         logger.info("Queue resumed")
-        for item in self._queue.values():
+        success = True
+        for item in list(self._queue.values()):
             if item.status == DownloadStatus.PAUSED:
-                item.status = DownloadStatus.DOWNLOADING
-        return True
+                if self.downloader.resume_download(item.nzo_id):
+                    item.status = DownloadStatus.DOWNLOADING
+                else:
+                    success = False
+        self._save_queue()
+        return success
+
+    def stop_all_downloads(self) -> bool:
+        """Stop/Cancel all active downloads."""
+        logger.info("Stopping all downloads")
+        success = True
+        for item in list(self._queue.values()):
+            if item.status in (DownloadStatus.DOWNLOADING, DownloadStatus.PAUSED, DownloadStatus.QUEUED):
+                # Call delete_item which handles cancellation and queue removal
+                # But here maybe we just want to stop them but keep in history?
+                # Usually Stop All means Cancel All active
+                if self.delete_item(item.nzo_id):
+                     pass
+                else:
+                     success = False
+        self._save_queue()
+        return success
     
     def delete_item(self, nzo_id: str) -> bool:
         """
-        Delete an item from the queue.
-        
-        Args:
-            nzo_id: Item identifier
-            
-        Returns:
-            True if deleted, False if not found
+        Delete an item from the queue and cancel download.
         """
         if nzo_id in self._queue:
+            # Tell downloader to cancel
+            self.downloader.delete_download(nzo_id)
             del self._queue[nzo_id]
             logger.info(f"Deleted queue item: {nzo_id}")
+            self._save_queue()
             return True
+        return False
+
+    def toggle_item(self, nzo_id: str) -> bool:
+        """
+        Toggle pause/resume for an item.
+        """
+        if nzo_id in self._queue:
+            item = self._queue[nzo_id]
+            if item.status == DownloadStatus.PAUSED:
+                success = self.downloader.resume_download(nzo_id)
+                if success:
+                    item.status = DownloadStatus.DOWNLOADING
+                    self._save_queue()
+                    return True
+            else:
+                success = self.downloader.pause_download(nzo_id)
+                if success:
+                    item.status = DownloadStatus.PAUSED
+                    self._save_queue()
+                    return True
         return False
     
     def complete_item(self, nzo_id: str) -> bool:
@@ -374,6 +524,7 @@ class SABnzbdEmulator:
             item.mb_left = 0.0
             self._history[nzo_id] = item
             logger.info(f"Completed queue item: {nzo_id}")
+            self._save_queue()
             return True
         return False
     
@@ -417,3 +568,127 @@ class SABnzbdEmulator:
             return "Radarr"
         
         return category.capitalize()
+    
+    def _save_queue(self) -> None:
+        """Save queue and history to disk."""
+        try:
+            data = {
+                "version": 1,
+                "queue": {
+                    nzo_id: {
+                        "nzo_id": item.nzo_id,
+                        "filename": item.filename,
+                        "original_filename": item.original_filename,
+                        "status": item.status.value,
+                        "percentage": item.percentage,
+                        "mb_left": item.mb_left,
+                        "mb_total": item.mb_total,
+                        "time_left": item.time_left,
+                        "eta": item.eta,
+                        "priority": item.priority,
+                        "category": item.category,
+                        "fshare_url": item.fshare_url,
+                        "guid": item.guid,
+                        "speed": item.speed,
+                        "size_bytes": item.size_bytes,
+                        "downloaded_bytes": item.downloaded_bytes,
+                        "eta_seconds": item.eta_seconds,
+                        "added": item.added,
+                        "completed": item.completed,
+                    }
+                    for nzo_id, item in self._queue.items()
+                },
+                "history": {
+                    nzo_id: {
+                        "nzo_id": item.nzo_id,
+                        "filename": item.filename,
+                        "original_filename": item.original_filename,
+                        "status": item.status.value,
+                        "percentage": item.percentage,
+                        "mb_total": item.mb_total,
+                        "category": item.category,
+                        "added": item.added,
+                        "completed": item.completed,
+                    }
+                    for nzo_id, item in self._history.items()
+                }
+            }
+            
+            with open(self._queue_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            
+            logger.debug(f"Queue saved: {len(self._queue)} items, {len(self._history)} history")
+        except Exception as e:
+            logger.error(f"Failed to save queue: {e}")
+    
+    def _load_queue(self) -> None:
+        """Load queue and history from disk."""
+        if not self._queue_file.exists():
+            logger.info("No persisted queue found, starting fresh")
+            return
+        
+        try:
+            with open(self._queue_file, 'r') as f:
+                data = json.load(f)
+            
+            # Validate version
+            if data.get("version") != 1:
+                logger.warning("Queue file version mismatch, ignoring")
+                return
+            
+            # Restore queue
+            for nzo_id, item_data in data.get("queue", {}).items():
+                try:
+                    # Convert status string back to enum
+                    status_str = item_data.get("status", "Queued")
+                    status = DownloadStatus[status_str.upper()] if hasattr(DownloadStatus, status_str.upper()) else DownloadStatus.QUEUED
+                    
+                    item = QueueItem(
+                        nzo_id=item_data["nzo_id"],
+                        filename=item_data["filename"],
+                        original_filename=item_data["original_filename"],
+                        status=status,
+                        percentage=item_data.get("percentage", 0.0),
+                        mb_left=item_data.get("mb_left", 0.0),
+                        mb_total=item_data.get("mb_total", 0.0),
+                        time_left=item_data.get("time_left", "0:00:00"),
+                        eta=item_data.get("eta", "unknown"),
+                        priority=item_data.get("priority", "Normal"),
+                        category=item_data.get("category", "Uncategorized"),
+                        fshare_url=item_data.get("fshare_url"),
+                        guid=item_data.get("guid"),
+                        speed=item_data.get("speed", 0.0),
+                        size_bytes=item_data.get("size_bytes", 0),
+                        downloaded_bytes=item_data.get("downloaded_bytes", 0),
+                        eta_seconds=item_data.get("eta_seconds", 0.0),
+                        added=item_data.get("added", datetime.now().isoformat()),
+                        completed=item_data.get("completed"),
+                    )
+                    self._queue[nzo_id] = item
+                except Exception as e:
+                    logger.warning(f"Failed to restore queue item {nzo_id}: {e}")
+            
+            # Restore history
+            for nzo_id, item_data in data.get("history", {}).items():
+                try:
+                    status_str = item_data.get("status", "Completed")
+                    status = DownloadStatus[status_str.upper()] if hasattr(DownloadStatus, status_str.upper()) else DownloadStatus.COMPLETED
+                    
+                    item = QueueItem(
+                        nzo_id=item_data["nzo_id"],
+                        filename=item_data["filename"],
+                        original_filename=item_data["original_filename"],
+                        status=status,
+                        percentage=item_data.get("percentage", 100.0),
+                        mb_total=item_data.get("mb_total", 0.0),
+                        category=item_data.get("category", "Uncategorized"),
+                        added=item_data.get("added", datetime.now().isoformat()),
+                        completed=item_data.get("completed"),
+                    )
+                    self._history[nzo_id] = item
+                except Exception as e:
+                    logger.warning(f"Failed to restore history item {nzo_id}: {e}")
+            
+            logger.info(f"Queue restored: {len(self._queue)} items, {len(self._history)} history")
+        except Exception as e:
+            logger.error(f"Failed to load queue: {e}")

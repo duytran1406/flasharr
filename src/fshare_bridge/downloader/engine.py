@@ -322,8 +322,10 @@ class DownloadEngine:
         task.started_at = datetime.now()
         
         try:
-            # Ensure destination directory exists
+            # Ensure destination directory exists (parent only)
             task.destination.parent.mkdir(parents=True, exist_ok=True)
+            
+            logger.info(f"Using Premium URL: {task.url}")
             
             # Check for existing partial download
             start_byte = 0
@@ -337,62 +339,116 @@ class DownloadEngine:
                 headers["Range"] = f"bytes={start_byte}-"
             
             # Start download
-            async with self._session.get(task.url, headers=headers) as response:
-                if response.status not in (200, 206):
-                    raise DownloadFailedError(
-                        f"HTTP error {response.status}",
-                        {"status": response.status},
-                    )
-                
-                # Get total size
-                total_size = int(response.headers.get("Content-Length", 0))
-                if start_byte > 0:
-                    total_size += start_byte
-                
-                task.progress.total_bytes = total_size
-                task.progress.downloaded_bytes = start_byte
-                task.state = DownloadState.DOWNLOADING
-                
-                # Open file for writing
-                mode = "ab" if start_byte > 0 else "wb"
-                start_time = time.time()
-                
-                with open(task.destination, mode) as f:
-                    async for chunk in response.content.iter_chunked(self.config.chunk_size):
-                        # Check for cancellation
-                        if task.is_cancelled:
-                            task.state = DownloadState.CANCELLED
-                            logger.info(f"Download cancelled: {task.filename}")
+            logger.debug(f"Initiating request for {task.url}")
+            
+            # Use a ClientTimeout to prevent hanging
+            timeout = aiohttp.ClientTimeout(total=None, connect=30, sock_read=60)
+            
+            try:
+                async with self._session.get(task.url, headers=headers, timeout=timeout) as response:
+                    # Handle 416 Range Not Satisfiable - Restart download
+                    if response.status == 416:
+                        logger.warning(f"Range not satisfiable (416). File might be complete or corrupted. Restarting from scratch: {task.filename}")
+                        if task.destination.exists():
+                            task.destination.unlink()
+                        
+                        # Retry without range
+                        headers.pop("Range", None)
+                        start_byte = 0
+                        
+                        # New request
+                        async with self._session.get(task.url, headers=headers, timeout=timeout) as response_retry:
+                            if response_retry.status not in (200, 206):
+                                raise DownloadFailedError(f"HTTP error {response_retry.status}", {"status": response_retry.status})
+                            await self._handle_response_stream(response_retry, task, start_byte)
                             return
-                        
-                        # Wait if paused
-                        while task.is_paused and not task.is_cancelled:
-                            await asyncio.sleep(0.1)
-                        
-                        # Write chunk
-                        f.write(chunk)
-                        
-                        # Update progress
-                        task.progress.downloaded_bytes += len(chunk)
-                        elapsed = time.time() - start_time
-                        task.progress.update(
-                            task.progress.downloaded_bytes,
-                            task.progress.total_bytes,
-                            elapsed,
+
+                    if response.status not in (200, 206):
+                        raise DownloadFailedError(
+                            f"HTTP error {response.status}",
+                            {"status": response.status},
                         )
-                        
-                        # Call progress callback
-                        if self.progress_callback:
-                            self.progress_callback(task)
+                    
+                    await self._handle_response_stream(response, task, start_byte)
             
-            # Mark as completed
-            task.state = DownloadState.COMPLETED
-            task.completed_at = datetime.now()
-            task.progress.percentage = 100.0
-            
-            logger.info(f"Download completed: {task.filename}")
-            
+            except Exception as e:
+                task.state = DownloadState.FAILED
+                task.error_message = str(e)
+                logger.error(f"Download failed (request): {task.filename} - {e}")
+        
         except Exception as e:
             task.state = DownloadState.FAILED
             task.error_message = str(e)
-            logger.error(f"Download failed: {task.filename} - {e}")
+            logger.error(f"Download failed (system): {task.filename} - {e}")
+
+    async def _handle_response_stream(self, response: aiohttp.ClientResponse, task: DownloadTask, start_byte: int) -> None:
+        """Handle the response stream and write file."""
+        # Log response details
+        content_type = response.headers.get("Content-Type", "")
+        content_length = response.headers.get("Content-Length", "0")
+        logger.info(f"Download started. Type: {content_type}, Size: {content_length}, URL: {response.url}")
+        
+        # Check for HTML content (indicates error page instead of binary file)
+        if "text/html" in content_type:
+            # Read partial content to log error details
+            error_content = await response.content.read(1000)
+            logger.error(f"Download link returned HTML instead of file. Preview: {error_content.decode('utf-8', errors='ignore')}")
+            raise DownloadFailedError(f"Server returned HTML (likely error page): {content_type}")
+        
+        # Get total size
+        total_size = int(content_length)
+        if start_byte > 0:
+            total_size += start_byte
+        
+        task.progress.total_bytes = total_size
+        task.progress.downloaded_bytes = start_byte
+        task.state = DownloadState.DOWNLOADING
+        
+        # Open file for writing
+        mode = "ab" if start_byte > 0 else "wb"
+        start_time = time.time()
+        last_log_time = start_time
+        chunks_read = 0
+        
+        logger.info(f"Opening file {task.destination} in mode {mode}")
+        with open(task.destination, mode) as f:
+            async for chunk in response.content.iter_chunked(self.config.chunk_size):
+                chunks_read += 1
+                # Check for cancellation
+                if task.is_cancelled:
+                    task.state = DownloadState.CANCELLED
+                    logger.info(f"Download cancelled: {task.filename}")
+                    return
+                
+                # Wait if paused
+                while task.is_paused and not task.is_cancelled:
+                    await asyncio.sleep(0.1)
+                
+                # Write chunk
+                f.write(chunk)
+                
+                # Update progress
+                task.progress.downloaded_bytes += len(chunk)
+                current_time = time.time()
+                elapsed = current_time - start_time
+                task.progress.update(
+                    task.progress.downloaded_bytes,
+                    task.progress.total_bytes,
+                    elapsed,
+                )
+                
+                # Log progress every 5 seconds
+                if current_time - last_log_time >= 5.0:
+                    logger.info(f"Download progress: {task.filename} - {task.progress.percentage:.1f}% ({task.progress.downloaded_bytes}/{task.progress.total_bytes})")
+                    last_log_time = current_time
+                
+                # Call progress callback
+                if self.progress_callback:
+                    self.progress_callback(task)
+    
+        # Mark as completed
+        task.state = DownloadState.COMPLETED
+        task.completed_at = datetime.now()
+        task.progress.percentage = 100.0
+        
+        logger.info(f"Download completed: {task.filename}")

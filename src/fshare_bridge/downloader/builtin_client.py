@@ -45,6 +45,19 @@ class BuiltinDownloadClient:
         self.account_manager = account_manager
         self._fshare_handler_cache = None
         self._cached_client_id = None
+        
+        # Track task IDs by NZO ID for lookups
+        self._nzo_to_task: Dict[str, str] = {}
+        
+        # Ensure engine is started
+        if not self.engine._running:
+            # We'll try to start it, but usually it's started in add_download
+            # if we're in a sync context here.
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self.engine.start())
+            except RuntimeError:
+                pass
     @property
     def fshare_client(self) -> FshareClient:
         """Get the current primary Fshare client."""
@@ -67,13 +80,7 @@ class BuiltinDownloadClient:
             
         return self._fshare_handler_cache
 
-        
-        # Track task IDs by NZO ID for  lookups
-        self._nzo_to_task: Dict[str, str] = {}
-        
-        # Ensure engine is started
-        if not self.engine._running:
-            asyncio.create_task(self.engine.start())
+
     
     def add_download(
         self,
@@ -81,6 +88,7 @@ class BuiltinDownloadClient:
         filename: Optional[str] = None,
         package_name: Optional[str] = None,
         category: str = "Uncategorized",
+        task_id: Optional[str] = None,
     ) -> bool:
         """
         Add a download to the engine.
@@ -112,24 +120,63 @@ class BuiltinDownloadClient:
                 # Already a direct URL
                 download_url = url
             
-            # Add to download engine
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # If event loop is running, schedule the coroutine
-                task = asyncio.create_task(self.engine.add_download(
-                    download_url,
-                    filename or "download",
-                    destination=self.download_dir,
-                    category=category,
-                    package_name=package_name,
-                ))
-                # We can't await in sync context, but we can get the task ID
-                # For now, just log success
-                logger.info(f"Scheduled download: {filename}")
+            # Add to download engine using thread-safe method
+            # This works from any thread, including Flask request threads
+            logger.info(f"✅ Download URL: {download_url}")
+            
+            try:
+                # Get the engine's event loop
+                loop = None
+                
+                # Try to get from engine first
+                if hasattr(self.engine, '_loop') and self.engine._loop:
+                    loop = self.engine._loop
+                    logger.debug("Using engine's event loop")
+                
+                # Try to get from Flask app
+                if not loop:
+                    try:
+                        from flask import current_app
+                        if hasattr(current_app, 'async_loop'):
+                            loop = current_app.async_loop
+                            logger.debug("Using Flask app's event loop")
+                    except:
+                        pass
+                
+                # Fallback: try to get the running loop
+                if not loop:
+                    try:
+                        loop = asyncio.get_running_loop()
+                        logger.debug("Using running event loop")
+                    except RuntimeError:
+                        pass
+                
+                if not loop:
+                    logger.error("No event loop available for download engine")
+                    return False
+                
+                # Schedule the coroutine in the engine's event loop
+                future = asyncio.run_coroutine_threadsafe(
+                    self.engine.add_download(
+                        download_url,
+                        filename or "download",
+                        destination=self.download_dir,
+                        task_id=task_id,
+                        category=category,
+                        package_name=package_name,
+                    ),
+                    loop
+                )
+                
+                # Wait for the result with a timeout
+                future.result(timeout=5.0)
+                logger.info(f"✅ Download added: {filename}")
                 return True
-            else:
-                # No event loop running - this shouldn't happen in async context
-                logger.error("No event loop running - cannot add download")
+                
+            except Exception as e:
+                logger.error(f"Error scheduling download: {e}")
+                import traceback
+                traceback.print_exc()
                 return False
                 
         except Exception as e:
@@ -191,3 +238,14 @@ class BuiltinDownloadClient:
             "total_speed": total_speed,
             "running": self.engine._running,
         }
+    def delete_download(self, task_id: str) -> bool:
+        """Delete/Cancel a download."""
+        return self.engine.cancel_task(task_id)
+
+    def pause_download(self, task_id: str) -> bool:
+        """Pause a download."""
+        return self.engine.pause_task(task_id)
+
+    def resume_download(self, task_id: str) -> bool:
+        """Resume a download."""
+        return self.engine.resume_task(task_id)

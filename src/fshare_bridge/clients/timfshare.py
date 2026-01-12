@@ -63,7 +63,8 @@ class ScoringConfig:
     vietnamese_markers: Tuple[str, ...] = (
         "vietsub", "thuyết minh", "thuyet minh", 
         "lồng tiếng", "long tieng", "vie.dub", 
-        "vie.sub", "phụ đề", "phu de"
+        "vie.sub", "phụ đề", "phu de",
+        "tvp", "tmpđ"
     )
 
 

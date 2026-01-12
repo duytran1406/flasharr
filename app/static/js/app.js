@@ -281,6 +281,7 @@ class FshareBridge {
                     eta: d.eta.formatted,
                     eta_seconds: d.eta.seconds,   // for sorting
                     category: d.category || 'Uncategorized',
+                    error_message: d.error_message || '',
                     info: "" // Legacy field, empty for now
                 }));
 
@@ -700,7 +701,15 @@ class FshareBridge {
                         <span style="font-size: 0.8rem; font-weight: 600; min-width: 40px;">${d.progress}%</span>
                     </div>
                 </td>
-                <td><span class="status-badge ${statusClass}">${d.status.toUpperCase()}</span></td>
+                <td>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <span class="status-badge ${statusClass}">${d.status.toUpperCase()}</span>
+                        ${d.status.toLowerCase() === 'failed' && d.error_message ? `
+                        <button class="icon-btn" onclick="bridge.showError('${this.escapeHtml(d.error_message)}')" title="View Error" style="color: #ef4444;">
+                            <span class="material-icons" style="font-size: 18px;">error</span>
+                        </button>` : ''}
+                    </div>
+                </td>
                 <td>${d.speed}</td>
                 <td class="eta-cell">${d.eta}</td>
                 <td style="text-align: right; padding-right: 1.5rem;">
@@ -737,6 +746,22 @@ class FshareBridge {
             const resp = await fetch('/api/downloads/stop_all', { method: 'POST' });
             if ((await resp.json()).success) await this.runFullPollCheck();
         }
+    }
+
+    showError(msg) {
+        const modal = document.getElementById('error-modal');
+        const text = document.getElementById('error-modal-text');
+        if (modal && text) {
+            text.textContent = msg;
+            modal.style.display = 'flex';
+        } else {
+            alert(msg);
+        }
+    }
+
+    closeErrorModal() {
+        const modal = document.getElementById('error-modal');
+        if (modal) modal.style.display = 'none';
     }
 
     createDownloadRow(d) {
@@ -903,7 +928,8 @@ class FshareBridge {
                         <span class="status-badge success">Score: ${score}</span>
                         <span class="status-badge info">${sizeStr}</span>
                         ${metadata.resolution ? `<span class="status-badge info">${metadata.resolution}</span>` : ''}
-                        ${metadata.vietnamese ? `<span class="status-badge success">${metadata.vietnamese}</span>` : ''}
+                        ${metadata.viet_sub ? `<span class="status-badge success" style="background: rgba(16, 185, 129, 0.2); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3);">VIET SUB</span>` : ''}
+                        ${metadata.viet_dub ? `<span class="status-badge success" style="background: rgba(245, 158, 11, 0.2); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.3);">VIET DUB</span>` : ''}
                     </div>
                     <button class="btn-primary" style="width: 100%; justify-content: center;" 
                             onclick="bridge.download('${this.escapeHtml(url)}', '${this.escapeHtml(name)}')">
@@ -915,11 +941,18 @@ class FshareBridge {
     }
 
     parseMetadata(filename) {
-        const metadata = {};
-        if (filename.match(/2160p|4K/i)) metadata.resolution = '4K';
+        // Fallback local parser for UI-only elements if needed
+        const metadata = { resolution: null, viet_sub: false, viet_dub: false };
+        if (filename.match(/2160p|4K|UHD/i)) metadata.resolution = '4K';
         else if (filename.match(/1080p/i)) metadata.resolution = '1080p';
-        if (filename.match(/vietsub/i)) metadata.vietnamese = 'Vietsub';
-        else if (filename.match(/thuyết minh|thuyet minh/i)) metadata.vietnamese = 'Thuyết Minh';
+        else if (filename.match(/720p/i)) metadata.resolution = '720p';
+
+        const vietSubMarkers = /vietsub|viet\.sub|vie\.sub|phụ đề|phu de/i;
+        const vietDubMarkers = /thuyết minh|thuyet minh|viet\.dub|vie\.dub|lồng tiếng|long tieng|tvp|tmpđ/i;
+
+        if (filename.match(vietSubMarkers)) metadata.viet_sub = true;
+        if (filename.match(vietDubMarkers)) metadata.viet_dub = true;
+
         return metadata;
     }
 

@@ -81,7 +81,7 @@
     </div>
 
     <!-- Scripts -->
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v={{ version }}"></script>
     <script>
         // Header search functionality
         const headerSearch = document.getElementById('header-search-input');
@@ -140,12 +140,38 @@
                         }
 
                         // Execute any scripts in the new content
-                        const scripts = doc.querySelectorAll('script:not(#spa-navigation-script)');
-                        scripts.forEach(script => {
-                            if (script.textContent) {
-                                eval(script.textContent);
+                        // Execute any scripts in the new content
+                        const scripts = Array.from(doc.querySelectorAll('script:not(#spa-navigation-script)'));
+
+                        // Execute sequentially to respect dependencies (like Chart.js)
+                        for (const script of scripts) {
+                            if (script.src) {
+                                // Check if already loaded to avoid duplicates
+                                if (!document.querySelector(`script[src="${script.src}"]`)) {
+                                    await new Promise((resolve, reject) => {
+                                        const newScript = document.createElement('script');
+                                        newScript.src = script.src;
+                                        newScript.onload = resolve;
+                                        newScript.onerror = () => {
+                                            console.error("Failed to load script:", script.src);
+                                            resolve(); // Verify: resolve anyway to continue?
+                                        };
+                                        document.body.appendChild(newScript);
+                                    });
+                                }
+                            } else if (script.textContent) {
+                                try {
+                                    window.eval(script.textContent);
+                                } catch (e) {
+                                    console.error("Error executing inline script:", e);
+                                }
                             }
-                        });
+                        }
+
+                        // Special hook for Dashboard wakeup
+                        if (url === '/' && window.bridge) {
+                            window.bridge.wakeupDashboard();
+                        }
 
                         // Update browser history
                         window.history.pushState({}, '', url);

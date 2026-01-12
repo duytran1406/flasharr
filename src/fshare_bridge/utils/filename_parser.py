@@ -26,6 +26,10 @@ class QualityAttributes:
     hdr: bool = False
     dolby_vision: bool = False
     
+    # Vietnamese content
+    viet_sub: bool = False
+    viet_dub: bool = False
+    
     # Size (from file if available)
     size_bytes: Optional[int] = None
     
@@ -59,6 +63,8 @@ class QualityAttributes:
             "hdr": self.hdr,
             "dolby_vision": self.dolby_vision,
             "is_hd": self.is_hd,
+            "viet_sub": self.viet_sub,
+            "viet_dub": self.viet_dub,
         }
 
 
@@ -414,7 +420,17 @@ class FilenameParser:
         if "dolby vision" in filename_lower or "dv" in filename_lower:
             attrs.dolby_vision = True
             attrs.hdr = True  # DV implies HDR
+
+        # Vietnamese content detection
+        viet_sub_markers = ["vietsub", "viet.sub", "vie.sub", "phụ đề", "phu de"]
+        viet_dub_markers = ["thuyết minh", "thuyet minh", "viet.dub", "vie.dub", "lồng tiếng", "long tieng", "tvp", "tmpđ"]
         
+        if any(marker in filename_lower for marker in viet_sub_markers):
+            attrs.viet_sub = True
+        
+        if any(marker in filename_lower for marker in viet_dub_markers):
+            attrs.viet_dub = True
+            
         return attrs
 
 

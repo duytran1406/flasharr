@@ -56,7 +56,14 @@ async def create_sabnzbd_service(account_manager: Optional['AccountManager'] = N
     else:
         fshare_client = FshareClient.from_config(config.fshare)
 
-    await asyncio.to_thread(fshare_client.login)
+    if not fshare_client.is_authenticated:
+        try:
+            await asyncio.to_thread(fshare_client.login)
+        except Exception as e:
+            logger.warning(f"Initial Fshare login failed: {e}. Download functionality may be limited until re-login.")
+    else:
+        logger.info("Reusing existing authenticated Fshare session")
+
     
     # Create download engine
     engine = DownloadEngine(max_concurrent=3)

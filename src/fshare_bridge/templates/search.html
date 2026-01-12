@@ -44,6 +44,19 @@
             </label>
         </div>
     </div>
+
+    <!-- View Toggle -->
+    <div class="view-toggle"
+        style="display: flex; gap: 0.25rem; background: rgba(255,255,255,0.05); padding: 4px; border-radius: 8px; margin-left: auto;">
+        <button class="view-btn active" data-view="grid" title="Grid View"
+            style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: transparent; border: none; border-radius: 6px; color: var(--text-muted); cursor: pointer; transition: all 0.2s;">
+            <span class="material-icons" style="font-size: 20px;">grid_view</span>
+        </button>
+        <button class="view-btn" data-view="list" title="List View"
+            style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: transparent; border: none; border-radius: 6px; color: var(--text-muted); cursor: pointer; transition: all 0.2s;">
+            <span class="material-icons" style="font-size: 20px;">view_list</span>
+        </button>
+    </div>
 </div>
 {% endblock %}
 
@@ -377,15 +390,19 @@
             const hasVietsub = result.vietsub || false;
             const hasVietdub = result.vietdub || false;
             const score = result.score || 0;
+            const originalFilename = result.original_filename || result.name;
 
             const isSeries = result.is_series || false;
-            const season = result.season !== null ? String(result.season).padStart(2, '0') : '';
-            const episode = result.episode !== null ? String(result.episode).padStart(2, '0') : '';
+            const season = result.season ? String(result.season).padStart(2, '0') : '--';
+            const episode = result.episode ? String(result.episode).padStart(2, '0') : '--';
             const seriesBadge = isSeries ? `S${season}E${episode}` : '';
 
             card.innerHTML = `
             <div class="result-card-header">
-                <h3 class="result-title">${escapeHtml(result.name)}</h3>
+                <div style="flex: 1; min-width: 0; margin-right: 0.5rem;">
+                    <h3 class="result-title" title="${escapeHtml(result.name)}">${escapeHtml(result.name)}</h3>
+                    <div class="result-subtitle" title="${escapeHtml(originalFilename)}">${escapeHtml(originalFilename)}</div>
+                </div>
                 <span class="quality-badge quality-${qualityBadge.toLowerCase()}">${qualityBadge}</span>
             </div>
             <div class="result-tags">
@@ -396,7 +413,7 @@
             <div class="result-meta">
                 <div class="meta-item">
                     <span class="material-icons">storage</span>
-                    <span>${result.size || 'N/A'}</span>
+                    <span>${window.bridge ? window.bridge.formatSize(result.size) : (result.size || 'N/A')}</span>
                 </div>
                 <div class="meta-item">
                     <span class="material-icons">star</span>
@@ -413,11 +430,17 @@
                     <span class="material-icons" style="font-size: 20px;">content_copy</span>
                 </button>
             </div>
+            
+            <!-- Loading Overlay -->
+            <div class="card-overlay">
+                <div class="spinner"></div>
+                <span>Adding to Queue...</span>
+            </div>
         `;
 
             // Add download event listener
             card.querySelector('.download-btn').addEventListener('click', function () {
-                downloadFile(this.dataset.url, this.dataset.name);
+                downloadFile(this.dataset.url, this.dataset.name, this);
             });
 
             // Add copy event listener
@@ -448,7 +471,12 @@
             return card;
         }
 
-        async function downloadFile(url, name) {
+        async function downloadFile(url, name, btn) {
+            const card = btn.closest('.result-card');
+            if (!card || card.classList.contains('card-loading') || card.classList.contains('card-success')) return;
+
+            card.classList.add('card-loading');
+
             try {
                 const response = await fetch('/api/download', {
                     method: 'POST',
@@ -460,12 +488,24 @@
 
                 const data = await response.json();
 
+                // Allow spinner to show for at least 500ms for UX
+                await new Promise(r => setTimeout(r, 500));
+
+                card.classList.remove('card-loading');
+
                 if (data.success) {
+                    card.classList.add('card-success');
+                    const btnIcon = btn.querySelector('.material-icons');
+                    const btnText = btn.querySelector('span:last-child');
+                    if (btnIcon) btnIcon.textContent = 'check_circle';
+                    if (btnText) btnText.textContent = 'Added';
+
                     showNotification('Download added to queue', 'success');
                 } else {
                     showNotification(data.error || 'Failed to add download', 'error');
                 }
             } catch (error) {
+                card.classList.remove('card-loading');
                 showNotification('Failed to add download', 'error');
             }
         }
