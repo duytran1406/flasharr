@@ -28,19 +28,45 @@ class BuiltinDownloadClient:
         fshare_client: FshareClient,
         engine: Optional[DownloadEngine] = None,
         download_dir: Optional[str] = None,
+        account_manager: Optional[Any] = None,
     ):
         """
         Initialize the built-in download client.
         
         Args:
-            fshare_client: Authenticated Fshare client
+            fshare_client: Authenticated Fshare client (fallback)
             engine: Optional existing download engine
             download_dir: Optional download directory override
+            account_manager: Optional AccountManager for dynamic primary account
         """
-        self.fshare_client = fshare_client
+        self._fshare_fallback = fshare_client
         self.engine = engine or DownloadEngine(max_concurrent=3)
-        self.fshare_handler = FshareDownloadHandler(fshare_client)
         self.download_dir = download_dir
+        self.account_manager = account_manager
+        self._fshare_handler_cache = None
+        self._cached_client_id = None
+    @property
+    def fshare_client(self) -> FshareClient:
+        """Get the current primary Fshare client."""
+        if self.account_manager:
+            client = self.account_manager.get_primary_client()
+            if client:
+                return client
+        return self._fshare_fallback
+
+    @property
+    def fshare_handler(self) -> FshareDownloadHandler:
+        """Get the Fshare handler for the current client."""
+        client = self.fshare_client
+        # Use email as client ID for caching
+        client_id = getattr(client, 'email', str(id(client)))
+        
+        if self._fshare_handler_cache is None or self._cached_client_id != client_id:
+            self._fshare_handler_cache = FshareDownloadHandler(client)
+            self._cached_client_id = client_id
+            
+        return self._fshare_handler_cache
+
         
         # Track task IDs by NZO ID for  lookups
         self._nzo_to_task: Dict[str, str] = {}

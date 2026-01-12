@@ -6,7 +6,9 @@ Factory functions for creating properly configured service instances.
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+if TYPE_CHECKING:
+    from .core.account_manager import AccountManager
 
 from .clients.fshare import FshareClient
 from .clients.timfshare import TimFshareClient
@@ -36,7 +38,7 @@ def create_indexer_service() -> IndexerService:
     )
 
 
-async def create_sabnzbd_service() -> SABnzbdEmulator:
+async def create_sabnzbd_service(account_manager: Optional['AccountManager'] = None) -> SABnzbdEmulator:
     """
     Create a configured SABnzbd emulator service with built-in download engine.
     
@@ -45,8 +47,15 @@ async def create_sabnzbd_service() -> SABnzbdEmulator:
     """
     config = get_config()
     
-    # Create Fshare client
-    fshare_client = FshareClient.from_config(config.fshare)
+    # Get primary Fshare client from account manager or fall back to config
+    if account_manager:
+        fshare_client = account_manager.get_primary_client()
+        if not fshare_client:
+            logger.info("No primary account in AccountManager, using default from config")
+            fshare_client = FshareClient.from_config(config.fshare)
+    else:
+        fshare_client = FshareClient.from_config(config.fshare)
+
     await asyncio.to_thread(fshare_client.login)
     
     # Create download engine
@@ -58,6 +67,7 @@ async def create_sabnzbd_service() -> SABnzbdEmulator:
         fshare_client=fshare_client,
         engine=engine,
         download_dir=config.download.download_dir,
+        account_manager=account_manager,
     )
     
     # Create filename parser
@@ -68,6 +78,7 @@ async def create_sabnzbd_service() -> SABnzbdEmulator:
         fshare_client=fshare_client,
         download_client=download_client,
         parser=parser,
+        account_manager=account_manager,
     )
     
     logger.info("✅ SABnzbd emulator created with built-in download engine")

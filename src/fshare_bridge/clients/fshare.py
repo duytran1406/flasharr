@@ -223,10 +223,12 @@ class FshareClient:
                 
                 # Fetch account info to get expiration date
                 try:
+                    logger.info("Fetching account information...")
                     account_info = self.session.get(
                         "https://www.fshare.vn/account_info.php",
                         timeout=self.timeout
                     )
+                    logger.info(f"Account info status: {account_info.status_code}")
                     
                     if account_info.status_code == 200:
                         # Parse expiration date (format: HH:MM:SS AM/PM DD-MM-YYYY)

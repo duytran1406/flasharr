@@ -129,22 +129,36 @@ class SABnzbdEmulator:
         fshare_client: FshareClientProtocol,
         download_client: DownloadClientProtocol,
         parser: Optional[FilenameParser] = None,
+        account_manager: Optional[Any] = None,
     ):
         """
         Initialize the SABnzbd emulator.
         
         Args:
-            fshare_client: Client for Fshare API operations
+            fshare_client: Client for Fshare API operations (fallback)
             download_client: Client for actual downloads (PyLoad or native)
             parser: Filename parser for normalization
+            account_manager: Optional AccountManager for dynamic primary account
         """
-        self.fshare = fshare_client
+        self._fshare_fallback = fshare_client
         self.downloader = download_client
         self.parser = parser or FilenameParser()
+        self.account_manager = account_manager
+
         
         # In-memory storage
         self._queue: Dict[str, QueueItem] = {}
         self._history: Dict[str, QueueItem] = {}
+
+    @property
+    def fshare(self) -> FshareClientProtocol:
+        """Get the current primary Fshare client."""
+        if self.account_manager:
+            client = self.account_manager.get_primary_client()
+            if client:
+                return client
+        return self._fshare_fallback
+
     
     def add_file(
         self,

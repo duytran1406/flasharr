@@ -14,6 +14,7 @@ from flask_cors import CORS
 
 from .factory import create_indexer_service, create_sabnzbd_service
 from .core.config import get_config
+from .core.account_manager import AccountManager
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +45,7 @@ def create_app():
     # Create services
     app.indexer = create_indexer_service()
     app.sabnzbd = None  # Will be initialized async
+    app.account_manager = AccountManager()
     
     # Temporarily add Web UI stub APIs for compatibility
     # These will eventually be replaced with proper implementations
@@ -175,7 +177,7 @@ def create_app():
     
     @app.route('/api/settings/login-fshare', methods=['POST'])
     def api_login_fshare():
-        """Login to Fshare and save credentials"""
+        """Login to Fshare and save credentials (legacy)"""
         data = request.get_json()
         email = data.get('email')
         password = data.get('password')
@@ -184,59 +186,79 @@ def create_app():
             return jsonify({"status": "error", "message": "Email and password required"})
         
         try:
-            # Use the Fshare client from app.sabnzbd if available
-            from .clients.fshare import FshareClient
-            from .core.config import FshareConfig
-            
-            # Create temporary client to test login
-            config = FshareConfig(email=email, password=password)
-            client = FshareClient.from_config(config)
-            
-            # Attempt login
-            try:
-                success = client.login()
-                
-                if success:
-                    # Get account info
-                    account_info = {
-                        "email": email,
-                        "premium": client.is_premium,
-                        "validuntil": getattr(client, 'premium_expiry', None),
-                        "logged_in": True
-                    }
-                    
-                    # TODO: Save credentials to config file for persistence
-                    # For now, store in app context
-                    app.fshare_account = account_info
-                    app.fshare_credentials = {"email": email, "password": password}
-                    
-                    return jsonify({
-                        "status": "ok",
-                        "message": "Login successful",
-                        "account": account_info
-                    })
-                else:
-                    return jsonify({"status": "error", "message": "Login failed"})
-                    
-            except Exception as login_error:
-                # Log the detailed error
-                logger.error(f"Fshare login error: {login_error}", exc_info=True)
-                
-                # Return user-friendly error message
-                error_msg = str(login_error)
-                if "AuthenticationError" in type(login_error).__name__:
-                    error_msg = "Invalid email or password"
-                elif "FshareConnectionError" in type(login_error).__name__:
-                    error_msg = "Could not connect to Fshare"
-                elif "Login request failed" in error_msg:
-                    error_msg = "Invalid credentials or Fshare API error"
-                
-                return jsonify({"status": "error", "message": error_msg})
-                
+            account = app.account_manager.add_account(email, password)
+            return jsonify({
+                "status": "ok",
+                "message": "Login successful",
+                "account": account
+            })
         except Exception as e:
-            logger.error(f"Fshare login error: {e}", exc_info=True)
-            return jsonify({"status": "error", "message": f"Login error: {str(e)}"})
-    
+            logger.error(f"Fshare login error: {e}")
+            return jsonify({"status": "error", "message": str(e)})
+
+    @app.route('/api/accounts', methods=['GET'])
+    def api_list_accounts():
+        """List all Fshare accounts"""
+        accounts = app.account_manager.list_accounts()
+        primary = app.account_manager.get_primary()
+        return jsonify({
+            "status": "ok",
+            "accounts": accounts,
+            "primary": primary
+        })
+
+    @app.route('/api/accounts/add', methods=['POST'])
+    def api_add_account():
+        """Add and login to a new Fshare account"""
+        data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
+        
+        if not email or not password:
+            return jsonify({"status": "error", "message": "Email and password required"})
+        
+        try:
+            account = app.account_manager.add_account(email, password)
+            return jsonify({
+                "status": "ok",
+                "message": "Account added successfully",
+                "account": account
+            })
+        except Exception as e:
+            logger.error(f"Error adding account: {e}")
+            return jsonify({"status": "error", "message": str(e)})
+
+    @app.route('/api/accounts/<email>', methods=['DELETE'])
+    def api_remove_account(email):
+        """Remove an Fshare account"""
+        try:
+            app.account_manager.remove_account(email)
+            return jsonify({"status": "ok", "message": "Account removed"})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)})
+
+    @app.route('/api/accounts/<email>/set-primary', methods=['POST'])
+    def api_set_primary_account(email):
+        """Set an account as primary"""
+        try:
+            app.account_manager.set_primary(email)
+            return jsonify({"status": "ok", "message": "Primary account updated"})
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)})
+
+    @app.route('/api/accounts/<email>/refresh', methods=['POST'])
+    def api_refresh_account(email):
+        """Refresh account credentials/info"""
+        try:
+            account = app.account_manager.refresh_account(email)
+            return jsonify({
+                "status": "ok", 
+                "message": "Account refreshed",
+                "account": account
+            })
+        except Exception as e:
+            return jsonify({"status": "error", "message": str(e)})
+
     @app.route('/api/settings/logout-fshare', methods=['POST'])
     def api_logout_fshare():
         """Logout from Fshare"""
@@ -446,7 +468,7 @@ async def initialize_sabnzbd(app):
     """Initialize SABnzbd service asynchronously."""
     try:
         logger.info("Initializing SABnzbd service...")
-        app.sabnzbd = await create_sabnzbd_service()
+        app.sabnzbd = await create_sabnzbd_service(account_manager=app.account_manager)
         logger.info("✅ SABnzbd service initialized")
     except Exception as e:
         logger.error(f"Failed to initialize SABnzbd service: {e}", exc_info=True)

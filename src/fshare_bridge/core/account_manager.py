@@ -51,9 +51,8 @@ class AccountManager:
             logger.info(f"Loaded {len(self.accounts)} accounts")
         except Exception as e:
             logger.error(f"Error loading accounts: {e}")
-           
-self.accounts = []
-             self.primary_email = None
+            self.accounts = []
+            self.primary_email = None
     
     def _save(self):
         """Save accounts to storage."""
@@ -145,6 +144,21 @@ self.accounts = []
         
         account = next((a for a in self.accounts if a['email'] == self.primary_email), None)
         return self._sanitize_account(account) if account else None
+    
+    def get_primary_client(self) -> Optional[FshareClient]:
+        """Get a functional FshareClient for the primary account."""
+        if not self.primary_email:
+            return None
+        
+        account = next((a for a in self.accounts if a['email'] == self.primary_email), None)
+        if not account:
+            return None
+            
+        config = FshareConfig(email=account['email'], password=account['password'])
+        client = FshareClient.from_config(config)
+        # Note: In a real app, we might want to cache logged-in clients or handle tokens/cookies better
+        # For now, we rely on the fact that login() is called or cookies are managed in session
+        return client
     
     def list_accounts(self) -> List[Dict]:
         """List all accounts (sanitized)."""

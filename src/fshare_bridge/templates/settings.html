@@ -48,29 +48,24 @@
         <div class="tab-panel active" id="tab-account">
             <div class="settings-card">
                 <div class="card-header">
-                    <h2>Fshare Account</h2>
-                    <p class="card-description">Configure your Fshare.vn credentials for downloading files.</p>
+                    <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                        <div>
+                            <h2>Fshare Accounts</h2>
+                            <p class="card-description">Manage multiple Fshare.vn accounts for downloading files.</p>
+                        </div>
+                        <button class="btn btn-primary" id="btn-add-account">
+                            <span class="material-icons">add</span>
+                            Add Account
+                        </button>
+                    </div>
                 </div>
                 <div class="card-body">
-                    <div class="form-group">
-                        <label for="fshare_email">Email</label>
-                        <input type="email" id="fshare_email" class="form-input" placeholder="your@email.com">
-                    </div>
-                    <div class="form-group">
-                        <label for="fshare_password">Password</label>
-                        <div class="input-with-icon">
-                            <input type="password" id="fshare_password" class="form-input" placeholder="••••••••">
-                            <button class="icon-btn toggle-password" data-target="fshare_password">
-                                <span class="material-icons">visibility</span>
-                            </button>
+                    <div id="accounts-container" class="account-list-container">
+                        <!-- Accounts will be loaded here -->
+                        <div class="loading-state">
+                            <span class="material-icons spinning">sync</span>
+                            <p>Loading accounts...</p>
                         </div>
-                    </div>
-                    <div class="form-actions">
-                        <button class="btn btn-secondary" id="btn-test-connection">
-                            <span class="material-icons">sync</span>
-                            Test Connection
-                        </button>
-                        <div class="connection-status" id="connection-status"></div>
                     </div>
                 </div>
             </div>
@@ -246,6 +241,42 @@
     <span class="toast-icon material-icons">check_circle</span>
     <span class="toast-message"></span>
 </div>
+</div>
+
+<!-- Login Modal -->
+<div class="modal-overlay" id="login-modal">
+    <div class="modal-container">
+        <div class="modal-header">
+            <h3>Login to Fshare</h3>
+            <button class="modal-close" id="modal-close">
+                <span class="material-icons">close</span>
+            </button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label for="modal_email">Email</label>
+                <input type="email" id="modal_email" class="form-input" placeholder="your@email.com">
+            </div>
+            <div class="form-group">
+                <label for="modal_password">Password</label>
+                <div class="input-with-icon">
+                    <input type="password" id="modal_password" class="form-input" placeholder="••••••••">
+                    <button class="icon-btn toggle-password" data-target="modal_password">
+                        <span class="material-icons">visibility</span>
+                    </button>
+                </div>
+            </div>
+            <div id="modal-status" class="connection-status" style="margin-top: 1rem; display: none;"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="btn-modal-cancel">Cancel</button>
+            <button class="btn btn-primary" id="btn-modal-login">
+                <span class="material-icons">login</span>
+                Login
+            </button>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -301,6 +332,7 @@
         // Toast notification
         function showToast(message, type = 'success') {
             const toast = document.getElementById('toast');
+            if (!toast) return;
             const icon = toast.querySelector('.toast-icon');
             const msg = toast.querySelector('.toast-message');
 
@@ -311,6 +343,197 @@
             setTimeout(() => toast.classList.remove('show'), 3000);
         }
 
+        // --- ACCOUNT MANAGEMENT ---
+        const loginModal = document.getElementById('login-modal');
+        const accountsContainer = document.getElementById('accounts-container');
+
+        async function loadAccounts() {
+            try {
+                const response = await fetch('/api/accounts');
+                const data = await response.json();
+
+                if (data.status === 'ok') {
+                    renderAccounts(data.accounts, data.primary);
+                }
+            } catch (error) {
+                console.error('Error loading accounts:', error);
+                accountsContainer.innerHTML = '<div class="empty-accounts"><p>Error loading accounts</p></div>';
+            }
+        }
+
+        function renderAccounts(accounts, primary) {
+            if (!accounts || accounts.length === 0) {
+                accountsContainer.innerHTML = `
+                    <div class="empty-accounts">
+                        <span class="material-icons">account_circle</span>
+                        <p>No Fshare accounts configured. Add an account to start downloading.</p>
+                        <button class="btn btn-primary" onclick="window.showLoginModal()">
+                            <span class="material-icons">login</span>
+                            Login Now
+                        </button>
+                    </div>
+                `;
+                return;
+            }
+
+            let html = `
+                <table class="account-table">
+                    <thead>
+                        <tr>
+                            <th>Email</th>
+                            <th>Status</th>
+                            <th>Valid Until</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            accounts.forEach(acc => {
+                const isPrimary = primary && acc.email === primary.email;
+                const premiumClass = acc.premium ? 'premium' : 'expired';
+                const premiumText = acc.premium ? 'VIP' : 'Free';
+                const validUntil = acc.validuntil ? (acc.validuntil === -1 ? 'Lifetime' : new Date(acc.validuntil * 1000).toLocaleDateString()) : 'N/A';
+
+                html += `
+                    <tr>
+                        <td>
+                            <div class="account-email">
+                                ${acc.email}
+                                ${isPrimary ? '<span class="primary-badge">Primary</span>' : ''}
+                            </div>
+                        </td>
+                        <td>
+                            <span class="status-badge ${acc.premium ? 'success' : ''}">${premiumText}</span>
+                        </td>
+                        <td>
+                            <span class="valid-until ${premiumClass}">${validUntil}</span>
+                        </td>
+                        <td>
+                            <div class="account-actions">
+                                <button class="icon-btn" onclick="refreshAccount('${acc.email}')" title="Refresh">
+                                    <span class="material-icons">refresh</span>
+                                </button>
+                                ${!isPrimary ? `
+                                    <button class="icon-btn" onclick="setPrimaryAccount('${acc.email}')" title="Set Primary">
+                                        <span class="material-icons">star_outline</span>
+                                    </button>
+                                ` : ''}
+                                <button class="icon-btn" onclick="removeAccount('${acc.email}')" title="Remove" style="color: #ef4444;">
+                                    <span class="material-icons">delete</span>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += '</tbody></table>';
+            accountsContainer.innerHTML = html;
+        }
+
+        window.showLoginModal = () => {
+            loginModal.classList.add('show');
+            document.getElementById('modal-status').style.display = 'none';
+        };
+
+        const hideLoginModal = () => {
+            loginModal.classList.remove('show');
+            document.getElementById('modal_email').value = '';
+            document.getElementById('modal_password').value = '';
+        };
+
+        document.getElementById('btn-add-account').addEventListener('click', window.showLoginModal);
+        document.getElementById('btn-modal-cancel').addEventListener('click', hideLoginModal);
+        document.getElementById('modal-close').addEventListener('click', hideLoginModal);
+
+        document.getElementById('btn-modal-login').addEventListener('click', async () => {
+            const email = document.getElementById('modal_email').value;
+            const password = document.getElementById('modal_password').value;
+            const status = document.getElementById('modal-status');
+            const btn = document.getElementById('btn-modal-login');
+
+            if (!email || !password) {
+                status.textContent = 'Email and password required';
+                status.className = 'connection-status error';
+                status.style.display = 'flex';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="material-icons spin">sync</span> Logging in...';
+            status.innerHTML = '<span class="material-icons spin">sync</span> authenticating...';
+            status.className = 'connection-status testing';
+            status.style.display = 'flex';
+
+            try {
+                const response = await fetch('/api/accounts/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+                const data = await response.json();
+
+                if (data.status === 'ok') {
+                    showToast('Account added successfully');
+                    hideLoginModal();
+                    loadAccounts();
+                } else {
+                    status.textContent = data.message || 'Login failed';
+                    status.className = 'connection-status error';
+                }
+            } catch (error) {
+                status.textContent = 'Connection error';
+                status.className = 'connection-status error';
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<span class="material-icons">login</span> Login';
+            }
+        });
+
+        window.refreshAccount = async (email) => {
+            try {
+                const response = await fetch(`/api/accounts/${email}/refresh`, { method: 'POST' });
+                const data = await response.json();
+                if (data.status === 'ok') {
+                    showToast(`Account ${email} refreshed`);
+                    loadAccounts();
+                } else {
+                    showToast(data.message, 'error');
+                }
+            } catch (error) {
+                showToast('Refresh failed', 'error');
+            }
+        };
+
+        window.setPrimaryAccount = async (email) => {
+            try {
+                const response = await fetch(`/api/accounts/${email}/set-primary`, { method: 'POST' });
+                const data = await response.json();
+                if (data.status === 'ok') {
+                    showToast(`Primary account set to ${email}`);
+                    loadAccounts();
+                }
+            } catch (error) {
+                showToast('Action failed', 'error');
+            }
+        };
+
+        window.removeAccount = async (email) => {
+            if (!confirm(`Are you sure you want to remove ${email}?`)) return;
+            try {
+                const response = await fetch(`/api/accounts/${email}`, { method: 'DELETE' });
+                const data = await response.json();
+                if (data.status === 'ok') {
+                    showToast('Account removed');
+                    loadAccounts();
+                }
+            } catch (error) {
+                showToast('Removal failed', 'error');
+            }
+        };
+
+
         // Load settings
         async function loadSettings() {
             try {
@@ -320,9 +543,7 @@
                 if (data.status === 'ok') {
                     const s = data.settings;
 
-                    // Account
-                    document.getElementById('fshare_email').value = s.fshare_email || '';
-                    document.getElementById('fshare_password').value = s.fshare_password || '';
+                    // Skip account email/password loading as it's now multi-account
 
                     // Downloads
                     document.getElementById('download_path').value = s.download_path || '/downloads';
@@ -346,7 +567,8 @@
                     document.getElementById('enable_sabnzbd').checked = s.enable_sabnzbd !== false;
 
                     // Appearance
-                    document.querySelector(`input[name="theme"][value="${s.theme || 'dark'}"]`).checked = true;
+                    const themeInput = document.querySelector(`input[name="theme"][value="${s.theme || 'dark'}"]`);
+                    if (themeInput) themeInput.checked = true;
                     document.getElementById('language').value = s.language || 'en';
                     document.getElementById('refresh_interval').value = s.refresh_interval || 3000;
                 }
@@ -358,12 +580,6 @@
         // Save settings
         document.getElementById('btn-save').addEventListener('click', async () => {
             const settings = {
-                fshare_email: document.getElementById('fshare_email').value,
-                fshare_password: document.getElementById('fshare_password').value,
-                download_path: document.getElementById('download_path').value,
-                max_concurrent_downloads: parseInt(document.getElementById('max_concurrent').value),
-                speed_limit_kbps: parseInt(document.getElementById('speed_limit').value) || 0,
-                auto_resume: document.getElementById('auto_resume').checked,
                 category_paths: {
                     radarr: document.getElementById('path_radarr').value,
                     sonarr: document.getElementById('path_sonarr').value,
@@ -395,35 +611,7 @@
             }
         });
 
-        // Test Fshare connection
-        document.getElementById('btn-test-connection').addEventListener('click', async () => {
-            const status = document.getElementById('connection-status');
-            status.innerHTML = '<span class="material-icons spin">sync</span> Testing...';
-            status.className = 'connection-status testing';
-
-            try {
-                const response = await fetch('/api/settings/test-fshare', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        email: document.getElementById('fshare_email').value,
-                        password: document.getElementById('fshare_password').value,
-                    }),
-                });
-                const data = await response.json();
-
-                if (data.status === 'ok') {
-                    status.innerHTML = '<span class="material-icons">check_circle</span> Connected';
-                    status.className = 'connection-status success';
-                } else {
-                    status.innerHTML = `<span class="material-icons">error</span> ${data.message}`;
-                    status.className = 'connection-status error';
-                }
-            } catch (error) {
-                status.innerHTML = '<span class="material-icons">error</span> Connection failed';
-                status.className = 'connection-status error';
-            }
-        });
+        // Removed btn-test-connection as it's now handled in the modal login
 
         // Generate API keys
         document.getElementById('btn-gen-indexer-key').addEventListener('click', async () => {
@@ -483,6 +671,7 @@
 
         // Initial load
         loadSettings();
+        loadAccounts();
     })();
 </script>
 {% endblock %}

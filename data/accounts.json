@@ -1,0 +1,13 @@
+{
+  "accounts": [
+    {
+      "email": "duytran.1406@gmail.com",
+      "password": "duytran1406",
+      "premium": true,
+      "validuntil": null,
+      "is_primary": true,
+      "last_refresh": 1768199077
+    }
+  ],
+  "primary_email": "duytran.1406@gmail.com"
+}
