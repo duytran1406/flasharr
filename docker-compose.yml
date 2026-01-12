@@ -10,49 +10,16 @@ services:
       - /mnt/appdata/fshare-arr-bridge/.env
     volumes:
       - /mnt/appdata/fshare-arr-bridge/data:/app/data
+      - /data/fshare-downloader:/downloads
+      - /root/fshare-arr-bridge/src:/app/src
     environment:
       # Server configuration
       INDEXER_PORT: 8484
     dns:
       - 8.8.8.8
-    networks:
-      - fshare-network
-    depends_on:
-      - pyload
     healthcheck:
       test: [ "CMD", "python", "-c", "import requests; requests.get('http://localhost:8484/health')" ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
-
-  # pyLoad - Download manager with Fshare plugins
-  pyload:
-    image: lscr.io/linuxserver/pyload-ng:latest
-    container_name: fshare-pyload
-    restart: unless-stopped
-    ports:
-      - "8100:8000" # Web UI
-    environment:
-      - PUID=1000
-      - PGID=1000
-      - TZ=Asia/Ho_Chi_Minh
-      - PYLOAD_DOWNLOAD_DIR=/fshare-downloader
-    volumes:
-      - /mnt/appdata/fshare-arr-bridge/pyload/config:/config
-      - /data/fshare-downloader:/downloads
-      - /data/fshare-downloader:/fshare-downloader
-      - /mnt/appdata/fshare-arr-bridge/pyload/config/custom-cont-init.d:/custom-cont-init.d
-      - /mnt/appdata/fshare-arr-bridge/pyload/config/custom-services.d:/custom-services.d
-      - /mnt/appdata/fshare-arr-bridge/pyload/plugins:/config/pyload/userplugins # Custom Fshare plugins
-    networks:
-      - fshare-network
-    healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
-networks:
-  fshare-network:
-    driver: bridge

@@ -5,6 +5,8 @@ Main entry point for the refactored bridge application.
 Integrates all services with built-in download engine.
 """
 
+import os
+import json
 import asyncio
 import logging
 from pathlib import Path
@@ -52,15 +54,40 @@ def create_app():
     @app.route('/api/stats')
     def api_stats():
         """Stats API for Web UI"""
+        # Get primary account info
+        primary = app.account_manager.get_primary()
+        
+        fshare_data = {
+            "valid": primary is not None,
+            "premium": primary.get('premium', False) if primary else False
+        }
+        
+        if primary:
+            # Add extra details if available
+            if primary.get('validuntil'):
+                try:
+                    from datetime import datetime
+                    if primary.get('validuntil') == -1:
+                        fshare_data['expiry'] = "Lifetime"
+                    else:
+                        dt = datetime.fromtimestamp(primary.get('validuntil'))
+                        fshare_data['expiry'] = dt.strftime('%d-%m-%Y')
+                except:
+                    pass
+            
+            fshare_data['traffic_left'] = primary.get('traffic_left')
+            fshare_data['account_type'] = primary.get('account_type')
+            fshare_data['email'] = primary.get('email')
+
         return jsonify({
             "system": {"uptime": "0", "speedtest": "0 Mbps"},
             "pyload": {
-                "active": 0,
+                "active": 0,  # TODO: get from sabnzbd
                 "speed": "0 B/s",
                 "speed_bytes": 0,
                 "total": 0,
                 "connected": app.sabnzbd is not None,
-                "fshare_account": {"valid": False, "premium": False}
+                "fshare_account": fshare_data
             },
             "bridge": {"searches": 0, "success_rate": "100%"}
         })
@@ -90,8 +117,33 @@ def create_app():
     
     @app.route('/api/search')
     def api_search():
-        """Search API stub - not implemented yet"""
-        return jsonify({"results": []})
+        """Search API using TimFshareClient via IndexerService"""
+        query = request.args.get('q', '')
+        if not query:
+            return jsonify({"results": []})
+            
+        try:
+            # Use IndexerService's client (TimFshare)
+            # This avoids Fshare login requirements and uses the dedicated search engine
+            results = app.indexer.client.search(query, limit=50)
+            
+            # Format for UI
+            formatted_results = []
+            for item in results:
+                formatted_results.append({
+                    "id": item.fcode,
+                    "name": item.name,
+                    "size": item.size,
+                    "link": item.url,
+                    "folder": False,  # TimFshare results are files
+                    "score": item.score
+                })
+                
+            return jsonify({"results": formatted_results})
+            
+        except Exception as e:
+            logger.error(f"Search API error: {e}")
+            return jsonify({"error": str(e)}), 500
     
     @app.route('/api/autocomplete')
     def api_autocomplete():
@@ -139,41 +191,62 @@ def create_app():
         """Delete a download"""
         return jsonify({"success": True})
     
-    # Settings API endpoints
     @app.route('/api/settings', methods=['GET'])
     def api_get_settings():
         """Get current settings"""
+        config = get_config()
+        settings_file = Path("data/settings.json")
+        
+        # Default settings structure
+        settings = {
+            "download_path": config.download.download_dir,
+            "max_concurrent_downloads": config.download.max_concurrent,
+            "speed_limit_kbps": 0,
+            "auto_resume": True,
+            "category_paths": {
+                "radarr": "movies",
+                "sonarr": "tv",
+                "lidarr": "music"
+            },
+            "base_url": "http://localhost:8484",
+            "indexer_api_key": os.getenv("INDEXER_API_KEY", ""),
+            "sabnzbd_api_key": os.getenv("SABNZBD_API_KEY", ""),
+            "enable_indexer": True,
+            "enable_sabnzbd": True,
+            "theme": "dark",
+            "language": "en",
+            "refresh_interval": 3000
+        }
+        
+        # Load from file if exists
+        if settings_file.exists():
+            try:
+                with open(settings_file, 'r') as f:
+                    saved = json.load(f)
+                    settings.update(saved)
+            except Exception as e:
+                logger.error(f"Error loading settings file: {e}")
+                
         return jsonify({
             "status": "ok",
-            "settings": {
-                "fshare_email": "",
-                "fshare_password": "",
-                "download_path": "/downloads",
-                "max_concurrent_downloads": 3,
-                "speed_limit_kbps": 0,
-                "auto_resume": True,
-                "category_paths": {
-                    "radarr": "movies",
-                    "sonarr": "tv",
-                    "lidarr": "music"
-                },
-                "base_url": "http://localhost:8484",
-                "indexer_api_key": "",
-                "sabnzbd_api_key": "",
-                "enable_indexer": True,
-                "enable_sabnzbd": True,
-                "theme": "dark",
-                "language": "en",
-                "refresh_interval": 3000
-            }
+            "settings": settings
         })
     
     @app.route('/api/settings', methods=['PUT'])
     def api_save_settings():
         """Save settings"""
         data = request.get_json()
-        # TODO: Actually save settings to config file
-        return jsonify({"status": "ok", "message": "Settings saved"})
+        settings_file = Path("data/settings.json")
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            with open(settings_file, 'w') as f:
+                json.dump(data, f, indent=2)
+            logger.info("Settings saved to data/settings.json")
+            return jsonify({"status": "ok", "message": "Settings saved"})
+        except Exception as e:
+            logger.error(f"Error saving settings: {e}")
+            return jsonify({"status": "error", "message": str(e)})
     
     @app.route('/api/settings/login-fshare', methods=['POST'])
     def api_login_fshare():
@@ -199,13 +272,18 @@ def create_app():
     @app.route('/api/accounts', methods=['GET'])
     def api_list_accounts():
         """List all Fshare accounts"""
-        accounts = app.account_manager.list_accounts()
-        primary = app.account_manager.get_primary()
-        return jsonify({
-            "status": "ok",
-            "accounts": accounts,
-            "primary": primary
-        })
+        try:
+            accounts = app.account_manager.list_accounts()
+            primary = app.account_manager.get_primary()
+            logger.info(f"Returning {len(accounts)} accounts to UI")
+            return jsonify({
+                "status": "ok",
+                "accounts": accounts,
+                "primary": primary
+            })
+        except Exception as e:
+            logger.error(f"Error listing accounts: {e}")
+            return jsonify({"status": "error", "message": str(e)})
 
     @app.route('/api/accounts/add', methods=['POST'])
     def api_add_account():
@@ -269,11 +347,12 @@ def create_app():
     @app.route('/api/settings/fshare-status', methods=['GET'])
     def api_fshare_status():
         """Get Fshare login status"""
-        if hasattr(app, 'fshare_account') and app.fshare_account:
+        primary = app.account_manager.get_primary()
+        if primary:
             return jsonify({
                 "status": "ok",
                 "logged_in": True,
-                "account": app.fshare_account
+                "account": primary
             })
         return jsonify({
             "status": "ok",

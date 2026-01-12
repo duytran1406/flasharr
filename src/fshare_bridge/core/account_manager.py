@@ -99,6 +99,8 @@ class AccountManager:
             'password': password,  # TODO: Encrypt this
             'premium': client.is_premium,
             'validuntil': getattr(client, 'premium_expiry', None),
+            'traffic_left': getattr(client, 'traffic_left', None),
+            'account_type': getattr(client, 'account_type', None),
             'is_primary': len(self.accounts) == 0,  # First account is primary
             'last_refresh': int(datetime.now().timestamp())
         }
@@ -188,6 +190,8 @@ class AccountManager:
         # Update info
         account['premium'] = client.is_premium
         account['validuntil'] = getattr(client, 'premium_expiry', None)
+        account['traffic_left'] = getattr(client, 'traffic_left', None)
+        account['account_type'] = getattr(client, 'account_type', None)
         account['last_refresh'] = int(datetime.now().timestamp())
         
         self._save()
@@ -204,6 +208,8 @@ class AccountManager:
             'email': account['email'],
             'premium': account.get('premium', False),
             'validuntil': account.get('validuntil'),
+            'traffic_left': account.get('traffic_left'),
+            'account_type': account.get('account_type'),
             'is_primary': account.get('is_primary', False),
             'last_refresh': account.get('last_refresh')
         }

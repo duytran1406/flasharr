@@ -11,6 +11,10 @@
             Settings
         </h1>
         <div class="settings-actions">
+            <button class="btn btn-secondary" id="btn-reset">
+                <span class="material-icons">restart_alt</span>
+                Reset
+            </button>
             <button class="btn btn-secondary" id="btn-export">
                 <span class="material-icons">download</span>
                 Export
@@ -241,38 +245,54 @@
     <span class="toast-icon material-icons">check_circle</span>
     <span class="toast-message"></span>
 </div>
-</div>
 
 <!-- Login Modal -->
-<div class="modal-overlay" id="login-modal">
-    <div class="modal-container">
-        <div class="modal-header">
-            <h3>Login to Fshare</h3>
-            <button class="modal-close" id="modal-close">
+<div id="login-modal" class="modal"
+    style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); align-items: center; justify-content: center;">
+    <div class="service-card"
+        style="width: 100%; max-width: 500px; padding: 2rem; border-color: rgba(59, 130, 246, 0.3);">
+        <div class="service-header" style="margin-bottom: 2rem;">
+            <div class="service-icon" style="background: rgba(59, 130, 246, 0.1); color: #3b82f6;">
+                <span class="material-icons">login</span>
+            </div>
+            <div class="service-title" style="font-size: 1.25rem; font-weight: 700;">Login to Fshare</div>
+            <button id="modal-close"
+                style="margin-left: auto; background: none; border: none; color: var(--text-muted); cursor: pointer;">
                 <span class="material-icons">close</span>
             </button>
         </div>
-        <div class="modal-body">
-            <div class="form-group">
-                <label for="modal_email">Email</label>
-                <input type="email" id="modal_email" class="form-input" placeholder="your@email.com">
-            </div>
-            <div class="form-group">
-                <label for="modal_password">Password</label>
-                <div class="input-with-icon">
-                    <input type="password" id="modal_password" class="form-input" placeholder="••••••••">
-                    <button class="icon-btn toggle-password" data-target="modal_password">
-                        <span class="material-icons">visibility</span>
-                    </button>
-                </div>
-            </div>
-            <div id="modal-status" class="connection-status" style="margin-top: 1rem; display: none;"></div>
+
+        <div style="margin-bottom: 1.5rem;">
+            <label
+                style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.5rem; text-transform: uppercase; font-weight: 700;">Email</label>
+            <input type="email" id="modal_email" class="elegant-search-input" style="padding-left: 1rem;"
+                placeholder="your@email.com">
         </div>
-        <div class="modal-footer">
-            <button class="btn btn-secondary" id="btn-modal-cancel">Cancel</button>
-            <button class="btn btn-primary" id="btn-modal-login">
-                <span class="material-icons">login</span>
-                Login
+
+        <div style="margin-bottom: 1.5rem;">
+            <label
+                style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.5rem; text-transform: uppercase; font-weight: 700;">Password</label>
+            <div style="position: relative;">
+                <input type="password" id="modal_password" class="elegant-search-input" style="padding-left: 1rem;"
+                    placeholder="••••••••">
+                <button class="toggle-password" data-target="modal_password"
+                    style="position: absolute; right: 1rem; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--text-muted); cursor: pointer;">
+                    <span class="material-icons" style="font-size: 1.1rem;">visibility</span>
+                </button>
+            </div>
+        </div>
+
+        <div id="modal-status" class="connection-status"
+            style="display: none; margin-bottom: 1.5rem; padding: 0.75rem; border-radius: 8px; font-size: 0.85rem; align-items: center; gap: 0.5rem;">
+        </div>
+
+        <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+            <button id="btn-modal-cancel" class="icon-action-btn"
+                style="width: auto; padding: 0 1.5rem; font-weight: 600; font-size: 0.85rem;">CANCEL</button>
+            <button id="btn-modal-login" class="icon-action-btn"
+                style="width: auto; padding: 0 1.5rem; background: #3b82f6; color: white; border: none; font-weight: 600; font-size: 0.85rem;">
+                <span class="material-icons" style="font-size: 18px; margin-right: 0.5rem;">login</span>
+                LOGIN
             </button>
         </div>
     </div>
@@ -348,20 +368,37 @@
         const accountsContainer = document.getElementById('accounts-container');
 
         async function loadAccounts() {
+            console.log('Fetching accounts...');
             try {
                 const response = await fetch('/api/accounts');
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
                 const data = await response.json();
+                console.log('Accounts loaded:', data);
 
                 if (data.status === 'ok') {
                     renderAccounts(data.accounts, data.primary);
+                } else {
+                    throw new Error(data.message || 'Unknown server error');
                 }
             } catch (error) {
                 console.error('Error loading accounts:', error);
-                accountsContainer.innerHTML = '<div class="empty-accounts"><p>Error loading accounts</p></div>';
+                accountsContainer.innerHTML = `
+                    <div class="empty-accounts" style="border-color: rgba(239, 68, 68, 0.2);">
+                        <span class="material-icons" style="color: #ef4444;">error</span>
+                        <p>Failed to load accounts: ${error.message}</p>
+                        <button class="btn btn-secondary" onclick="location.reload()">
+                            <span class="material-icons">refresh</span>
+                            Retry
+                        </button>
+                    </div>
+                `;
             }
         }
+        window.loadAccounts = loadAccounts;
 
         function renderAccounts(accounts, primary) {
+            console.log('Rendering accounts...', accounts);
             if (!accounts || accounts.length === 0) {
                 accountsContainer.innerHTML = `
                     <div class="empty-accounts">
@@ -390,10 +427,20 @@
             `;
 
             accounts.forEach(acc => {
-                const isPrimary = primary && acc.email === primary.email;
+                const isPrimary = primary && (acc.email === primary.email);
                 const premiumClass = acc.premium ? 'premium' : 'expired';
                 const premiumText = acc.premium ? 'VIP' : 'Free';
-                const validUntil = acc.validuntil ? (acc.validuntil === -1 ? 'Lifetime' : new Date(acc.validuntil * 1000).toLocaleDateString()) : 'N/A';
+
+                let validUntil = 'N/A';
+                if (acc.validuntil) {
+                    if (acc.validuntil === -1) {
+                        validUntil = 'Lifetime';
+                    } else if (typeof acc.validuntil === 'number') {
+                        validUntil = new Date(acc.validuntil * 1000).toLocaleDateString();
+                    } else {
+                        validUntil = acc.validuntil;
+                    }
+                }
 
                 html += `
                     <tr>
@@ -431,14 +478,15 @@
             html += '</tbody></table>';
             accountsContainer.innerHTML = html;
         }
+        window.renderAccounts = renderAccounts;
 
         window.showLoginModal = () => {
-            loginModal.classList.add('show');
+            loginModal.style.display = 'flex';
             document.getElementById('modal-status').style.display = 'none';
         };
 
         const hideLoginModal = () => {
-            loginModal.classList.remove('show');
+            loginModal.style.display = 'none';
             document.getElementById('modal_email').value = '';
             document.getElementById('modal_password').value = '';
         };

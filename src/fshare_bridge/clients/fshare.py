@@ -116,17 +116,31 @@ class FshareClient:
         self._token: Optional[str] = None
         self._session_id: Optional[str] = None
         self._token_expires: Optional[datetime] = None
+        
+        self._is_premium: bool = False
+        self._premium_expiry: Optional[int] = None
+        self._traffic_left: Optional[str] = None
+        self._account_type: Optional[str] = None
 
     @property
     def is_premium(self) -> bool:
         """Check if account is premium/VIP."""
         return self._is_premium
+    
     @property
     def premium_expiry(self) -> Optional[int]:
         """Get premium account expiration timestamp (Unix timestamp), -1 for lifetime."""
         return self._premium_expiry
-
-        self._is_premium: bool = False
+        
+    @property
+    def traffic_left(self) -> Optional[str]:
+        """Get traffic left details."""
+        return self._traffic_left
+        
+    @property
+    def account_type(self) -> Optional[str]:
+        """Get account type string."""
+        return self._account_type
     
     @classmethod
     def from_config(cls, config: Optional[FshareConfig] = None) -> "FshareClient":
@@ -158,6 +172,7 @@ class FshareClient:
     def login(self) -> bool:
         """
         Login to Fshare using /site/login endpoint with CSRF token.
+        Parse account information using patterns from pyLoad FshareVn plugin.
         
         Returns:
             True if login successful
@@ -169,7 +184,7 @@ class FshareClient:
         try:
             logger.info("Logging into Fshare...")
             
-           # Step 1: Get CSRF token from homepage
+            # Step 1: Get CSRF token from homepage
             homepage = self.session.get(
                 "https://www.fshare.vn/",
                 timeout=self.timeout
@@ -212,49 +227,97 @@ class FshareClient:
                     response=response.text[:200],
                 )
             
-            # Check if login was successful by looking for profile or VIP indicators
-            if 'profile' in response.text.lower() or 'user__profile' in response.text:
+            # Check if login was successful
+            # pyLoad plugin checks for presence of logout link
+            # We strictly check for /site/logout which indicates an active session
+            if '/site/logout' in response.text:
                 logger.info("✅ Fshare login successful")
                 self._token = "web_session"  # Placeholder since we use cookies
                 
-                # Check for VIP status
-                self._is_premium = 'VIP' in response.text or 'img alt="VIP"' in response.text
-                logger.info(f"Premium status: {self._is_premium}")
-                
-                # Fetch account info to get expiration date
+                # Fetch account profile page to extract account information
                 try:
-                    logger.info("Fetching account information...")
-                    account_info = self.session.get(
-                        "https://www.fshare.vn/account_info.php",
-                        timeout=self.timeout
-                    )
-                    logger.info(f"Account info status: {account_info.status_code}")
+                    profile_page = self.session.get("https://www.fshare.vn/account/profile", timeout=self.timeout)
+                    html = profile_page.text
                     
-                    if account_info.status_code == 200:
-                        # Parse expiration date (format: HH:MM:SS AM/PM DD-MM-YYYY)
-                        valid_match = re.search(r'<dt>Thời hạn dùng:</dt>\s*<dd>(.+?)</dd>', account_info.text)
-                        if valid_match:
+                    # Pattern definitions from pyLoad FshareVn plugin
+                    # ACCOUNT_TYPE: Check for "Loại tài khoản" with value "VIP"
+                    account_type_match = re.search(r'Loại tài khoản[:\s]*</dt>\s*<dd>([^<]+)</dd>', html, re.IGNORECASE)
+                    if account_type_match:
+                        self._account_type = account_type_match.group(1).strip()
+                        self._is_premium = 'VIP' in self._account_type.upper()
+                        logger.info(f"Account type: {self._account_type} (Premium: {self._is_premium})")
+                    else:
+                        # Fallback: check for VIP indicators in HTML
+                        self._is_premium = 'VIP' in html or 'img alt="VIP"' in html or 'level-vip' in html.lower()
+                        logger.info(f"Premium status (fallback): {self._is_premium}")
+                    
+                    # VALID_UNTIL_PATTERN: <dt>Thời hạn dùng:</dt>\s*<dd>(.+?)</dd>
+                    valid_until_match = re.search(r'<dt>Thời hạn dùng:</dt>\s*<dd>(.+?)</dd>', html)
+                    if valid_until_match:
+                        try:
                             import time
-                            try:
-                                expiry_str = valid_match.group(1).strip()
-                                expiry_time = time.mktime(time.strptime(expiry_str, '%I:%M:%S %p %d-%m-%Y'))
-                                self._premium_expiry = int(expiry_time)
-                                logger.info(f"Account expires: {expiry_str}")
-                            except:
+                            expiry_str = valid_until_match.group(1).strip()
+                            # Try multiple date formats
+                            for fmt in ['%I:%M:%S %p %d-%m-%Y', '%d-%m-%Y', '%d/%m/%Y']:
+                                try:
+                                    expiry_time = time.mktime(time.strptime(expiry_str, fmt))
+                                    self._premium_expiry = int(expiry_time)
+                                    logger.info(f"Account expires: {expiry_str}")
+                                    break
+                                except ValueError:
+                                    continue
+                            else:
+                                logger.warning(f"Could not parse expiry date format: {expiry_str}")
                                 self._premium_expiry = None
-                        
-                        # Check for lifetime account
-                        if re.search(r'<dt>Lần đăng nhập trước:</dt>', account_info.text):
-                            self._premium_expiry = -1  # Lifetime
+                        except Exception as e:
+                            logger.warning(f"Error parsing expiry date: {e}")
+                            self._premium_expiry = None
+                    else:
+                        # LIFETIME_PATTERN: Check for "Vĩnh viễn" or similar indicators
+                        if re.search(r'Vĩnh viễn|Lifetime|Forever', html, re.IGNORECASE):
+                            self._premium_expiry = -1
                             logger.info("Lifetime premium account detected")
+                        else:
+                            self._premium_expiry = None
+                            logger.info("Could not find expiry date in profile page")
+                    
+                    # TRAFFIC_LEFT_PATTERN: "Dung lượng tải trong ngày: " ... " / 150 GB"
+                    # Example: <a href="/account/inforesource">Dung lượng tải trong ngày: </a> 0 Bytes / 150 GB
+                    traffic_match = re.search(
+                        r'Dung lượng tải trong ngày:.*?(\d+(?:\.\d+)?)\s*([KMGT]?B).*?/\s*(\d+(?:\.\d+)?)\s*([KMGT]?B)',
+                        html,
+                        re.IGNORECASE | re.DOTALL
+                    )
+                    if traffic_match:
+                        used_amount = float(traffic_match.group(1))
+                        used_unit = traffic_match.group(2)
+                        total_amount = float(traffic_match.group(3))
+                        total_unit = traffic_match.group(4)
+                        logger.info(f"Daily traffic: {used_amount} {used_unit} / {total_amount} {total_unit}")
+                        # Store for potential future use
+                        self._traffic_left = f"{used_amount} {used_unit} / {total_amount} {total_unit}"
+                    else:
+                        logger.debug("Could not find daily traffic information")
+                        self._traffic_left = None
+                    
                 except Exception as e:
-                    logger.warning(f"Could not fetch account expiration: {e}")
+                    logger.warning(f"Could not fetch account profile page: {e}")
+                    # Fallback to basic detection
+                    self._is_premium = True  # Assume premium if logged in
                     self._premium_expiry = None
+                    self._traffic_left = None
                 
                 return True
             else:
-                logger.error("❌ Fshare login failed: Invalid credentials or unexpected response")
-                raise AuthenticationError("Fshare login failed: Invalid credentials")
+                # Try to find specific error message
+                error_msg = "Invalid credentials or unexpected response"
+                if "Email hoặc mật khẩu không đúng" in response.text:
+                    error_msg = "Incorrect email or password"
+                elif "Tài khoản đang bị khóa" in response.text:
+                    error_msg = "Account is locked"
+                    
+                logger.error(f"❌ Fshare login failed: {error_msg}")
+                raise AuthenticationError(f"Fshare login failed: {error_msg}")
         
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Fshare connection error: {e}")
