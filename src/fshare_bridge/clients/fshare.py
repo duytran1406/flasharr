@@ -72,7 +72,7 @@ class FshareClient:
     """
     
     # API endpoints
-    API_BASE = "https://www.fshare.vn/api"
+    API_BASE = "https://api2.fshare.vn/api"
     API_V3_BASE = "https://www.fshare.vn/api/v3"
     API_FSHARE_BASE = "https://api.fshare.vn/api"
     
