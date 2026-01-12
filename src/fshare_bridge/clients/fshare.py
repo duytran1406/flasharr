@@ -167,6 +167,10 @@ class FshareClient:
                 timeout=self.timeout,
             )
             
+            # Debug logging
+            logger.info(f"Fshare API response status: {response.status_code}")
+            logger.info(f"Fshare API response: {response.text[:500]}")
+            
             if response.status_code != 200:
                 raise APIError(
                     f"Login request failed",
