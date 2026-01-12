@@ -8,6 +8,8 @@ services:
       - "8484:8484"
     env_file:
       - /mnt/appdata/fshare-arr-bridge/.env
+    volumes:
+      - /mnt/appdata/fshare-arr-bridge/data:/app/data
     environment:
       # Server configuration
       INDEXER_PORT: 8484
