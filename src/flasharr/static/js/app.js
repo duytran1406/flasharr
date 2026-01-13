@@ -385,7 +385,7 @@ if (typeof window.FshareBridge === 'undefined') {
 
                 category: d.category || d.c || 'Uncategorized',
                 error_message: d.error_message || d.er || '',
-                added: d.added || d.created_at || null,
+                added: d.added || d.created_at || d.c || null,
                 info: ""
             };
         }
@@ -394,12 +394,12 @@ if (typeof window.FshareBridge === 'undefined') {
             if (!dateStr) return '-';
             try {
                 const date = new Date(dateStr);
-                const now = new Date();
-                const diff = (now - date) / 1000;
-                if (diff < 60) return 'Just now';
-                if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-                if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-                return date.toLocaleDateString();
+                const day = String(date.getDate()).padStart(2, '0');
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const year = date.getFullYear();
+                const hours = String(date.getHours()).padStart(2, '0');
+                const minutes = String(date.getMinutes()).padStart(2, '0');
+                return `${day}-${month}-${year} ${hours}:${minutes}`;
             } catch (e) { return '-'; }
         }
 
@@ -671,7 +671,7 @@ if (typeof window.FshareBridge === 'undefined') {
             }
 
             const isRunning = state === 'running';
-            
+
             // Update row class
             row.className = `main-row row-${state}${row.classList.contains('is-expanded') ? ' is-expanded' : ''}`;
 
@@ -686,7 +686,7 @@ if (typeof window.FshareBridge === 'undefined') {
             updateText('.cell-speed', isRunning ? d.speed : '-');
             updateText('.cell-eta', d.eta);
             updateText('.cell-added', this.formatAddedDate(d.added));
-            
+
             // Category Update
             const catBadge = row.querySelector('.category-badge');
             if (catBadge) {
@@ -723,7 +723,7 @@ if (typeof window.FshareBridge === 'undefined') {
                     const toggleBtn = canToggle ? `<button class="icon-btn" onclick="bridge.toggleDownload('${d.fid}'); event.stopPropagation();"><span class="material-icons" style="font-size: 20px">${isRunning ? 'pause' : 'play_arrow'}</span></button>` : '';
                     const retryBtn = state === 'error' ? `<button class="icon-btn" onclick="bridge.retryDownload('${d.fid}'); event.stopPropagation();" style="color: #fbbf24;"><span class="material-icons" style="font-size: 20px">replay</span></button>` : '';
                     const actionBtns = `<div style="display: flex; gap: 0.5rem; align-items: center;">${retryBtn}${toggleBtn}<button class="icon-btn delete-btn" onclick="bridge.deleteDownload('${d.fid}'); event.stopPropagation();"><span class="material-icons" style="font-size: 20px">delete_outline</span></button></div>`;
-                    
+
                     const newHtml = `<span style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted); margin-right: auto;">Actions & Controls:</span> ${actionBtns}`;
                     if (actionContainer.innerHTML !== newHtml) actionContainer.innerHTML = newHtml;
                 }
