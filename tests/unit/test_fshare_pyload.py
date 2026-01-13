@@ -8,7 +8,7 @@ import pytest
 import responses
 from unittest.mock import patch, MagicMock
 
-from src.fshare_bridge.clients.fshare import FshareClient, FshareFile
+from src.flasharr.clients.fshare import FshareClient, FshareFile
 
 
 @pytest.fixture

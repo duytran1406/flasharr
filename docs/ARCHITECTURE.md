@@ -1,4 +1,4 @@
-# Fshare-Arr Bridge - Architecture Document
+# Flasharr - Architecture Document
 
 ## High-Level Architecture
 
@@ -12,7 +12,7 @@ graph TB
         TIMFSHARE[TimFshare.com API]
     end
     
-    subgraph "Fshare-Arr Bridge"
+    subgraph "Flasharr"
         subgraph "Web Layer"
             FLASK[Flask App]
             API[REST API]

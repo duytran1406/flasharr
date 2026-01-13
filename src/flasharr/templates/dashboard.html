@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Flasharr{% endblock %}
+
+{% block content %}
+<div class="grid grid-2 mb-lg">
+    <!-- Service Status -->
+    <div class="card">
+        <h2 class="card-title">Service Status</h2>
+        <div id="service-status" class="flex gap-md" style="flex-direction: column;">
+            <div class="flex items-center justify-between">
+                <span class="text-secondary">Indexer API</span>
+                <span id="indexer-status" class="status-badge">
+                    <span class="spinner"></span> Checking...
+                </span>
+            </div>
+            <div class="flex items-center justify-between">
+                <span class="text-secondary">SABnzbd API</span>
+                <span id="sabnzbd-status" class="status-badge">
+                    <span class="spinner"></span> Checking...
+                </span>
+            </div>
+            <div class="flex items-center justify-between">
+                <span class="text-secondary">Download Engine</span>
+                <span id="engine-status" class="status-badge">
+                    <span class="spinner"></span> Checking...
+                </span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Stats -->
+    <div class="card">
+        <h2 class="card-title">Quick Stats</h2>
+        <div class="grid grid-2 gap-md">
+            <div>
+                <div class="text-muted text-small mb-sm">Active Downloads</div>
+                <div style="font-size: 2rem; font-weight: 700;" id="active-downloads">-</div>
+            </div>
+            <div>
+                <div class="text-muted text-small mb-sm">Completed Today</div>
+                <div style="font-size: 2rem; font-weight: 700;" id="completed-today">-</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Activity -->
+<div class="card">
+    <h2 class="card-title">Recent Activity</h2>
+    <div id="recent-activity">
+        <div class="text-muted text-center" style="padding: 2rem;">
+            Loading activity...
+        </div>
+    </div>
+</div>
+
+<!-- API Endpoints -->
+<div class="card" style="margin-top: var(--spacing-lg);">
+    <h2 class="card-title">API Endpoints</h2>
+    <div class="grid grid-3 gap-sm">
+        <div style="padding: var(--spacing-sm); background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+            <div class="text-small text-muted mb-sm">Newznab Indexer</div>
+            <code style="color: var(--accent-primary); font-size: 0.875rem;">/indexer/api</code>
+        </div>
+        <div style="padding: var(--spacing-sm); background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+            <div class="text-small text-muted mb-sm">SABnzbd Client</div>
+            <code style="color: var(--accent-primary); font-size: 0.875rem;">/sabnzbd/api</code>
+        </div>
+        <div style="padding: var(--spacing-sm); background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+            <div class="text-small text-muted mb-sm">Health Check</div>
+            <code style="color: var(--accent-primary); font-size: 0.875rem;">/health</code>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Dashboard specific JavaScript
+    async function loadDashboard() {
+        try {
+            // Load health status
+            const health = await fetch('/health').then(r => r.json());
+
+            // Update service status
+            updateStatus('indexer-status', health.services.indexer);
+            updateStatus('sabnzbd-status', health.services.sabnzbd);
+            updateStatus('engine-status', 'operational');
+
+            // Load stats (mock for now)
+            document.getElementById('active-downloads').textContent = '0';
+            document.getElementById('completed-today').textContent = '0';
+
+            // Load recent activity
+            loadRecentActivity();
+        } catch (error) {
+            console.error('Failed to load dashboard:', error);
+        }
+    }
+
+    function updateStatus(elementId, status) {
+        const el = document.getElementById(elementId);
+        el.innerHTML = '';
+
+        if (status === 'ready' || status === 'operational') {
+            el.className = 'status-badge success';
+            el.innerHTML = '<span style="width: 8px; height: 8px; background: currentColor; border-radius: 50%;"></span> Online';
+        } else if (status === 'initializing') {
+            el.className = 'status-badge warning';
+            el.innerHTML = '<span style="width: 8px; height: 8px; background: currentColor; border-radius: 50%;"></span> Initializing';
+        } else {
+            el.className = 'status-badge danger';
+            el.innerHTML = '<span style="width: 8px; height: 8px; background: currentColor; border-radius: 50%;"></span> Offline';
+        }
+    }
+
+    function loadRecentActivity() {
+        const container = document.getElementById('recent-activity');
+        container.innerHTML = '<div class="text-muted text-center" style="padding: 2rem;">No recent activity</div>';
+    }
+
+    // Load dashboard on page load
+    loadDashboard();
+
+    // Refresh every 5 seconds
+    setInterval(loadDashboard, 5000);
+</script>
+{% endblock %}

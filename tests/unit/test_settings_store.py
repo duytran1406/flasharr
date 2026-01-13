@@ -9,7 +9,7 @@ import tempfile
 import os
 from pathlib import Path
 
-from src.fshare_bridge.core.settings_store import (
+from src.flasharr.core.settings_store import (
     SettingsStore,
     AppSettings,
     get_settings_store,

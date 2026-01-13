@@ -1,11 +1,11 @@
-# Fshare-Arr Bridge - Setup Guide
+# Flasharr - Setup Guide
 
 ## Quick Start (Docker - Recommended)
 
 ### 1. Configure Environment
 
 ```bash
-cd /etc/pve/fshare-arr-bridge
+cd /etc/pve/Flasharr
 cp .env.example .env
 nano .env
 ```
@@ -24,17 +24,17 @@ PYLOAD_PASSWORD=your-pyload-password
 
 ```bash
 # Build the Docker image
-docker build -t fshare-arr-bridge:latest .
+docker build -t Flasharr:latest .
 
 # Run with docker-compose
 docker-compose up -d
 
 # Or run directly
 docker run -d \
-  --name fshare-arr-bridge \
+  --name Flasharr \
   -p 8484:8484 \
   --env-file .env \
-  fshare-arr-bridge:latest
+  Flasharr:latest
 ```
 
 ### 3. Verify
@@ -44,7 +44,7 @@ docker run -d \
 curl http://localhost:8484/health
 
 # Check logs
-docker logs fshare-arr-bridge
+docker logs Flasharr
 ```
 
 ---
@@ -54,7 +54,7 @@ docker logs fshare-arr-bridge
 ### 1. Install Dependencies
 
 ```bash
-cd /etc/pve/fshare-arr-bridge
+cd /etc/pve/Flasharr
 
 # Create virtual environment
 python3 -m venv venv
@@ -105,11 +105,11 @@ python -m app.main
 2. Go to **Settings** → **Download Clients** → **Add**
 3. Select **SABnzbd**
 4. Configure:
-   - **Name**: `Fshare Bridge`
+   - **Name**: `Flasharr`
    - **Host**: `your-server-ip`
    - **Port**: `8484`
    - **URL Base**: `/sabnzbd`
-   - **API Key**: `fshare-bridge-api-key` (any value)
+   - **API Key**: `Flasharr-api-key` (any value)
    - **Category**: `tv` (for Sonarr) or `movies` (for Radarr)
 5. Click **Test** → Should show "Success"
 6. Click **Save**
@@ -132,7 +132,7 @@ python -m app.main
 **Cause**: Filename normalization didn't work correctly.
 
 **Solution**:
-1. Check bridge logs: `docker logs fshare-arr-bridge`
+1. Check bridge logs: `docker logs Flasharr`
 2. Verify the normalized filename in logs
 3. Ensure the filename follows pattern: `Series Name S01E01 Quality`
 
@@ -176,14 +176,14 @@ Add labels to docker-compose.yml:
 
 ```yaml
 services:
-  fshare-arr-bridge:
+  Flasharr:
     # ... existing config ...
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.fshare-bridge.rule=Host(`fshare-bridge.yourdomain.com`)"
-      - "traefik.http.routers.fshare-bridge.entrypoints=websecure"
-      - "traefik.http.routers.fshare-bridge.tls.certresolver=letsencrypt"
-      - "traefik.http.services.fshare-bridge.loadbalancer.server.port=8484"
+      - "traefik.http.routers.Flasharr.rule=Host(`Flasharr.yourdomain.com`)"
+      - "traefik.http.routers.Flasharr.entrypoints=websecure"
+      - "traefik.http.routers.Flasharr.tls.certresolver=letsencrypt"
+      - "traefik.http.services.Flasharr.loadbalancer.server.port=8484"
 ```
 
 ### Custom Port
@@ -260,7 +260,7 @@ curl "http://localhost:8484/sabnzbd/api?mode=history&output=json"
 
 ```bash
 # Docker
-docker logs -f fshare-arr-bridge
+docker logs -f Flasharr
 
 # Manual
 tail -f app.log
@@ -285,7 +285,7 @@ docker-compose up -d
 cp .env .env.backup
 
 # Export Docker image
-docker save fshare-arr-bridge:latest | gzip > fshare-arr-bridge.tar.gz
+docker save Flasharr:latest | gzip > Flasharr.tar.gz
 ```
 
 ---
@@ -332,7 +332,7 @@ For issues, check:
 4. *arr suite logs
 
 Common log locations:
-- Bridge: `docker logs fshare-arr-bridge`
+- Bridge: `docker logs Flasharr`
 - Sonarr: `/config/logs/sonarr.txt`
 - Radarr: `/config/logs/radarr.txt`
 - Prowlarr: `/config/logs/prowlarr.txt`

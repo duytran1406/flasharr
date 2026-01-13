@@ -6,8 +6,8 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta
 
-from src.fshare_bridge.clients.fshare import FshareClient, FshareFile
-from src.fshare_bridge.core.exceptions import AuthenticationError, APIError
+from src.flasharr.clients.fshare import FshareClient, FshareFile
+from src.flasharr.core.exceptions import AuthenticationError, APIError
 
 
 class TestFshareFile:

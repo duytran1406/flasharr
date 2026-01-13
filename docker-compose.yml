@@ -1,25 +1,25 @@
 services:
-  # Fshare-Arr Bridge - Main integration service
-  fshare-arr-bridge:
+  # Flasharr - Main integration service
+  flasharr:
     build: .
-    container_name: fshare-arr-bridge
+    image: flasharr:beta
+    container_name: flasharr
     restart: unless-stopped
     ports:
       - "8484:8484"
     env_file:
-      - /mnt/appdata/fshare-arr-bridge/.env
+      - /mnt/appdata/Flasharr/.env
     volumes:
-      - /mnt/appdata/fshare-arr-bridge/data:/app/data
+      - /mnt/appdata/Flasharr/data:/app/data
       - /data/fshare-downloader:/downloads
-      - /root/fshare-arr-bridge/src:/app/src
     environment:
       # Server configuration
       INDEXER_PORT: 8484
     dns:
       - 8.8.8.8
     healthcheck:
-      test: [ "CMD", "python", "-c", "import requests; requests.get('http://localhost:8484/health')" ]
+      test: [ "CMD", "python3", "-c", "import requests; requests.get('http://localhost:8484/health')" ]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 20s

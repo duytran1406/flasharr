@@ -1,0 +1,405 @@
+{% extends "base.html" %}
+
+{% block title %}Downloads - Fshare Nexus{% endblock %}
+
+{% block custom_header %}
+<div class="elegant-toolbar"
+    style="width: 100%; margin: 0; border: none; background: transparent; backdrop-filter: none; box-shadow: none;">
+    <div class="search-wrapper">
+        <span class="material-icons">search</span>
+        <input type="text" class="elegant-search-input" placeholder="Search by name..." id="downloads-search-input"
+            oninput="bridge.loadDownloads()" autocomplete="off">
+    </div>
+
+    <div class="action-group">
+        <button class="icon-action-btn btn-add" onclick="bridge.showAddModal()" title="Add Link">
+            <span class="material-icons">queue</span>
+        </button>
+        <button class="icon-action-btn btn-start" onclick="bridge.startAllDownloads()" title="Start All">
+            <span class="material-icons">play_arrow</span>
+        </button>
+        <button class="icon-action-btn btn-pause" onclick="bridge.pauseAllDownloads()" title="Pause All">
+            <span class="material-icons">pause</span>
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="downloads-container">
+
+    <!-- Main List Card -->
+    <div class="service-card" style="padding: 0; overflow: visible;">
+        <div style="overflow-x: auto;">
+            <table class="download-table">
+                <thead>
+                    <tr>
+                        <!-- Checkbox disabled
+                        <th style="width: 48px; text-align: center; padding-left: 1rem;">
+                            <input type="checkbox" id="select-all-checkbox"
+                                onclick="bridge.toggleSelectAll(this.checked)"
+                                style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--accent-blue);">
+                        </th> -->
+                        <th onclick="bridge.sortDownloads('name')" style="cursor: pointer; width: 200px;">
+                            NAME <span class="material-icons" id="sort-icon-name"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
+                        <th onclick="bridge.sortDownloads('size')" style="cursor: pointer; width: 100px;">
+                            SIZE <span class="material-icons" id="sort-icon-size"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
+                        <th onclick="bridge.sortDownloads('progress')" style="cursor: pointer; width: 220px;">
+                            PROGRESS <span class="material-icons" id="sort-icon-progress"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
+                        <th onclick="bridge.sortDownloads('status')" style="cursor: pointer; width: 100px;">
+                            STATUS <span class="material-icons" id="sort-icon-status"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
+                        <th onclick="bridge.sortDownloads('speed')" style="cursor: pointer; width: 100px;">
+                            SPEED <span class="material-icons" id="sort-icon-speed"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
+                        <th onclick="bridge.sortDownloads('eta')" style="cursor: pointer; width: 100px;">
+                            ETA <span class="material-icons" id="sort-icon-eta"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
+                        <th onclick="bridge.sortDownloads('category')" style="cursor: pointer; width: 120px;">
+                            CATEGORY <span class="material-icons" id="sort-icon-category"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
+                        <th onclick="bridge.sortDownloads('added')" style="cursor: pointer; width: 130px;">
+                            ADDED <span class="material-icons" id="sort-icon-added"
+                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        </th>
+                    </tr>
+                </thead>
+                <tbody id="downloads-full-list">
+                    <tr>
+                        <td colspan="8" style="text-align: center; padding: 5rem; color: var(--text-muted);">
+                            <div style="display: flex; flex-direction: column; align-items: center; gap: 1rem;">
+                                <span class="material-icons"
+                                    style="font-size: 3rem; opacity: 0.2;">cloud_download</span>
+                                <div>Loading your download queue...</div>
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>
+                <tfoot id="downloads-footer"
+                    style="background: rgba(255,255,255,0.02); border-top: 1px solid var(--border-color);">
+                    <tr>
+                        <td colspan="8" style="padding: 0.75rem 1.5rem;">
+                            <div
+                                style="display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">
+                                <div style="display: flex; gap: 2rem; align-items: center;">
+                                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                        <span class="material-icons"
+                                            style="font-size: 16px; color: var(--text-muted);">speed</span>
+                                        <span>SPEED: <span id="footer-current-speed"
+                                                style="color: white; font-family: 'Roboto Mono', monospace;">0
+                                                B/s</span></span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                        <span class="material-icons"
+                                            style="font-size: 16px; color: var(--text-muted);">reorder</span>
+                                        <span>QUEUE: <span id="footer-queue-count"
+                                                style="color: white; font-family: 'Roboto Mono', monospace;">0</span></span>
+                                    </div>
+                                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                        <span>ACCOUNT:</span>
+                                        <div id="footer-account-dot"
+                                            style="width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; box-shadow: 0 0 5px rgba(0,0,0,0.5);">
+                                        </div>
+                                        <span id="footer-account-status" style="color: white;">CHECKING...</span>
+                                    </div>
+                                </div>
+
+                                <div style="display: flex; align-items: center; gap: 1rem;">
+                                    <span id="pagination-info" style="font-weight: 600; text-transform: none;">0-0 of
+                                        0</span>
+                                    <div style="display: flex; gap: 0.25rem;">
+                                        <button id="prev-page" class="icon-btn" onclick="bridge.changePage(-1)"
+                                            style="padding: 2px; height: 20px; width: 20px; display: flex; align-items: center; justify-content: center;">
+                                            <span class="material-icons" style="font-size: 16px;">chevron_left</span>
+                                        </button>
+                                        <button id="next-page" class="icon-btn" onclick="bridge.changePage(1)"
+                                            style="padding: 2px; height: 20px; width: 20px; display: flex; align-items: center; justify-content: center;">
+                                            <span class="material-icons" style="font-size: 16px;">chevron_right</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+
+
+    </div>
+</div>
+<!-- Add Link Modal -->
+<div id="add-link-modal" class="modal"
+    style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); align-items: center; justify-content: center;">
+    <div class="service-card"
+        style="width: 100%; max-width: 500px; padding: 2rem; border-color: rgba(59, 130, 246, 0.3);">
+        <div class="service-header" style="margin-bottom: 1.5rem;">
+            <div class="service-icon" style="background: rgba(59, 130, 246, 0.1); color: #3b82f6;">
+                <span class="material-icons">add_link</span>
+            </div>
+            <div class="service-title">Add Fshare Link</div>
+            <button onclick="bridge.hideAddModal()"
+                style="margin-left: auto; background: none; border: none; color: var(--text-muted); cursor: pointer;">
+                <span class="material-icons">close</span>
+            </button>
+        </div>
+
+        <div style="margin-bottom: 1.5rem;">
+            <label
+                style="display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.5rem; text-transform: uppercase; font-weight: 700;">Fshare
+                URL</label>
+            <input type="text" id="manual-link-input" class="elegant-search-input" style="padding-left: 1rem;"
+                placeholder="https://www.fshare.vn/file/..." autofocus>
+        </div>
+
+        <div id="modal-error-msg"
+            style="display: none; color: #ef4444; font-size: 0.85rem; margin-bottom: 1rem; padding: 0.75rem; background: rgba(239, 68, 68, 0.1); border-radius: 8px; border: 1px solid rgba(239, 68, 68, 0.2);">
+            <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <span class="material-icons" style="font-size: 16px;">error_outline</span>
+                <span id="error-text">Invalid link</span>
+            </div>
+        </div>
+
+        <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+            <button onclick="bridge.hideAddModal()" class="icon-action-btn"
+                style="width: auto; padding: 0 1.5rem; font-weight: 600; font-size: 0.85rem;">CANCEL</button>
+            <button onclick="bridge.submitManualLink()" id="submit-link-btn" class="icon-action-btn"
+                style="width: auto; padding: 0 1.5rem; background: #3b82f6; color: white; border: none; font-weight: 600; font-size: 0.85rem;">ADD
+                TO QUEUE</button>
+        </div>
+    </div>
+</div>
+<!-- Delete Confirmation Modal -->
+<div id="delete-modal" class="modal"
+    style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); backdrop-filter: blur(8px); align-items: center; justify-content: center;">
+    <div class="service-card"
+        style="width: 100%; max-width: 450px; padding: 2rem; border-color: rgba(239, 68, 68, 0.3);">
+        <div class="service-header" style="margin-bottom: 1.5rem;">
+            <div class="service-icon" style="background: rgba(239, 68, 68, 0.1); color: #ef4444;">
+                <span class="material-icons">delete_forever</span>
+            </div>
+            <div class="service-title">Delete Download</div>
+            <button onclick="document.getElementById('delete-modal').style.display='none'"
+                style="margin-left: auto; background: none; border: none; color: var(--text-muted); cursor: pointer;">
+                <span class="material-icons">close</span>
+            </button>
+        </div>
+
+        <div style="margin-bottom: 2rem; color: var(--text-secondary); line-height: 1.6;">
+            <p>Are you sure you want to delete <strong id="delete-item-name" style="color: white;">this item</strong>?
+            </p>
+            <p
+                style="font-size: 0.9rem; color: #ef4444; margin-top: 0.5rem; background: rgba(239, 68, 68, 0.1); padding: 0.75rem; border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.2);">
+                <span class="material-icons"
+                    style="font-size: 16px; vertical-align: text-bottom; margin-right: 4px;">warning</span>
+                This will also permanently remove the downloaded file from the disk.
+            </p>
+        </div>
+
+        <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+            <button onclick="document.getElementById('delete-modal').style.display='none'" class="icon-action-btn"
+                style="width: auto; padding: 0 1.5rem; font-weight: 600; font-size: 0.85rem;">CANCEL</button>
+            <button id="confirm-delete-btn" class="icon-action-btn"
+                style="width: auto; padding: 0 1.5rem; background: #ef4444; color: white; border: none; font-weight: 600; font-size: 0.85rem;">DELETE</button>
+        </div>
+    </div>
+</div>
+
+<!-- Error Message Modal -->
+<div id="error-modal" class="modal-overlay"
+    style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 2000; justify-content: center; align-items: center;">
+    <div class="modal-card"
+        style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; width: 500px; max-width: 90%; overflow: hidden;">
+        <div class="modal-header"
+            style="padding: 1.25rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
+            <h3 class="modal-title" style="margin: 0; font-size: 1.1rem; color: var(--text-primary);">Download Error
+            </h3>
+            <button class="icon-btn" onclick="bridge.closeErrorModal()">
+                <span class="material-icons">close</span>
+            </button>
+        </div>
+        <div class="modal-content" style="padding: 1.5rem;">
+            <div class="error-msg show"
+                style="margin-bottom: 0; display: flex; align-items: center; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); color: #ef4444; padding: 1rem; border-radius: 8px;">
+                <span class="material-icons" style="margin-right: 0.75rem;">error_outline</span>
+                <span id="error-modal-text">Unknown error occurred.</span>
+            </div>
+        </div>
+        <div class="modal-footer"
+            style="padding: 1rem 1.25rem; background: rgba(255,255,255,0.02); border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end;">
+            <button class="btn-primary" onclick="bridge.closeErrorModal()"
+                style="padding: 0.6rem 1.5rem; border-radius: 6px; font-weight: 600;">CLOSE</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    let speedChart = null;
+    let speedChartActive = false;
+    const maxPoints = 40;
+    let peakSpeed = 0;
+
+    function wakeupSpeedChart() {
+        const ctx = document.getElementById('downloads-speed-graph');
+        if (ctx) {
+            // SPA Navigation check: if chart exists but linked to old canvas, destroy it
+            if (speedChart && (speedChart.canvas !== ctx || !document.body.contains(speedChart.canvas))) {
+                speedChart.destroy();
+                speedChart = null;
+            }
+
+            if (!speedChart) {
+                initSpeedGraph();
+            }
+            speedChartActive = true;
+        } else {
+            speedChartActive = false;
+        }
+    }
+
+    function initDownloadsPage() {
+        if (bridge) {
+            bridge.currentPage = 1;
+            bridge.itemsPerPage = 6;
+
+            // Register listeners BEFORE initial load to avoid race condition
+            // Subscribe to bridge events for list updates
+            bridge.onDownloads('downloads-page-list', (downloads) => {
+                // Sorting and filtering is handled by bridge for internal state
+                // But pagination is UI specific, so we might need to refresh view
+                if (document.getElementById('downloads-full-list')) {
+                    const filtered = bridge.getFilteredDownloads();
+                    bridge.updatePagination(filtered.length);
+                    bridge.renderFullDownloads(bridge.getPagedDownloads(filtered));
+                }
+            });
+
+            // Subscribe to bridge stats for speed graph updates
+            bridge.onStats('downloads-page', () => {
+                const stored = localStorage.getItem('fshare_stats');
+                if (!stored) return;
+
+                try {
+                    const data = JSON.parse(stored);
+                    if (!speedChartActive) {
+                        wakeupSpeedChart();
+                    }
+                    if (speedChartActive) {
+                        updateSpeedGraph(data);
+                    }
+                } catch (e) {
+                    console.error('Error parsing stats from storage for speed graph', e);
+                }
+            });
+
+            // NOW do initial call - listeners are ready
+            bridge.loadDownloads();
+
+            // Initialize speed graph
+            wakeupSpeedChart();
+        }
+    }
+
+    // Initialize (Robust)
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initDownloadsPage);
+    } else {
+        // If already loaded, check if bridge is ready
+        if (window.bridge) {
+            initDownloadsPage();
+        } else {
+            // Fallback if app.js is deferred/async
+            document.addEventListener('DOMContentLoaded', initDownloadsPage);
+        }
+    }
+
+    function initSpeedGraph() {
+        const ctx = document.getElementById('downloads-speed-graph');
+        if (!ctx) return;
+
+        speedChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array(maxPoints).fill(''),
+                datasets: [{
+                    data: Array(maxPoints).fill(0),
+                    borderColor: '#3b82f6',
+                    borderWidth: 2,
+                    fill: true,
+                    backgroundColor: (context) => {
+                        const chart = context.chart;
+                        const { ctx, chartArea } = chart;
+                        if (!chartArea) return null;
+                        const gradient = ctx.createLinearGradient(0, chartArea.top, 0, chartArea.bottom);
+                        gradient.addColorStop(0, 'rgba(59, 130, 246, 0.2)');
+                        gradient.addColorStop(1, 'rgba(59, 130, 246, 0)');
+                        return gradient;
+                    },
+                    tension: 0.4,
+                    pointRadius: 0,
+                    pointHitRadius: 0
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                scales: {
+                    x: { display: false },
+                    y: {
+                        display: false,
+                        beginAtZero: true,
+                        suggestedMax: 1000000 // Start with 1MB/s scale
+                    }
+                },
+                animation: { duration: 800 }
+            }
+        });
+    }
+
+    function updateSpeedGraph(data) {
+        if (!speedChart || !data) return;
+
+        try {
+            const fd = data.fshare_downloader || {};
+            const currentSpeed = fd.speed_bytes || 0;
+            const currentFormatted = fd.speed || '0 B/s';
+
+            if (currentSpeed > peakSpeed) {
+                peakSpeed = currentSpeed;
+                const peakLabel = document.getElementById('graph-peak-speed');
+                if (peakLabel) peakLabel.textContent = currentFormatted;
+            }
+
+            const currentLabel = document.getElementById('graph-current-speed');
+            if (currentLabel) currentLabel.textContent = currentFormatted;
+
+            speedChart.data.datasets[0].data.shift();
+            speedChart.data.datasets[0].data.push(currentSpeed);
+
+            // Adjust max scale dynamically
+            const maxVal = Math.max(...speedChart.data.datasets[0].data);
+            if (maxVal > speedChart.options.scales.y.suggestedMax) {
+                speedChart.options.scales.y.suggestedMax = maxVal * 1.2;
+            }
+
+            speedChart.update('none');
+        } catch (e) {
+            console.error("Failed to update speed graph:", e);
+        }
+    }
+</script>
+{% endblock %}

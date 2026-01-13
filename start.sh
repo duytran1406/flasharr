@@ -1,10 +1,10 @@
 #!/bin/bash
-# Fshare-Arr Bridge Startup Script
+# Flasharr Startup Script
 
 set -e
 
 echo "========================================="
-echo "Fshare-Arr Bridge"
+echo "Flasharr"
 echo "========================================="
 
 # Check if .env exists
@@ -62,7 +62,7 @@ else
     
     echo ""
     echo "========================================="
-    echo "Starting Fshare-Arr Bridge"
+    echo "Starting Flasharr"
     echo "========================================="
     echo "Indexer API: http://localhost:${INDEXER_PORT:-8484}/indexer/api"
     echo "SABnzbd API: http://localhost:${INDEXER_PORT:-8484}/sabnzbd/api"

@@ -1,11 +1,11 @@
-# Fshare-Arr Bridge - Code Structure
+# Flasharr - Code Structure
 
 ## Directory Structure
 
 ```
-fshare-arr-bridge/
+Flasharr/
 ├── src/
-│   └── fshare_bridge/
+│   └── flasharr/
 │       ├── __init__.py              # Package root (version info)
 │       ├── __main__.py              # CLI entry point
 │       │
@@ -79,7 +79,7 @@ fshare-arr-bridge/
 
 ## Module Details
 
-### Core (`src/fshare_bridge/core/`)
+### Core (`src/flasharr/core/`)
 
 #### `config.py`
 ```python
@@ -110,7 +110,7 @@ class ConfigurationError               # Configuration issues
 
 ---
 
-### Clients (`src/fshare_bridge/clients/`)
+### Clients (`src/flasharr/clients/`)
 
 #### `fshare.py`
 ```python
@@ -151,7 +151,7 @@ class TimFshareClient:
 
 ---
 
-### Services (`src/fshare_bridge/services/`)
+### Services (`src/flasharr/services/`)
 
 #### `indexer.py`
 ```python
@@ -195,7 +195,7 @@ class SABnzbdEmulator:
 
 ---
 
-### Downloader (`src/fshare_bridge/downloader/`)
+### Downloader (`src/flasharr/downloader/`)
 
 #### `engine.py`
 ```python
@@ -241,7 +241,7 @@ class DownloadQueue:  # SQLite-backed
 
 ---
 
-### Utils (`src/fshare_bridge/utils/`)
+### Utils (`src/flasharr/utils/`)
 
 #### `filename_parser.py`
 ```python
@@ -269,7 +269,7 @@ def format_eta(seconds) -> str      # "01:23:45"
 
 ---
 
-### Web (`src/fshare_bridge/web/`)
+### Web (`src/flasharr/web/`)
 
 #### API Endpoints
 

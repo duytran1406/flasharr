@@ -6,7 +6,7 @@ import pytest
 import os
 from unittest.mock import patch
 
-from src.fshare_bridge.core.config import (
+from src.flasharr.core.config import (
     FshareConfig,
     PyLoadConfig,
     ServerConfig,

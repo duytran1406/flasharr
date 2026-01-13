@@ -3,7 +3,7 @@ Unit tests for the formatters module.
 """
 
 import pytest
-from src.fshare_bridge.utils.formatters import (
+from src.flasharr.utils.formatters import (
     format_size,
     format_speed,
     format_duration,

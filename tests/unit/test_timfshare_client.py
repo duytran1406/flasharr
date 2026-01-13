@@ -5,12 +5,12 @@ Unit tests for the TimFshare client.
 import pytest
 from unittest.mock import Mock, patch
 
-from src.fshare_bridge.clients.timfshare import (
+from src.flasharr.clients.timfshare import (
     TimFshareClient,
     SearchResult,
     ScoringConfig,
 )
-from src.fshare_bridge.core.exceptions import APIError
+from src.flasharr.core.exceptions import APIError
 
 
 class TestSearchResult:

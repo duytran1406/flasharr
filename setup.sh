@@ -1,10 +1,10 @@
 #!/bin/bash
-# Setup script for Fshare-Arr Bridge with pyLoad and Fshare plugins
+# Setup script for Flasharr with pyLoad and Fshare plugins
 
 set -e
 
 echo "========================================="
-echo "Fshare-Arr Bridge Setup"
+echo "Flasharr Setup"
 echo "========================================="
 echo ""
 
@@ -91,7 +91,7 @@ echo "✅ Setup Complete!"
 echo "========================================="
 echo ""
 echo "Services:"
-echo "  - Fshare-Arr Bridge: http://localhost:8484"
+echo "  - Flasharr: http://localhost:8484"
 echo "  - pyLoad Web UI:     http://localhost:8100"
 echo ""
 echo "Next steps:"

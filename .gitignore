@@ -44,3 +44,41 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Deployment archives
+*.tar.gz
+deploy*.tar.gz
+
+# Debug and test files
+debug_*.py
+debug_*.txt
+debug_*.html
+test_*.py
+user_test.py
+cleanup_*.py
+patch_*.py
+extract_*.py
+
+# Temporary files
+step_id.txt
+*.bak
+*.tmp
+
+# Test virtual environments
+.venv_test/
+venv_test/
+
+# Data files
+data/
+*.db
+*.db-journal
+
+# Old documentation (use flasharr_docs/)
+Action_plan*.MD
+BETA_*.md
+COMPLETE_*.md
+FILE_SUMMARY.md
+MIGRATION_GUIDE.md
+PROJECT_SUMMARY.md
+QUICKSTART_BETA.md
+WEBSOCKET_*.md

@@ -1,0 +1,836 @@
+"""
+Download Engine
+
+Core async download engine with concurrent download support and progress tracking.
+
+Beta Features:
+- Dynamic segment scaling
+- Global bandwidth limiting (Token Bucket)
+- Priority queue system
+- Multi-account load balancing
+- Smart link checking
+"""
+
+import asyncio
+import aiohttp
+import logging
+import time
+import psutil
+from pathlib import Path
+from typing import Optional, Dict, Callable, Any, List
+from dataclasses import dataclass, field
+from enum import Enum
+from datetime import datetime, timedelta
+
+from ..core.config import get_config, DownloadConfig
+from ..core.exceptions import DownloadError, DownloadFailedError
+from ..core.rate_limiter import GlobalRateLimiter
+from ..core.priority_queue import PriorityQueue, Priority, auto_prioritize
+from ..core.link_checker import get_link_checker, LinkStatus
+
+logger = logging.getLogger(__name__)
+
+
+class DownloadState(Enum):
+    """Download task state."""
+    QUEUED = "Queued"
+    STARTING = "Starting"
+    DOWNLOADING = "Downloading"
+    PAUSED = "Paused"
+    COMPLETED = "Completed"
+    FAILED = "Failed"
+    CANCELLED = "Cancelled"
+    
+    # Extended PyLoad-like states
+    WAITING = "Waiting"        # Waiting for retry (IP block, rate limit)
+    SKIPPED = "Skipped"        # Skipped by user or logic
+    TEMP_OFFLINE = "TempOffline" # Server temporarily unreachable
+    EXTRACTING = "Extracting"  # Post-processing/Unpacking
+    FINISHED = "Finished"      # Alias for Completed/Post-processed
+    OFFLINE = "Offline"        # Link is dead
+
+
+# Capability Matrix: {State: {action: allowed}}
+STATE_CAPABILITIES = {
+    DownloadState.QUEUED:      {"pause": True,  "resume": False, "cancel": True,  "retry": False, "delete": True},
+    DownloadState.STARTING:    {"pause": False, "resume": False, "cancel": True,  "retry": False, "delete": False},
+    DownloadState.DOWNLOADING: {"pause": True,  "resume": False, "cancel": True,  "retry": False, "delete": False},
+    DownloadState.WAITING:     {"pause": True,  "resume": True,  "cancel": True,  "retry": True,  "delete": False}, # Resume=Force, Retry=Reset
+    DownloadState.PAUSED:      {"pause": False, "resume": True,  "cancel": True,  "retry": False, "delete": True},
+    DownloadState.EXTRACTING:  {"pause": False, "resume": False, "cancel": True,  "retry": False, "delete": False},
+    DownloadState.COMPLETED:   {"pause": False, "resume": False, "cancel": False, "retry": True,  "delete": True}, # Retry=Restart
+    DownloadState.FINISHED:    {"pause": False, "resume": False, "cancel": False, "retry": True,  "delete": True},
+    DownloadState.FAILED:      {"pause": False, "resume": False, "cancel": False, "retry": True,  "delete": True},
+    DownloadState.CANCELLED:   {"pause": False, "resume": False, "cancel": False, "retry": True,  "delete": True},
+    DownloadState.SKIPPED:     {"pause": False, "resume": True,  "cancel": False, "retry": True,  "delete": True},
+    DownloadState.TEMP_OFFLINE:{"pause": True,  "resume": True,  "cancel": True,  "retry": True,  "delete": False},
+    DownloadState.OFFLINE:     {"pause": False, "resume": False, "cancel": False, "retry": True,  "delete": True},
+}
+
+
+@dataclass
+class DownloadProgress:
+    """Progress information for a download."""
+    downloaded_bytes: int = 0
+    total_bytes: int = 0
+    speed_bytes_per_sec: float = 0.0
+    eta_seconds: float = 0.0
+    percentage: float = 0.0
+    
+    def update(self, downloaded: int, total: int, elapsed_seconds: float) -> None:
+        """Update progress calculations."""
+        self.downloaded_bytes = downloaded
+        self.total_bytes = total
+        
+        if total > 0:
+            self.percentage = (downloaded / total) * 100
+        
+        if elapsed_seconds > 0:
+            self.speed_bytes_per_sec = downloaded / elapsed_seconds
+            
+            if self.speed_bytes_per_sec > 0 and total > 0:
+                remaining = total - downloaded
+                self.eta_seconds = remaining / self.speed_bytes_per_sec
+
+
+@dataclass
+class DownloadTask:
+    """Represents a download task."""
+    id: str
+    url: str
+    filename: str
+    destination: Path
+    state: DownloadState = DownloadState.QUEUED
+    progress: DownloadProgress = field(default_factory=DownloadProgress)
+    error_message: Optional[str] = None
+    category: str = "Uncategorized"
+    package_name: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.now)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    
+    # Extended state fields
+    wait_until: Optional[datetime] = None
+    retry_count: int = 0
+    plugin_name: Optional[str] = None
+    priority: Priority = Priority.NORMAL
+    
+    # Internal state
+    _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    _pause_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    
+    def __post_init__(self):
+        # Ensure pause event is set (not paused) by default
+        self._pause_event.set()
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "id": self.id,
+            "url": self.url,
+            "filename": self.filename,
+            "destination": str(self.destination),
+            "state": self.state.value,
+            "progress": {
+                "downloaded_bytes": self.progress.downloaded_bytes,
+                "total_bytes": self.progress.total_bytes,
+                "speed": self.progress.speed_bytes_per_sec,
+                "eta": self.progress.eta_seconds,
+                "percentage": self.progress.percentage,
+            },
+            "error": self.error_message,
+            "category": self.category,
+            "package_name": self.package_name,
+            "created_at": self.created_at.isoformat(),
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "wait_until": self.wait_until.isoformat() if self.wait_until else None,
+            "retry_count": self.retry_count,
+            "plugin_name": self.plugin_name,
+            "actions": self.get_available_actions(),
+        }
+    
+    def get_available_actions(self) -> List[str]:
+        """Get list of available actions for current state."""
+        caps = STATE_CAPABILITIES.get(self.state, {})
+        return [action for action, allowed in caps.items() if allowed]
+    
+    def cancel(self) -> None:
+        """Request task cancellation."""
+        self._cancel_event.set()
+    
+    def pause(self) -> None:
+        """Pause the download."""
+        self._pause_event.clear()
+        self.state = DownloadState.PAUSED
+    
+    def resume(self) -> None:
+        """Resume the download."""
+        self._pause_event.set()
+        if self.state == DownloadState.PAUSED:
+            self.state = DownloadState.DOWNLOADING
+    
+    @property
+    def is_cancelled(self) -> bool:
+        return self._cancel_event.is_set()
+    
+    @property
+    def is_paused(self) -> bool:
+        return not self._pause_event.is_set()
+
+
+ProgressCallback = Callable[[DownloadTask], None]
+
+
+class DownloadEngine:
+    """
+    Async download engine with concurrent download support.
+    
+    Features:
+    - Concurrent downloads with configurable limit
+    - Multi-threaded (segmented) downloads per file
+    - Progress tracking and callbacks
+    - Pause/resume support
+    - Resume interrupted downloads
+    - Automatic retries
+    """
+    
+    def __init__(
+        self,
+        max_concurrent: int = 2,
+        segments_per_download: int = 8,
+        config: Optional[DownloadConfig] = None,
+        progress_callback: Optional[ProgressCallback] = None,
+    ):
+        """
+        Initialize the download engine.
+        
+        Args:
+            max_concurrent: Maximum concurrent files
+            segments_per_download: Number of connections per file
+            config: Download configuration
+            progress_callback: Optional callback for progress updates
+        """
+        self.config = config or get_config().download
+        self.max_concurrent = max_concurrent
+        self.segments_per_download = segments_per_download
+        self.progress_callback = progress_callback
+        
+        self._tasks: Dict[str, DownloadTask] = {}
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._workers: list = []
+        self._running = False
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._file_locks: Dict[str, asyncio.Lock] = {}
+        self._rate_limiter = GlobalRateLimiter()
+        
+        # Apply speed limit if configured
+        if self.config.speed_limit:
+            self._rate_limiter.enable(self.config.speed_limit)
+
+    
+    @property
+    def tasks(self) -> Dict[str, DownloadTask]:
+        """Get all tasks."""
+        return self._tasks.copy()
+    
+    @property
+    def active_count(self) -> int:
+        """Get count of active downloads."""
+        return sum(
+            1 for t in self._tasks.values()
+            if t.state in (DownloadState.DOWNLOADING, DownloadState.STARTING, DownloadState.EXTRACTING)
+        )
+    
+    def get_engine_stats(self) -> Dict[str, Any]:
+        """Get current engine statistics."""
+        active_tasks = [t for t in self._tasks.values() if t.state in (DownloadState.DOWNLOADING, DownloadState.STARTING, DownloadState.EXTRACTING)]
+        total_speed = sum(t.progress.speed_bytes_per_sec for t in active_tasks if t.progress)
+        
+        stats = {
+            "active_downloads": len(active_tasks),
+            "queue_size": sum(1 for t in self._tasks.values() if t.state == DownloadState.QUEUED),
+            "total_tasks": len(self._tasks),
+            "total_speed": total_speed
+        }
+
+        if self._rate_limiter.is_enabled:
+            stats["rate_limiter"] = self._rate_limiter.get_stats()
+        
+        return stats
+    
+    async def start(self) -> None:
+        """Start the download engine."""
+        if self._running:
+            return
+        
+        self._running = True
+        self._loop = asyncio.get_running_loop()
+        logger.info(f"Engine: Starting with {self.max_concurrent} concurrent workers")
+
+        # Use a browser-like User-Agent to avoid speed caps/throttling
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Accept-Encoding": "identity",
+            "Connection": "keep-alive"
+        }
+        self._session = aiohttp.ClientSession(headers=headers)
+        
+        # Start worker tasks
+        for i in range(self.max_concurrent):
+            worker = asyncio.create_task(self._worker(i))
+            self._workers.append(worker)
+            
+        # Start scheduler task
+        self._scheduler_task = asyncio.create_task(self._scheduler())
+        
+        logger.info(f"Download engine started with {len(self._workers)} workers and scheduler")
+        
+    def set_speed_limit(self, speed_limit_bytes: Optional[int]) -> None:
+        """
+        Update the global speed limit.
+        
+        Args:
+            speed_limit_bytes: Max speed in Bytes/s, or None for unlimited.
+        """
+        if speed_limit_bytes and speed_limit_bytes > 0:
+            self._rate_limiter.enable(speed_limit_bytes)
+        else:
+            self._rate_limiter.disable()
+        
+        # Update config to reflect state (optional, for persistent access in this session)
+        self.config.speed_limit = speed_limit_bytes
+        logger.info(f"Global speed limit updated to: {speed_limit_bytes} B/s")
+        
+    def update_max_concurrent(self, new_max: int) -> None:
+        """
+        Update the maximum concurrent downloads at runtime.
+        """
+        if new_max == self.max_concurrent:
+            return
+        
+        old_max = self.max_concurrent
+        self.max_concurrent = new_max
+        
+        if not self._running:
+            return
+            
+        if new_max > old_max:
+            # Add more workers
+            for i in range(old_max, new_max):
+                worker = asyncio.create_task(self._worker(i))
+                self._workers.append(worker)
+            logger.info(f"Engine: Added {new_max - old_max} workers (Total: {new_max})")
+        else:
+            # Cancel excess workers
+            to_remove = self._workers[new_max:]
+            self._workers = self._workers[:new_max]
+            for w in to_remove:
+                w.cancel()
+            logger.info(f"Engine: Removed {old_max - new_max} workers (Total: {new_max})")
+    
+    async def stop(self) -> None:
+        """Stop the download engine."""
+        self._running = False
+        
+        # Cancel all workers
+        for worker in self._workers:
+            worker.cancel()
+            
+        # Cancel scheduler
+        if hasattr(self, '_scheduler_task'):
+            self._scheduler_task.cancel()
+            try:
+                await self._scheduler_task
+            except asyncio.CancelledError:
+                pass
+        
+        if self._workers:
+            await asyncio.gather(*self._workers, return_exceptions=True)
+        
+        self._workers.clear()
+        
+        if self._session:
+            await self._session.close()
+            self._session = None
+        
+        logger.info("Download engine stopped")
+
+    async def _scheduler(self) -> None:
+        """Scheduler loop to manage WAITING tasks and other periodic jobs."""
+        logger.info("Scheduler started")
+        while self._running:
+            try:
+                now = datetime.now()
+                for task_id, task in self._tasks.items():
+                    # Check for WAITING tasks that are ready
+                    if task.state == DownloadState.WAITING and task.wait_until:
+                        if now >= task.wait_until:
+                            logger.info(f"Task {task.filename} ready for retry. Re-queueing.")
+                            task.state = DownloadState.QUEUED
+                            task.wait_until = None
+                            await self._queue.put(task.id)
+                            
+                await asyncio.sleep(1.0)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Scheduler error: {e}")
+                await asyncio.sleep(5.0)
+    
+    async def add_download(
+        self,
+        url: str,
+        filename: str,
+        destination: Optional[str] = None,
+        task_id: Optional[str] = None,
+        category: str = "Uncategorized",
+        package_name: Optional[str] = None,
+    ) -> DownloadTask:
+        """
+        Add a download to the queue.
+        
+        Args:
+            url: Download URL
+            filename: Target filename
+            destination: Download directory (uses config default if not provided)
+            task_id: Optional custom task ID
+            category: Download category
+            package_name: Package/group name
+            
+        Returns:
+            DownloadTask object
+        """
+        import uuid
+        
+        dest_path = Path(destination or self.config.download_dir) / filename
+        
+        task = DownloadTask(
+            id=task_id or str(uuid.uuid4()),
+            url=url,
+            filename=filename,
+            destination=dest_path,
+            category=category,
+            package_name=package_name,
+        )
+        
+        self._tasks[task.id] = task
+        
+        # Create placeholder file immediately
+        try:
+            if not dest_path.exists():
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                dest_path.touch()
+                logger.debug(f"Created placeholder file: {dest_path}")
+        except Exception as e:
+            logger.error(f"Failed to create placeholder for {filename}: {e}")
+            # Non-critical failure, continue
+
+        await self._queue.put(task.id)
+        
+        logger.info(f"Added download: {filename} -> {dest_path}")
+        return task
+    
+    def get_task(self, task_id: str) -> Optional[DownloadTask]:
+        """Get a task by ID."""
+        return self._tasks.get(task_id)
+    
+    def pause_task(self, task_id: str) -> bool:
+        """Pause a download task."""
+        task = self._tasks.get(task_id)
+        if task:
+            if "pause" not in task.get_available_actions():
+                logger.warning(f"Cannot pause task {task_id} in state {task.state}")
+                return False
+            task.pause()
+            return True
+        return False
+    
+    def resume_task(self, task_id: str) -> bool:
+        """Resume a paused task."""
+        task = self._tasks.get(task_id)
+        if task:
+            if "resume" not in task.get_available_actions():
+                logger.warning(f"Cannot resume task {task_id} in state {task.state}")
+                return False
+                
+            # Special handling for WAITING state (Skip Wait / Force Start)
+            if task.state == DownloadState.WAITING:
+                task.wait_until = None # Clear wait
+                task.state = DownloadState.QUEUED
+                logger.info(f"Forced resume (Skip Wait) for task {task.filename}")
+                asyncio.run_coroutine_threadsafe(self._queue.put(task.id), self._loop or asyncio.get_running_loop())
+                return True
+                
+            task.resume()
+            return True
+        return False
+    
+    def cancel_task(self, task_id: str) -> bool:
+        """Cancel a download task and delete file from disk."""
+        task = self._tasks.get(task_id)
+        if task:
+            if "cancel" not in task.get_available_actions():
+                logger.warning(f"Cannot cancel task {task_id} in state {task.state}")
+                # return False # Allow force delete even if state seems weird?
+            
+            # 1. Stop the task logic
+            task.cancel()
+            
+            # 2. Delete file from disk
+            try:
+                if task.destination.exists():
+                    if task.destination.is_dir():
+                         import shutil
+                         shutil.rmtree(task.destination)
+                    else:
+                        task.destination.unlink()
+                    logger.info(f"Deleted file for task {task_id}: {task.destination}")
+                
+                # Cleanup any partial segments if they exist
+                # ... (segments handled naturally if they are temp files, but if in main dir, might need cleanup)
+            except Exception as e:
+                logger.error(f"Failed to delete file for task {task_id}: {e}")
+                
+            return True
+        return False
+    
+    async def _worker(self, worker_id: int) -> None:
+        """Worker coroutine for processing downloads."""
+        logger.debug(f"Worker {worker_id} started")
+        
+        while self._running:
+            try:
+                # Get next task from queue
+                task_id = await asyncio.wait_for(
+                    self._queue.get(),
+                    timeout=1.0,
+                )
+                
+                task = self._tasks.get(task_id)
+                if not task:
+                    logger.warning(f"Worker {worker_id}: Picked up non-existent task {task_id}")
+                    continue
+                
+                logger.info(f"Worker {worker_id}: Processing task {task.filename} ({task_id})")
+                # Process the task based on state
+                await self._process_task(task)
+                logger.info(f"Worker {worker_id}: Finished task {task.filename}")
+                
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Worker {worker_id} error: {e}")
+        
+        logger.debug(f"Worker {worker_id} stopped")
+
+    async def _process_task(self, task: DownloadTask) -> None:
+        """Dispatch task processing based on state."""
+        try:
+            if task.state == DownloadState.QUEUED:
+                await self._handle_downloading(task)
+            elif task.state == DownloadState.DOWNLOADING:
+                await self._handle_downloading(task)
+            elif task.state == DownloadState.EXTRACTING:
+                await self._handle_extracting(task)
+            # Add other handlers here
+            else:
+                logger.warning(f"Unknown state for processing: {task.state}")
+                
+        except Exception as e:
+            logger.error(f"Error processing task {task.id}: {e}")
+            task.state = DownloadState.FAILED
+            task.error_message = str(e)
+        finally:
+            # Always notify on state transition/completion
+            if self.progress_callback:
+                try:
+                    self.progress_callback(task)
+                except Exception as e:
+                    logger.error(f"Error in progress callback: {e}")
+
+    async def _handle_extracting(self, task: DownloadTask) -> None:
+        """Handle extraction state."""
+        logger.info(f"Starting extraction for {task.filename} (Simulated)")
+        # TODO: Implement actual extraction logic
+        await asyncio.sleep(1.0)
+        task.state = DownloadState.COMPLETED
+        task.completed_at = datetime.now()
+        logger.info(f"Extraction completed for {task.filename}")
+
+    async def _handle_downloading(self, task: DownloadTask) -> None:
+        """Process a single download task."""
+        task.state = DownloadState.STARTING
+        task.started_at = datetime.now()
+        
+        try:
+            # Ensure destination directory exists (parent only)
+            task.destination.parent.mkdir(parents=True, exist_ok=True)
+            
+            logger.info(f"Using Premium URL: {task.url}")
+            logger.info(f"DEBUG: Premium Link for {task.filename}: {task.url}")
+            
+            # Check for existing partial download
+            start_byte = 0
+            if task.destination.exists():
+                start_byte = task.destination.stat().st_size
+                logger.info(f"Resuming download from byte {start_byte}")
+            
+            # Prepare headers for resume
+            headers = {}
+            if start_byte > 0:
+                headers["Range"] = f"bytes={start_byte}-"
+            
+            # Use a ClientTimeout to prevent hanging
+            timeout = aiohttp.ClientTimeout(total=None, connect=30, sock_read=60)
+            
+            # Check file size first (verification)
+            try:
+                async with self._session.head(task.url, allow_redirects=True, timeout=timeout) as head_resp:
+                    if head_resp.status == 200:
+                        total_expected = int(head_resp.headers.get("Content-Length", 0))
+                        if total_expected > 0:
+                            logger.info(f"Verification: Local={start_byte}, Remote={total_expected}")
+                            if start_byte == total_expected:
+                                logger.info(f"File verified as complete: {task.filename}")
+                                task.progress.total_bytes = total_expected
+                                task.progress.downloaded_bytes = total_expected
+                                task.progress.percentage = 100.0
+                                task.state = DownloadState.COMPLETED
+                                task.completed_at = datetime.now()
+                                return
+                            elif start_byte > total_expected:
+                                logger.warning(f"Local file larger than remote ({start_byte} > {total_expected}). Resetting.")
+                                start_byte = 0
+                                task.destination.unlink(missing_ok=True)
+                                headers = {}
+            except Exception as e:
+                logger.warning(f"Head request failed: {e}. Proceeding with download.")
+
+            # Start download
+            logger.debug(f"Initiating request for {task.url}")
+            
+            try:
+                # Get file information first (size and range support)
+                async with self._session.get(task.url, headers=headers, timeout=timeout) as response:
+                    if response.status == 416: # Range Not Satisfiable
+                         logger.info("Server returned 416. Assuming file is complete.")
+                         task.state = DownloadState.COMPLETED
+                         task.completed_at = datetime.now()
+                         return
+                    if response.status in (429, 503):
+                        task.retry_count += 1
+                        wait_seconds = 60 * min(task.retry_count, 10)
+                        task.wait_until = datetime.now() + timedelta(seconds=wait_seconds)
+                        task.state = DownloadState.WAITING
+                        task.error_message = f"Server busy (HTTP {response.status}). Retrying in {wait_seconds}s."
+                        return
+
+                    if response.status not in (200, 206):
+                        raise DownloadFailedError(f"HTTP error {response.status}", {"status": response.status})
+
+                    content_length = int(response.headers.get("Content-Length", 0))
+                    accept_ranges = response.headers.get("Accept-Ranges", "") == "bytes"
+                    
+                    if content_length > 0 and accept_ranges and self.segments_per_download > 1 and start_byte == 0:
+                        # Only use segmented download for fresh starts
+                        await self._handle_segmented_download(task, content_length)
+                    else:
+                        # Fallback to single stream if no ranges, small file, OR RESUMING (start_byte > 0)
+                        # Segmented download currently overwrites/truncates file, so safely append with single stream
+                        await self._handle_response_stream(response, task, start_byte)
+            
+            except Exception as e:
+                task.state = DownloadState.FAILED
+                task.error_message = str(e)
+                logger.error(f"Download failed: {task.filename} - {e}")
+            
+            except Exception as e:
+                # If network error, maybe wait instead of fail?
+                # For now, let's keep it robust: connection errors -> Retry?
+                # Simpler to fail for now unless it's a known transient error
+                task.state = DownloadState.FAILED
+                task.error_message = str(e)
+                logger.error(f"Download failed (request): {task.filename} - {e}")
+        
+        except Exception as e:
+            task.state = DownloadState.FAILED
+            task.error_message = str(e)
+            logger.error(f"Download failed (system): {task.filename} - {e}")
+
+    async def _handle_segmented_download(self, task: DownloadTask, total_size: int) -> None:
+        """Download file using multiple concurrent segments."""
+        task.progress.total_bytes = total_size
+        task.state = DownloadState.DOWNLOADING
+        task.started_at = datetime.now()
+        
+        # Pre-allocate file
+        with open(task.destination, "wb") as f:
+            f.truncate(total_size)
+        
+        segment_size = total_size // self.segments_per_download
+        tasks = []
+        lock = asyncio.Lock()
+        self._file_locks[task.id] = lock
+        
+        start_time = time.monotonic()
+        
+        for i in range(self.segments_per_download):
+            start = i * segment_size
+            end = (i + 1) * segment_size - 1 if i < self.segments_per_download - 1 else total_size - 1
+            
+            logger.info(f"DEBUG: Starting segment {i+1}/{self.segments_per_download} for {task.filename} (bytes {start}-{end})")
+            
+            tasks.append(
+                asyncio.create_task(
+                    self._download_segment(task, start, end, lock, start_time, segment_id=i+1)
+                )
+            )
+            
+        await asyncio.gather(*tasks)
+        
+        if not task.is_cancelled and task.state != DownloadState.FAILED:
+            task.state = DownloadState.COMPLETED
+            task.completed_at = datetime.now()
+            task.progress.percentage = 100.0
+            # Ensure bytes match total (fix for 97% bug if rounding errors occurred)
+            task.progress.downloaded_bytes = task.progress.total_bytes
+            logger.info(f"Segmented download completed: {task.filename} (Total Speed: {task.progress.speed_bytes_per_sec / (1024*1024):.2f} MB/s)")
+
+    async def _download_segment(self, task: DownloadTask, start: int, end: int, lock: asyncio.Lock, start_time: float, segment_id: int) -> None:
+        """Download a specific byte range."""
+        segment_start_time = time.monotonic()
+        headers = {"Range": f"bytes={start}-{end}"}
+        # Use a longer timeout for segments
+        timeout = aiohttp.ClientTimeout(total=None, connect=60, sock_read=60)
+        
+        try:
+            async with self._session.get(task.url, headers=headers, timeout=timeout) as response:
+                if response.status != 206:
+                    # Some servers don't support range for small files or specific states
+                    # If we already pre-allocated, we can't just stream to top
+                    raise DownloadFailedError(f"Segment {segment_id} failed with status {response.status}")
+                
+                current_pos = start
+                
+                # Use a larger chunk size for the iterator
+                chunk_size = self.config.chunk_size
+                
+                # Keep file handle open for the duration of the segment to avoid OS overhead
+                # We still need the lock to ensure seek+write is atomic across segments
+                with open(task.destination, "r+b") as f:
+                    async for chunk in response.content.iter_chunked(chunk_size):
+                        if task.is_cancelled:
+                            return
+                        
+                        while task.is_paused and not task.is_cancelled:
+                            await asyncio.sleep(0.5)
+                        
+                        # Rate Limiting
+                        await self._rate_limiter.consume(len(chunk))
+                        
+                        # Simplified: Just lock, seek, write. 
+                        # Opening the file once per segment is already a huge win.
+                        chunk_len = len(chunk)
+                        async with lock:
+                            f.seek(current_pos)
+                            f.write(chunk)
+                            
+                            # Increment total downloaded bytes atomically within the lock
+                            task.progress.downloaded_bytes += chunk_len
+                            task.progress.update(
+                                task.progress.downloaded_bytes,
+                                task.progress.total_bytes,
+                                time.monotonic() - start_time
+                            )
+                        
+                        current_pos += chunk_len
+                        
+                        if self.progress_callback:
+                            self.progress_callback(task)
+                            
+                duration = time.monotonic() - segment_start_time
+                speed = (current_pos - start) / duration if duration > 0 else 0
+                logger.debug(f"Segment {segment_id} finished for {task.filename} (Speed: {speed / (1024*1024):.2f} MB/s)")
+        except Exception as e:
+            logger.error(f"Segment {start}-{end} failed: {e}")
+            task.state = DownloadState.FAILED
+            task.error_message = str(e)
+
+    async def _handle_response_stream(self, response: aiohttp.ClientResponse, task: DownloadTask, start_byte: int) -> None:
+        """Handle the response stream and write file."""
+        # Log response details
+        content_type = response.headers.get("Content-Type", "")
+        content_length = response.headers.get("Content-Length", "0")
+        logger.info(f"Download started (Single Stream). Type: {content_type}, Size: {content_length}, URL: {response.url}")
+        
+        # Check for HTML content (indicates error page instead of binary file)
+        if "text/html" in content_type:
+            # Read partial content to log error details
+            error_content = await response.content.read(1000)
+            logger.error(f"Download link returned HTML instead of file. Preview: {error_content.decode('utf-8', errors='ignore')}")
+            raise DownloadFailedError(f"Server returned HTML (likely error page): {content_type}")
+        
+        # Get total size
+        total_size = int(content_length)
+        if start_byte > 0:
+            total_size += start_byte
+        
+        task.progress.total_bytes = total_size
+        task.progress.downloaded_bytes = start_byte
+        task.state = DownloadState.DOWNLOADING
+        
+        # Open file for writing
+        mode = "ab" if start_byte > 0 else "wb"
+        start_time = time.monotonic()
+        last_log_time = start_time
+        
+        logger.info(f"Opening file {task.destination} in mode {mode}")
+        with open(task.destination, mode) as f:
+            async for chunk in response.content.iter_chunked(self.config.chunk_size):
+                # Check for cancellation
+                if task.is_cancelled:
+                    task.state = DownloadState.CANCELLED
+                    logger.info(f"Download cancelled: {task.filename}")
+                    return
+                
+                # Wait if paused
+                # Wait if paused
+                while task.is_paused and not task.is_cancelled:
+                    await asyncio.sleep(0.1)
+                
+                # Rate Limiting
+                await self._rate_limiter.consume(len(chunk))
+
+                # Write chunk
+                f.write(chunk)
+                
+                # Update progress
+                task.progress.downloaded_bytes += len(chunk)
+                current_time = time.monotonic()
+                elapsed = current_time - start_time
+                task.progress.update(
+                    task.progress.downloaded_bytes,
+                    task.progress.total_bytes,
+                    elapsed,
+                )
+                
+                # Log progress every 5 seconds
+                if current_time - last_log_time >= 5.0:
+                    logger.info(f"Download progress: {task.filename} - {task.progress.percentage:.1f}% ({task.progress.downloaded_bytes}/{task.progress.total_bytes})")
+                    last_log_time = current_time
+                
+                # Call progress callback
+                if self.progress_callback:
+                    self.progress_callback(task)
+    
+        # Mark as completed
+        task.state = DownloadState.COMPLETED
+        task.completed_at = datetime.now()
+        task.progress.percentage = 100.0
+        
+        logger.info(f"Download completed: {task.filename}")
+
