@@ -194,7 +194,7 @@ class WebSocketServer:
                      "sp": int(task.progress.speed_bytes_per_sec) if task.progress else 0,
                      "e": int(task.progress.eta_seconds) if task.progress else 0,
                      "er": task.error_message or "",
-                     "c": task.created_at.isoformat() if hasattr(task, 'created_at') else None
+                     "a": task.created_at.isoformat() if hasattr(task, 'created_at') else None
                  })
                  
             await client.send(WebSocketMessage(EventType.SYNC_ALL, sync_data))
@@ -288,7 +288,7 @@ class WebSocketServer:
             "t": task.progress.total_bytes if task.progress else 0,
              "sp": int(task.progress.speed_bytes_per_sec) if task.progress else 0,
              "e": int(task.progress.eta_seconds) if task.progress else 0,
-             "c": task.created_at.isoformat() if hasattr(task, 'created_at') else None,
+             "a": task.created_at.isoformat() if hasattr(task, 'created_at') else None,
          }
         
         if hasattr(task, 'error_message') and task.error_message:

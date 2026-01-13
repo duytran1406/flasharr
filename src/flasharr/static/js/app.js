@@ -163,6 +163,7 @@ if (typeof window.FshareBridge === 'undefined') {
 
         init() {
             this.setupEventListeners();
+            this.initTheme();
 
             // Restore from storage so UI isn't empty on load
             const storedStats = localStorage.getItem('fshare_stats');
@@ -385,7 +386,7 @@ if (typeof window.FshareBridge === 'undefined') {
 
                 category: d.category || d.c || 'Uncategorized',
                 error_message: d.error_message || d.er || '',
-                added: d.added || d.created_at || d.c || null,
+                added: d.added || d.created_at || d.a || null,
                 info: ""
             };
         }
@@ -871,10 +872,10 @@ if (typeof window.FshareBridge === 'undefined') {
 
             const toggleBtn = canToggle ? `<button class="icon-btn" onclick="bridge.toggleDownload('${d.fid}'); event.stopPropagation();"><span class="material-icons" style="font-size: 20px">${isRunning ? 'pause' : 'play_arrow'}</span></button>` : '';
             const retryBtn = state === 'error' ? `<button class="icon-btn" onclick="bridge.retryDownload('${d.fid}'); event.stopPropagation();" style="color: #fbbf24;"><span class="material-icons" style="font-size: 20px">replay</span></button>` : '';
-            const actionBtns = `<div style="display: flex; gap: 0.5rem; align-items: center;">${retryBtn}${toggleBtn}<button class="icon-btn delete-btn" onclick="bridge.deleteDownload('${d.fid}'); event.stopPropagation();"><span class="material-icons" style="font-size: 20px">delete_outline</span></button></div>`;
+            const actionBtns = `<div style="display: flex; gap: 0.5rem; align-items: center; justify-content: center;">${retryBtn}${toggleBtn}<button class="icon-btn delete-btn" onclick="bridge.deleteDownload('${d.fid}'); event.stopPropagation();"><span class="material-icons" style="font-size: 20px">delete_outline</span></button></div>`;
 
             return `
-            <tr id="row-${d.fid}" class="main-row row-${state}" onclick="bridge.toggleRowExpansion('${d.fid}')" style="cursor: pointer;">
+            <tr id="row-${d.fid}" class="main-row row-${state}">
                 <!-- 1. NAME -->
                 <td class="cell-name" style="width: 200px; max-width: 200px; position: relative;">
                     <div class="download-name" title="${this.escapeHtml(d.name)}" style="width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600;">${this.escapeHtml(d.name)}</div>
@@ -908,14 +909,8 @@ if (typeof window.FshareBridge === 'undefined') {
                 <td class="cell-category" style="width: 120px;"><span class="category-badge cat-${(d.category || '').toLowerCase()}">${d.category || 'Uncategorized'}</span></td>
                 <!-- 8. ADDED -->
                 <td class="cell-added" style="font-size: 0.85rem; color: var(--text-muted); width: 130px;">${this.formatAddedDate(d.added)}</td>
-            </tr>
-            <tr id="details-${d.fid}" class="details-row">
-                <td colspan="8">
-                    <div class="details-content" style="display: flex; align-items: center; justify-content: flex-end; gap: 1rem; padding: 0.75rem 1.5rem;">
-                        <span style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted); margin-right: auto;">Actions & Controls:</span>
-                        ${actionBtns}
-                    </div>
-                </td>
+                <!-- 9. ACTIONS -->
+                <td class="cell-actions" style="width: 100px;">${actionBtns}</td>
             </tr>`;
         }
 
@@ -1160,6 +1155,11 @@ if (typeof window.FshareBridge === 'undefined') {
 
             const searchInput = document.getElementById('search-input');
             if (searchInput) searchInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') this.search(searchInput.value); });
+
+            // Theme selection listeners
+            document.querySelectorAll('input[name="theme"]').forEach(input => {
+                input.addEventListener('change', (e) => this.applyTheme(e.target.value));
+            });
         }
 
         initSidebar() {
@@ -1186,6 +1186,35 @@ if (typeof window.FshareBridge === 'undefined') {
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        initTheme() {
+            const theme = localStorage.getItem('flasharr_theme') || 'dark';
+            this.applyTheme(theme);
+        }
+
+        applyTheme(theme) {
+            document.body.classList.remove('light-mode');
+
+            if (theme === 'light') {
+                document.body.classList.add('light-mode');
+            } else if (theme === 'system') {
+                if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+                    document.body.classList.add('light-mode');
+                }
+
+                // Watch for system changes
+                if (!this.theme_watcher_ready) {
+                    this.theme_watcher_ready = true;
+                    window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', e => {
+                        const currentTheme = localStorage.getItem('flasharr_theme');
+                        if (currentTheme === 'system') {
+                            document.body.classList.toggle('light-mode', e.matches);
+                        }
+                    });
+                }
+            }
+            localStorage.setItem('flasharr_theme', theme);
         }
     }
 

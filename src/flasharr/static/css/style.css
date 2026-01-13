@@ -38,6 +38,116 @@
   --sidebar-width-collapsed: 70px;
 }
 
+body.light-mode {
+  /* Slate Light Theme Overrides */
+  --bg-color: #f8fafc;
+  /* Slate 50 */
+  --text-color: #1e293b;
+  /* Slate 800 */
+  --text-muted: #64748b;
+  /* Slate 500 */
+
+  /* Component Colors */
+  --bg-card: rgba(255, 255, 255, 0.7);
+  --bg-card-hover: rgba(255, 255, 255, 0.9);
+  --border-color: rgba(0, 0, 0, 0.08);
+  --sidebar-bg: rgba(255, 255, 255, 0.9);
+
+  /* Accent Colors (Red) */
+  --accent-500: 239 68 68;
+  /* #ef4444 */
+}
+
+body.light-mode {
+  background-image: linear-gradient(to bottom right, #f8fafc, #f1f5f9);
+  color: var(--text-color);
+}
+
+body.light-mode .brand-text,
+body.light-mode .service-title,
+body.light-mode .download-name,
+body.light-mode .settings-title,
+body.light-mode .stat-value,
+body.light-mode .card-header h2,
+body.light-mode .search-input,
+body.light-mode .elegant-search-input {
+  color: #0f172a !important;
+}
+
+body.light-mode .sidebar {
+  border-right: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+body.light-mode .sidebar-header {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+body.light-mode .nav-item.active {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+body.light-mode .btn-primary,
+body.light-mode .download-btn {
+  background: #ef4444;
+}
+
+body.light-mode .btn-primary:hover,
+body.light-mode .download-btn:hover {
+  background: #dc2626;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+body.light-mode .progress-fill {
+  background: #ef4444;
+}
+
+body.light-mode .status-badge.info,
+body.light-mode .status-badge.running {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+body.light-mode .nav-item:hover {
+  background: rgba(0, 0, 0, 0.03);
+  color: #0f172a;
+}
+
+body.light-mode .modal-card,
+body.light-mode .service-card {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+body.light-mode .modal-header,
+body.light-mode .modal-footer {
+  border-color: rgba(0, 0, 0, 0.05);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+body.light-mode .elegant-toolbar {
+  border-color: rgba(0, 0, 0, 0.05);
+}
+
+body.light-mode .download-table th {
+  background: rgba(0, 0, 0, 0.02);
+  color: #64748b;
+  border-bottom: 2px solid rgba(0, 0, 0, 0.05);
+}
+
+body.light-mode .download-table tr {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.03);
+}
+
+body.light-mode .download-table tr:hover {
+  background: rgba(0, 0, 0, 0.01);
+}
+
+body.light-mode .icon-btn:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
 * {
   margin: 0;
   padding: 0;

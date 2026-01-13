@@ -620,6 +620,11 @@
                     if (themeInput) themeInput.checked = true;
                     document.getElementById('language').value = s.language || 'en';
                     document.getElementById('refresh_interval').value = s.refresh_interval || 3000;
+
+                    // Sync app theme if window.app exists
+                    if (window.app && s.theme) {
+                        window.app.applyTheme(s.theme);
+                    }
                 }
             } catch (error) {
                 console.error('Error loading settings:', error);

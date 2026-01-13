@@ -49,7 +49,7 @@ class TaskEvent:
     e: Optional[int] = None     # eta seconds
     er: Optional[str] = None    # error message
     pr: Optional[str] = None    # priority (L/N/H/U)
-    c: Optional[str] = None     # created_at (ISO format)
+    a: Optional[str] = None     # created_at (ISO format)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict, excluding None values."""
