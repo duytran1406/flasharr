@@ -251,6 +251,13 @@
                         // Special hook for Dashboard wakeup
                         if (url === '/' && window.bridge) {
                             window.bridge.wakeupDashboardChart();
+                            window.bridge.updateDashboard();
+                            window.bridge.renderSystemLogs();
+                            window.bridge.loadSystemLogs();
+                            // Force download list refresh
+                            if (window.bridge.downloads && window.bridge.downloads.length > 0) {
+                                window.bridge.renderDashboardDownloads(window.bridge.downloads.slice(0, 3));
+                            }
                             // Re-bind sidebar and search events after DOM update
                             window.bridge.setupEventListeners();
                         } else if (window.bridge) {

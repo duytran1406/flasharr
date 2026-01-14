@@ -1,10 +1,10 @@
 #!/bin/bash
 # Flasharr Deployment Script for LXC 112
-# Version: 0.1.6-beta
+# Version: 0.1.7-beta
 
 set -e
 
-echo "=== Flasharr v0.1.6-beta Deployment ==="
+echo "=== Flasharr v0.1.7-beta Deployment ==="
 echo ""
 
 # Navigate to project directory
