@@ -2795,6 +2795,19 @@ td:first-child,
   flex: 1;
 }
 
+/* Account Table widths */
+.account-table th:first-child {
+  width: 40%;
+}
+
+.account-table th:nth-child(2) {
+  width: 15%;
+}
+
+.account-table th:last-child {
+  text-align: right;
+}
+
 /* Connection status */
 .connection-status {
   display: flex;
