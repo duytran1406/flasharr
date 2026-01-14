@@ -676,41 +676,89 @@ if (typeof window.FshareBridge === 'undefined') {
 
             // Global Status Bar Updates
             this.setText('global-down-speed', fd.speed || '0 B/s');
-            this.setText('global-up-speed', '0 B/s'); // Placeholder until upload speed is available
+            this.setText('global-up-speed', '0 B/s');
 
             const primary = fd.primary_account || {};
             const isPremium = primary.premium || false;
             const isValid = primary.valid || false;
+            const accountType = isPremium ? 'VIP' : (isValid ? 'FREE' : 'N/A');
             this.setText('global-quota', primary.traffic_left || '-- / --');
 
-            // Legacy/Other Updates
-            this.setText('header-active', fd.active || 0);
-            this.updateStatusIndicator('network-status-indicator', fd.connected);
-            this.updateStatusIndicator('pyload-status-indicator', fd.connected);
+            // --- Dashboard Specific Updates ---
 
-            this.updateBadge('fshare-account-status', isValid, isPremium ? 'PREMIUM' : (isValid ? 'FREE' : 'N/A'));
-            this.setText('fshare-daily-quota', primary.traffic_left || '-- / --');
+            // 1. Account Info
+            this.setText('dash-account-type', accountType);
+            this.setText('dash-expiry', primary.expire_date || 'Never'); // Assume expire_date is available or handle generic
 
-            this.setText('active-downloads-count', String(fd.active || 0).padStart(2, '0'));
-            // fd.total is mapped from stats.q (queue size) in updateStatsFromWS
-            this.setText('queue-count', String(fd.total || 0).padStart(2, '0'));
-
-            // If we have active downloads row on dashboard, force render
-            if (document.getElementById('download-manager-list') && this.downloads.length > 0) {
-                this.renderDashboardDownloads(this.downloads.slice(0, 3));
+            // Quota
+            this.setText('dash-quota-text', primary.traffic_left || '-- / --');
+            // Parse quota for progress bar if possible (e.g. "50.5 GB / 100 GB")
+            const quotaText = primary.traffic_left || '';
+            const match = quotaText.match(/([\d.]+)\s*GB\s*\/\s*([\d.]+)\s*GB/i);
+            if (match) {
+                const used = parseFloat(match[1]); // This is usually "Left" in Fshare, need to check label logic. 
+                // Primary.traffic_left is usually "Left / Total"
+                const left = parseFloat(match[1]);
+                const total = parseFloat(match[2]);
+                const percentLeft = (left / total) * 100;
+                // If it's a "User Quota", we might want to show USED or LEFT. 
+                // Let's assume bar shows LEFT for now as that's "positive". 
+                // Or standard is USED. Let's do % LEFT.
+                const bar = document.getElementById('dash-quota-bar');
+                if (bar) bar.style.width = `${percentLeft}%`;
             }
 
-            // Footer Updates (Downloads Page)
-            this.setText('footer-current-speed', fd.speed || '0 B/s');
-            this.setText('footer-queue-count', fd.total || 0);
-
-            const footerDot = document.getElementById('footer-account-dot');
-            const footerStatus = document.getElementById('footer-account-status');
-            if (footerDot && footerStatus) {
-                footerDot.style.background = isPremium ? '#22c55e' : (isValid ? '#eab308' : '#64748b');
-                footerDot.style.boxShadow = isPremium ? '0 0 10px rgba(34, 197, 94, 0.4)' : 'none';
-                footerStatus.textContent = isPremium ? 'PREMIUM' : (isValid ? 'FREE' : 'N/A');
+            const badge = document.getElementById('dash-account-badge');
+            if (badge) {
+                badge.style.background = isPremium ? 'rgba(29, 233, 182, 0.1)' : (isValid ? 'rgba(234, 179, 8, 0.1)' : 'rgba(100, 116, 139, 0.1)');
+                badge.style.color = isPremium ? 'var(--primary)' : (isValid ? '#eab308' : '#64748b');
             }
+
+            // 2. Queue Status
+            this.setText('dash-active-count', fd.active || 0);
+            this.setText('dash-queue-count', fd.total || 0);
+
+            // 3. Minified Queue
+            // Filter active downloads for the minified list or take top N
+            // Assuming this.downloads is populated by `updateDownloads` (which reads from separate API or event)
+            // If strictly relying on stats object, we might not have list. 
+            // We need to ensure `this.downloads` is current.
+            if (document.getElementById('dash-minified-queue')) {
+                this.renderMinifiedQueue(this.downloads.slice(0, 5));
+            }
+        }
+
+        renderMinifiedQueue(items) {
+            const container = document.getElementById('dash-minified-queue');
+            if (!container) return;
+
+            if (!items || items.length === 0) {
+                container.innerHTML = '<div class="empty-placeholder" style="padding: 2rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">No active downloads</div>';
+                return;
+            }
+
+            const html = items.map(item => {
+                const progress = item.progress || 0;
+                const speed = item.speed || '0 B/s';
+                const size = item.size || '--';
+                // Simple progress bar
+                return `
+                <div class="minified-item" style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; align-items: center; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color); font-size: 0.85rem; color: var(--text-color);">
+                    <div class="name-col" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 1rem;" title="${this.escapeHtml(item.name)}">
+                        ${this.escapeHtml(item.name)}
+                    </div>
+                    <div style="text-align: right; color: var(--text-muted); font-family: 'Roboto Mono', monospace; font-size: 0.75rem;">${size}</div>
+                    <div class="progress-col" style="padding: 0 0.5rem;">
+                        <div style="background: rgba(255,255,255,0.1); height: 4px; border-radius: 2px; overflow: hidden; width: 100%;">
+                            <div style="width: ${progress}%; background: var(--primary); height: 100%;"></div>
+                        </div>
+                    </div>
+                    <div style="text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.75rem; color: var(--primary);">${speed}</div>
+                </div>
+                `;
+            }).join('');
+
+            container.innerHTML = html;
         }
 
         updateNetworkGraph() {

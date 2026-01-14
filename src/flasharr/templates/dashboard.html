@@ -23,84 +23,90 @@
             </div>
         </div>
         <div class="chart-container">
-            <!-- Canvas for Chart.js or SVG rendering -->
             <canvas id="networkChart"></canvas>
         </div>
     </div>
 
-    <!-- Row 2: Widgets Grid -->
-    <div class="stats-grid">
+    <!-- Row 2: Info Grid -->
+    <div class="stats-grid" style="grid-template-columns: 1fr 1fr; gap: 1.5rem;">
 
-        <!-- Storage Usage -->
-        <div class="stats-card">
-            <div class="card-header">
-                <h3>Storage</h3>
-            </div>
-            <div class="card-body centered">
-                <div class="donut-chart-wrapper">
-                    <canvas id="storageChart"></canvas>
-                    <div class="donut-inner">
-                        <span id="storage-percent">75%</span>
-                        <small>Used</small>
-                    </div>
-                </div>
-                <div class="storage-meta">
-                    <div><span class="dot free"></span> Free: <span id="storage-free">--</span></div>
-                    <div><span class="dot used"></span> Used: <span id="storage-used">--</span></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Account Status -->
+        <!-- Account Information -->
         <div class="stats-card account-card">
             <div class="card-header">
-                <h3>Account</h3>
+                <h3>Account Information</h3>
             </div>
-            <div class="card-body">
-                <div class="account-badge">
-                    <span class="material-icons star-icon">stars</span>
-                    <span class="badge-text" id="dash-account-type">PREMIUM</span>
-                </div>
-                <div class="quota-meter">
-                    <label>Daily Traffic</label>
-                    <div class="linear-progress">
-                        <div class="progress-bar" id="quota-progress-bar" style="width: 60%;"></div>
+            <div class="card-body" style="display: flex; flex-direction: column; gap: 1.5rem;">
+                <div class="account-badge-row"
+                    style="display: flex; align-items: center; justify-content: space-between;">
+                    <span class="label" style="color: var(--text-muted);">Account Type</span>
+                    <div class="account-badge" id="dash-account-badge"
+                        style="display: flex; align-items: center; gap: 0.5rem; background: rgba(29, 233, 182, 0.1); padding: 0.25rem 0.75rem; border-radius: 20px; color: var(--primary);">
+                        <span class="material-icons" style="font-size: 18px;">stars</span>
+                        <span class="badge-text" id="dash-account-type"
+                            style="font-weight: 700; font-size: 0.85rem;">PREMIUM</span>
                     </div>
-                    <div class="quota-text"><span id="dash-quota-left">--</span> remaining</div>
                 </div>
-                <div class="account-info-row">
-                    <span>Expiry:</span>
-                    <span id="dash-expiry" class="highlight-text">--</span>
+
+                <div class="account-expiry-row"
+                    style="display: flex; align-items: center; justify-content: space-between;">
+                    <span class="label" style="color: var(--text-muted);">Expiry Date</span>
+                    <span class="value highlight-text" id="dash-expiry" style="font-weight: 500;">--</span>
+                </div>
+
+                <div class="quota-section">
+                    <div
+                        style="display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.85rem;">
+                        <span style="color: var(--text-muted);">Daily Quota</span>
+                        <span id="dash-quota-text" style="color: var(--text-color);">-- / --</span>
+                    </div>
+                    <div class="linear-progress"
+                        style="height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;">
+                        <div class="progress-bar" id="dash-quota-bar"
+                            style="width: 0%; background: var(--primary); height: 100%; transition: width 0.5s ease;">
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- System Health -->
-        <div class="stats-card health-card">
-            <div class="card-header">
-                <h3>System Health</h3>
+        <!-- Download Queue Status & Minified List -->
+        <div class="stats-card queue-card" style="display: flex; flex-direction: column;">
+            <div class="card-header" style="justify-content: space-between;">
+                <h3>Download Queue</h3>
+                <div class="queue-status-chips" style="display: flex; gap: 0.5rem;">
+                    <div class="status-chip active"
+                        style="font-size: 0.75rem; padding: 2px 8px; background: rgba(34, 197, 94, 0.1); color: #4ade80; border-radius: 4px;">
+                        Active: <span id="dash-active-count" style="font-weight: bold;">0</span>
+                    </div>
+                    <div class="status-chip queued"
+                        style="font-size: 0.75rem; padding: 2px 8px; background: rgba(255, 255, 255, 0.1); color: var(--text-muted); border-radius: 4px;">
+                        Queue: <span id="dash-queue-count" style="font-weight: bold;">0</span>
+                    </div>
+                </div>
             </div>
-            <div class="card-body list-body">
-                <div class="health-item">
-                    <label>CPU Load</label>
-                    <div class="health-bar-wrapper">
-                        <div class="health-bar" id="cpu-bar" style="width: 0%;"></div>
-                    </div>
-                    <span id="cpu-val">0%</span>
+
+            <div class="card-body"
+                style="padding: 0; flex: 1; overflow: hidden; display: flex; flex-direction: column;">
+                <!-- Minified List Header -->
+                <div class="minified-list-header"
+                    style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color); font-size: 0.75rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">
+                    <div>File Name</div>
+                    <div style="text-align: right;">Size</div>
+                    <div>Progress</div>
+                    <div style="text-align: right;">Speed</div>
                 </div>
-                <div class="health-item">
-                    <label>RAM Usage</label>
-                    <div class="health-bar-wrapper">
-                        <div class="health-bar" id="ram-bar" style="width: 0%;"></div>
+
+                <!-- Minified List Container -->
+                <div id="dash-minified-queue" style="flex: 1; overflow-y: auto; max-height: 250px;">
+                    <!-- Items will be injected here via JS -->
+                    <div class="empty-placeholder"
+                        style="padding: 2rem; text-align: center; color: var(--text-muted); font-size: 0.85rem;">
+                        No active downloads
                     </div>
-                    <span id="ram-val">0%</span>
-                </div>
-                <div class="health-item">
-                    <label>Uptime</label>
-                    <span id="uptime-val" class="highlight-text">--</span>
                 </div>
             </div>
         </div>
+
     </div>
 </div>
 {% endblock %}
