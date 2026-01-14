@@ -585,6 +585,79 @@ if (typeof window.FshareBridge === 'undefined') {
             }
         }
 
+        initDashboardCharts() {
+            // Wait for Chart.js to load if needed
+            if (typeof Chart === 'undefined') {
+                console.warn('Chart.js not loaded yet');
+                return;
+            }
+
+            // 1. Network Chart (NetFlow)
+            const ctxNet = document.getElementById('networkChart');
+            if (ctxNet) {
+                // Destroy existing if any
+                if (this.charts.network) this.charts.network.destroy();
+
+                this.charts.network = new Chart(ctxNet, {
+                    type: 'line',
+                    data: {
+                        labels: Array(60).fill(''),
+                        datasets: [{
+                            label: 'Download Speed',
+                            data: Array(60).fill(0),
+                            borderColor: '#1DE9B6', // Oceanic Teal
+                            backgroundColor: (context) => {
+                                const ctx = context.chart.ctx;
+                                const gradient = ctx.createLinearGradient(0, 0, 0, 200);
+                                gradient.addColorStop(0, 'rgba(29, 233, 182, 0.2)');
+                                gradient.addColorStop(1, 'rgba(29, 233, 182, 0)');
+                                return gradient;
+                            },
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                        scales: {
+                            x: { display: false },
+                            y: { display: false, min: 0 }
+                        },
+                        animation: false,
+                        interaction: { intersect: false }
+                    }
+                });
+            }
+
+            // 2. Storage Chart (Ring)
+            const ctxStore = document.getElementById('storageChart');
+            if (ctxStore) {
+                if (this.charts.storage) this.charts.storage.destroy();
+
+                this.charts.storage = new Chart(ctxStore, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Used', 'Free'],
+                        datasets: [{
+                            data: [0, 100], // Start empty
+                            backgroundColor: ['#1DE9B6', 'rgba(255, 255, 255, 0.05)'],
+                            borderWidth: 0,
+                            hoverOffset: 4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        cutout: '80%',
+                        plugins: { legend: { display: false }, tooltip: { enabled: false } }
+                    }
+                });
+            }
+        }
+
         updateDashboard() {
             // Priority: use in-memory stats, fall back to storage
             let fd = this.stats && this.stats.fshare_downloader;
