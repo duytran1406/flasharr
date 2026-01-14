@@ -249,18 +249,34 @@
                         }
 
                         // Special hook for Dashboard wakeup
+                        // Special hook for Dashboard wakeup
                         if (url === '/' && window.bridge) {
-                            window.bridge.wakeupDashboardChart();
-                            window.bridge.updateDashboard();
-                            window.bridge.renderSystemLogs();
-                            window.bridge.loadSystemLogs();
+                            if (typeof window.bridge.wakeupDashboardChart === 'function') {
+                                window.bridge.wakeupDashboardChart();
+                            }
+                            if (typeof window.bridge.updateDashboard === 'function') {
+                                window.bridge.updateDashboard();
+                            }
+                            // Logs are optional
+                            if (typeof window.bridge.renderSystemLogs === 'function') {
+                                window.bridge.renderSystemLogs();
+                            }
+                            if (typeof window.bridge.loadSystemLogs === 'function') {
+                                window.bridge.loadSystemLogs();
+                            }
+
                             // Force download list refresh
                             if (window.bridge.downloads && window.bridge.downloads.length > 0) {
-                                window.bridge.renderDashboardDownloads(window.bridge.downloads.slice(0, 3));
+                                if (typeof window.bridge.renderDashboardDownloads === 'function') {
+                                    window.bridge.renderDashboardDownloads(window.bridge.downloads.slice(0, 3));
+                                }
                             }
+
                             // Re-bind sidebar and search events after DOM update
-                            window.bridge.setupEventListeners();
-                        } else if (window.bridge) {
+                            if (typeof window.bridge.setupEventListeners === 'function') {
+                                window.bridge.setupEventListeners();
+                            }
+                        } else if (window.bridge && typeof window.bridge.setupEventListeners === 'function') {
                             window.bridge.setupEventListeners();
                         }
 
