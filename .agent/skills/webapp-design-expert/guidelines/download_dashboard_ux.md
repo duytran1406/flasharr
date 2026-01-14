@@ -8,7 +8,7 @@ This is the most frequent user action. It needs to be frictionless.
     * *Smart Paste:* If the clipboard contains a Magnet link or URL, auto-fill it.
     * *File Picker:* Drag & Drop zone for .torrent files.
 3.  **Metadata Fetch (The "Loading" State):** Before adding, the app often needs to fetch metadata (file list). Show a spinner *inside* the dialog while this happens.
-4.  **Confirmation:** User selects specific files from the torrent and Destination Path -> Clicks "Start".
+4.  **Confirmation:** User selects specific Destination Path -> Clicks "Start".
 
 ## 2. Real-Time Data Updates
 Data like "Speed" (2.4 MB/s) changes every second.

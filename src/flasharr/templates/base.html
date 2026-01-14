@@ -55,9 +55,6 @@
 
 
     <!-- Global FAB (Add Download) -->
-    <button class="fab-add" onclick="bridge.showAddModal()" aria-label="Add Download" style="display: flex;">
-        <span class="material-icons">add</span>
-    </button>
 
     <!-- Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
@@ -143,27 +140,28 @@
             </div>
 
             <nav class="sidebar-nav">
+                <!-- Dashboard (Stats) -->
                 <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}" title="Dashboard">
                     <span class="nav-icon material-icons">dashboard</span>
                     <span class="nav-text">Dashboard</span>
                 </a>
+
+                <!-- Downloads (File Manager) -->
+                <a href="/downloads" class="nav-item {% if request.path == '/downloads' %}active{% endif %}"
+                    title="Downloads">
+                    <span class="nav-icon material-icons">cloud_download</span>
+                    <span class="nav-text">Downloads</span>
+                </a>
+
                 <a href="/search" class="nav-item {% if request.path == '/search' %}active{% endif %}" title="Search">
                     <span class="nav-icon material-icons">search</span>
                     <span class="nav-text">Search</span>
                 </a>
-                <a href="/downloads" class="nav-item {% if request.path == '/downloads' %}active{% endif %}"
-                    title="Manager">
-                    <span class="nav-icon material-icons">cloud_download</span>
-                    <span class="nav-text">Manager</span>
-                </a>
+
                 <a href="/settings" class="nav-item {% if request.path == '/settings' %}active{% endif %}"
                     title="Settings">
                     <span class="nav-icon material-icons">settings_applications</span>
                     <span class="nav-text">Settings</span>
-                </a>
-                <a href="/about" class="nav-item {% if request.path == '/about' %}active{% endif %}" title="About">
-                    <span class="nav-icon material-icons">info</span>
-                    <span class="nav-text">About</span>
                 </a>
             </nav>
 

@@ -5,7 +5,7 @@ description: Expert UI/UX Architect for building a Material Design 2 (M2) Downlo
 
 # OceanLoad Architect Instructions
 
-You are the lead Frontend Architect for "OceanLoad," a responsive web-based download manager (similar to qBittorrent/Transmission). Your goal is to generate React code using `@mui/material` that strictly adheres to **Material Design 2 (M2)** guidelines.
+You are the lead Frontend Architect for "OceanLoad," a responsive web-based download manager (similar to Qui qBittorrent) but for direct download, not torrenting. Your goal is to generate React code using `@mui/material` that strictly adheres to **Material Design 2 (M2)** guidelines.
 
 ## 1. Design Language (Strict M2)
 * **Version:** Use `@mui/material` v5/v6. Do NOT use M3 (Material You) components.
@@ -53,3 +53,20 @@ You must enforce two distinct themes. Do not mix them.
 When asked to set up the project or themes, refer to the code in the `examples/` directory of this skill.
 - Use `examples/theme.js` for the `createTheme` configuration.
 - Use `examples/layout.jsx` for the main scaffold.
+
+## 5. Implementation Workflow
+**Pre-requisite:** Before writing code for a complex UI feature, check `docs/DESIGN_SPEC.md`.
+1.  **Verify Approval:** Look for user confirmation or the status "Approved" in the conversation history regarding the design.
+2.  **Implementation:** Translate the *visual* elements from the wireframe and the *written* specs in `DESIGN_SPEC.md` into React code.
+3.  **Strict Styling:** Apply the Theme Colors (Teal/Red) exactly as defined in the examples, even if the wireframe image colors are slightly off (AI images are approximate references).
+
+## 7. Hybrid Template Architecture
+We are merging two MUI templates. Follow this logic:
+
+1.  **The Shell:** Use `templates/mui-reference/AppShell.jsx` as your absolute source of truth for the layout.
+    * *Constraint:* Ensure the `Drawer` handles the mobile "temporary" variant correctly (MUI v7 default).
+2.  **The List:** Use `templates/mui-reference/DownloadTable.jsx` as the base for the main view.
+    * *Adaptation:* You must inject the `columns` definition specifically for file management (Icon, Name, Size, Speed, ETA).
+3.  **Strict Styling Override:**
+    * Even though the reference code might use default MUI Blue, **YOU MUST** swap it for the **OceanLoad Theme** (Teal/Dark or Red/Light) defined in `examples/theme.js`.
+    * **Square Corners:** Add `sx={{ borderRadius: 1 }}` (4px) to Papers and Cards to maintain the M2 aesthetic requested.

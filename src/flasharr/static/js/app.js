@@ -145,7 +145,12 @@ if (typeof window.FshareBridge === 'undefined') {
             this.downloads = [];
             this.stats = null;
             this.statsListeners = {};
-            this.downloadsListeners = {}; // New listener group for download list
+            this.downloadsListeners = {};
+            this.charts = {}; // Store chart instances
+            this.chartData = {
+                speed: { labels: [], down: [], up: [] },
+                storage: { used: 0, free: 0 }
+            };
             this.sortColumn = 'added';
             this.sortDirection = 'desc';
             this.networkGraph = null;

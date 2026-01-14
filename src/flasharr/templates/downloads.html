@@ -68,20 +68,102 @@
                             CATEGORY <span class="material-icons" id="sort-icon-category"
                                 style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
                         </th>
-                        <th onclick="bridge.sortDownloads('added')" style="cursor: pointer; width: 150px;">
+                        <th onclick="bridge.sortDownloads('added')" style="cursor: pointer; width: 120px;">
                             ADDED <span class="material-icons" id="sort-icon-added"
                                 style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
                         </th>
+                        <th style="width: 80px; text-align: center;">ACTIONS</th>
                     </tr>
                 </thead>
                 <tbody id="downloads-full-list">
-                    <tr>
-                        <td colspan="8" style="text-align: center; padding: 5rem; color: var(--text-muted);">
-                            <div style="display: flex; flex-direction: column; align-items: center; gap: 1rem;">
-                                <span class="material-icons"
-                                    style="font-size: 3rem; opacity: 0.2;">cloud_download</span>
-                                <div>Loading your download queue...</div>
+                    <!-- Dummy Row 1: Active Download -->
+                    <tr class="main-row row-running">
+                        <td class="cell-name">
+                            <div class="download-name" title="Ubuntu_24.04_LTS_Desktop_amd64.iso">
+                                <span class="material-icons file-icon">iso</span> Ubuntu_24.04_LTS_Desktop_amd64.iso
                             </div>
+                        </td>
+                        <td class="cell-size">4.2 GB</td>
+                        <td class="cell-progress">
+                            <div class="progress-wrapper">
+                                <div class="linear-progress">
+                                    <div class="progress-bar" style="width: 45%;"></div>
+                                </div>
+                                <span class="progress-text">45%</span>
+                            </div>
+                        </td>
+                        <td class="cell-status">
+                            <span class="status-chip chip-running">DOWNLOADING</span>
+                        </td>
+                        <td class="cell-speed">15.5 MB/s</td>
+                        <td class="cell-eta">12m 30s</td>
+                        <td class="cell-category">ISO</td>
+                        <td class="cell-date">Just now</td>
+                        <td class="cell-actions">
+                            <button class="icon-btn-small" title="Pause"><span
+                                    class="material-icons">pause</span></button>
+                            <button class="icon-btn-small" title="Delete"><span
+                                    class="material-icons">delete</span></button>
+                        </td>
+                    </tr>
+
+                    <!-- Dummy Row 2: Completed -->
+                    <tr class="main-row row-completed">
+                        <td class="cell-name">
+                            <div class="download-name" title="Big_Buck_Bunny_4K.mp4">
+                                <span class="material-icons file-icon">movie</span> Big_Buck_Bunny_4K.mp4
+                            </div>
+                        </td>
+                        <td class="cell-size">850 MB</td>
+                        <td class="cell-progress">
+                            <div class="progress-wrapper">
+                                <div class="linear-progress">
+                                    <div class="progress-bar completed" style="width: 100%;"></div>
+                                </div>
+                                <span class="progress-text">100%</span>
+                            </div>
+                        </td>
+                        <td class="cell-status">
+                            <span class="status-chip chip-completed">COMPLETED</span>
+                        </td>
+                        <td class="cell-speed">0 B/s</td>
+                        <td class="cell-eta">--</td>
+                        <td class="cell-category">Video</td>
+                        <td class="cell-date">2h ago</td>
+                        <td class="cell-actions">
+                            <button class="icon-btn-small" title="Open Folder"><span
+                                    class="material-icons">folder_open</span></button>
+                        </td>
+                    </tr>
+
+                    <!-- Dummy Row 3: Error -->
+                    <tr class="main-row row-error">
+                        <td class="cell-name">
+                            <div class="download-name" title="Broken_Archive.rar">
+                                <span class="material-icons file-icon">folder_zip</span> Broken_Archive.rar
+                            </div>
+                        </td>
+                        <td class="cell-size">1.2 GB</td>
+                        <td class="cell-progress">
+                            <div class="progress-wrapper">
+                                <div class="linear-progress">
+                                    <div class="progress-bar error" style="width: 12%;"></div>
+                                </div>
+                                <span class="progress-text">12%</span>
+                            </div>
+                        </td>
+                        <td class="cell-status">
+                            <span class="status-chip chip-error">ERROR</span>
+                        </td>
+                        <td class="cell-speed">0 B/s</td>
+                        <td class="cell-eta">--</td>
+                        <td class="cell-category">Archive</td>
+                        <td class="cell-date">1d ago</td>
+                        <td class="cell-actions">
+                            <button class="icon-btn-small" title="Retry"><span
+                                    class="material-icons">replay</span></button>
+                            <button class="icon-btn-small" title="Delete"><span
+                                    class="material-icons">delete</span></button>
                         </td>
                     </tr>
                 </tbody>
