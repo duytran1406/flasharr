@@ -100,17 +100,49 @@ def get_stats() -> Dict[str, Any]:
 
 @api_bp.route("/downloads")
 def get_downloads() -> Dict[str, Any]:
-    """Get downloads from built-in engine."""
+    """Get downloads from SABnzbd Emulator (Active Queue + History)."""
     try:
         if not hasattr(current_app, 'sabnzbd') or not current_app.sabnzbd:
             return jsonify({"status": "error", "message": "Downloader not initialized"}), 503
             
-        downloader = current_app.sabnzbd.downloader
-        queue_data = downloader.get_queue() 
+        sab = current_app.sabnzbd
+        
+        # Trigger sync with engine to update active tasks
+        sab.get_queue() 
+        
         formatted = []
         
-        for item in queue_data:
-            formatted.append(_format_task(item))
+        # Helper to convert QueueItem to compatible dict for _format_task
+        def item_to_dict(item):
+            return {
+                "id": item.nzo_id,
+                "nzo_id": item.nzo_id,
+                "filename": item.filename,
+                "url": item.fshare_url,
+                "status": item.status.value if hasattr(item.status, 'value') else str(item.status),
+                "category": item.category,
+                "progress": item.percentage,
+                "size_bytes": item.size_bytes,
+                "mb_total": item.mb_total,
+                "speed": item.speed,
+                "eta": item.eta_seconds,
+                "added": item.added
+            }
+
+        # 1. Add History Items (Completed/Failed)
+        for item in sab._history.values():
+            formatted.append(_format_task(item_to_dict(item)))
+
+        # 2. Add Active Queue Items (Running/Paused/Queued)
+        # Use a set to track IDs to avoid duplicates
+        seen_ids = {item['id'] for item in formatted}
+        
+        for item in sab._queue.values():
+            if item.nzo_id not in seen_ids:
+                formatted.append(_format_task(item_to_dict(item)))
+
+        # Sort by added time descending (newest first)
+        formatted.sort(key=lambda x: str(x.get('added', '')), reverse=True)
                      
         return jsonify({
             "status": "ok",
@@ -120,6 +152,7 @@ def get_downloads() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error getting downloads: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 def _format_task(task):
     """Helper to format a task object for the UI."""
