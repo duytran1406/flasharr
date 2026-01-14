@@ -993,6 +993,10 @@ if (typeof window.FshareBridge === 'undefined') {
             } else {
                 this.selectedDownloads.add(fid);
             }
+            // Visual Update
+            const row = document.getElementById(`row-${fid}`);
+            if (row) row.classList.toggle('row-selected', this.selectedDownloads.has(fid));
+
             // Update "Select All" checkbox state logic could go here, but simple re-render works
             const cb = document.getElementById('select-all-checkbox');
             if (cb) {
@@ -1045,7 +1049,8 @@ if (typeof window.FshareBridge === 'undefined') {
             const isRunning = state === 'running';
 
             // Update row class
-            row.className = `main-row row-${state}${row.classList.contains('is-expanded') ? ' is-expanded' : ''}`;
+            const isSelected = this.selectedDownloads.has(d.fid);
+            row.className = `main-row row-${state}${row.classList.contains('is-expanded') ? ' is-expanded' : ''}${isSelected ? ' row-selected' : ''}`;
 
             // Helper for simple text updates
             const updateText = (selector, text) => {
@@ -1238,8 +1243,9 @@ if (typeof window.FshareBridge === 'undefined') {
             // Note: actionBtns removed from main row as per request.
             // Controls now predominantly via Context Menu.
 
+            const isSelected = this.selectedDownloads.has(d.fid);
             return `
-            <tr id="row-${d.fid}" class="main-row row-${state}" ${contextMenuAttr}>
+            <tr id="row-${d.fid}" class="main-row row-${state} ${isSelected ? 'row-selected' : ''}" ${contextMenuAttr}>
                 <!-- 0. CHECKBOX -->
                 <td style="width: 48px; text-align: center; padding-left: 1rem;">
                     <input type="checkbox" class="mui-checkbox" 

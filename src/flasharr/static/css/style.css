@@ -718,6 +718,57 @@ h4,
   letter-spacing: 0.05em;
 }
 
+/* MUI Data Grid Strict Emulation */
+.download-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  /* 14px */
+}
+
+.download-table th,
+.download-table td {
+  padding: 0 16px;
+  /* MUI Standard padding */
+  height: 52px;
+  /* MUI Standard Row Height */
+  border-bottom: 1px solid var(--border-color);
+  vertical-align: middle;
+  /* Ensure middle alignment */
+}
+
+.download-table th {
+  font-weight: 500;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.download-table tbody tr {
+  transition: background-color 0.2s;
+}
+
+.download-table tbody tr:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+  /* Dark mode hover */
+}
+
+.download-table tbody tr.row-selected {
+  background-color: rgba(29, 233, 182, 0.08);
+  /* Primary selected tint (var(--primary)) */
+}
+
+.download-table tbody tr.row-selected:hover {
+  background-color: rgba(29, 233, 182, 0.12);
+}
+
+.mui-head-cell.checkbox-cell,
+td:first-child {
+  padding: 0 0 0 16px;
+  /* Adjust left padding for checkbox column */
+  width: 50px;
+}
+
+/* Update stat-value font to match table if used elsewhere */
 .stat-value {
   font-size: 0.95rem;
   font-weight: 600;
