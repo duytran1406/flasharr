@@ -44,6 +44,12 @@ def design_preview():
     return render_template("wireframe_search.html")
 
 
+@main_bp.route("/design-preview-v2")
+def design_preview_v2():
+    """Render the v2 wireframe (Grid Card Redesign)."""
+    return render_template("wireframe_search_v2.html")
+
+
 @main_bp.route("/about")
 def about_page():
     """Render the about/documentation page."""
