@@ -2717,39 +2717,78 @@ td:first-child,
 }
 
 /* List Columns (Strict width) */
-.col-name {
+/* List Columns (Strict width - SCOPED to List View) */
+.search-list-header .col-name,
+.search-results-list .col-name {
   flex: 1;
   min-width: 300px;
   padding-right: 1rem;
 }
 
-.col-quality {
+.search-list-header .col-quality,
+.search-results-list .col-quality {
   flex: 0 0 100px;
 }
 
-.col-tags {
+.search-list-header .col-tags,
+.search-results-list .col-tags {
   flex: 0 0 120px;
   text-align: center;
 }
 
-.col-size {
+.search-list-header .col-size,
+.search-results-list .col-size {
   flex: 0 0 100px;
   text-align: right;
 }
 
-.col-season {
+.search-list-header .col-season,
+.search-results-list .col-season {
   flex: 0 0 80px;
   text-align: center;
 }
 
-.col-score {
+.search-list-header .col-score,
+.search-results-list .col-score {
   flex: 0 0 80px;
   text-align: right;
 }
 
-.col-action {
+.search-list-header .col-action,
+.search-results-list .col-action {
   flex: 0 0 120px;
   text-align: right;
+}
+
+/* Grid View specific overrides for new structure */
+.search-results-grid .result-card {
+  /* Ensure content stacks vertically */
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.search-results-grid .card-main-content {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.search-results-grid .col-name {
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+
+.search-results-grid .col-action {
+  margin-top: auto;
+  /* Push to bottom */
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+  padding-top: 1rem;
+}
+
+.search-results-grid .mobile-hide {
+  display: block !important;
+  /* Ensure hidden cols are visible in Grid if needed */
 }
 
 /* List View Overrides */
