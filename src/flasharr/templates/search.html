@@ -141,10 +141,12 @@
             sortDirection: 'desc'
         };
 
+        const bridge = window.bridge || window.fshareBridgeInstance;
+
         // Pagination state
-        let allResults = [];
+        let allResults = (bridge && bridge.lastSearchResults) ? [...bridge.lastSearchResults] : [];
         let currentPage = 1;
-        let currentView = 'grid'; // 'grid' or 'list'
+        let currentView = (bridge && bridge.searchViewMode) ? bridge.searchViewMode : 'grid';
         const paginationContainer = document.getElementById('pagination-container');
         const prevPageBtn = document.getElementById('prev-page');
         const nextPageBtn = document.getElementById('next-page');
@@ -250,6 +252,10 @@
                 document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 currentView = btn.dataset.view; // Update current view
+                if (bridge) {
+                    bridge.searchViewMode = currentView;
+                    localStorage.setItem('search_view_mode', currentView);
+                }
                 resultsGrid.className = `search-results-${btn.dataset.view}`;
 
                 const header = document.getElementById('search-list-header');
@@ -321,6 +327,13 @@
         // Perform search
         async function performSearch(query) {
             if (!query.trim()) {
+                allResults = [];
+                if (bridge) {
+                    bridge.lastSearchResults = [];
+                    bridge.lastSearchQuery = '';
+                    localStorage.removeItem('fshare_last_search_results');
+                    localStorage.removeItem('fshare_last_search_query');
+                }
                 resultsGrid.innerHTML = '';
                 resultsCount.textContent = 'Found 0 results';
                 loadingState.style.display = 'none';
@@ -328,7 +341,13 @@
                 return;
             }
 
-            // Show loading state
+            // Update bridge
+            if (bridge) {
+                bridge.lastSearchQuery = query;
+                localStorage.setItem('fshare_last_search_query', query);
+            }
+
+            // Show loading
             loadingState.style.display = 'flex';
             emptyState.style.display = 'none';
             resultsGrid.innerHTML = '';
@@ -341,8 +360,18 @@
                 loadingState.style.display = 'none';
 
                 if (data.results && data.results.length > 0) {
+                    allResults = data.results;
+                    if (bridge) {
+                        bridge.lastSearchResults = data.results;
+                        localStorage.setItem('fshare_last_search_results', JSON.stringify(data.results));
+                    }
                     displayResults(data.results);
                 } else {
+                    allResults = [];
+                    if (bridge) {
+                        bridge.lastSearchResults = [];
+                        localStorage.removeItem('fshare_last_search_results');
+                    }
                     emptyState.style.display = 'flex';
                     resultsGrid.appendChild(emptyState);
                     resultsCount.textContent = 'Found 0 results';
@@ -609,14 +638,32 @@
             return div.innerHTML;
         }
 
-        // Initial search if query parameter exists
-        const urlParams = new URLSearchParams(window.location.search);
-        const initialQuery = urlParams.get('q');
-        if (initialQuery) {
-            searchInput.value = initialQuery;
-            clearBtn.style.display = 'flex';
-            performSearch(initialQuery);
+        // Initial state from bridge
+        if (allResults.length > 0) {
+            // Apply view mode
+            const viewBtn = document.querySelector(`.view-btn[data-view="${currentView}"]`);
+            if (viewBtn) viewBtn.click();
+
+            if (searchInput.value) {
+                clearBtn.style.display = 'flex';
+            }
+            renderCurrentPage();
+        } else {
+            // Initial search if query parameter exists
+            const urlParams = new URLSearchParams(window.location.search);
+            const initialQuery = urlParams.get('q') || (bridge ? bridge.lastSearchQuery : '');
+            if (initialQuery) {
+                searchInput.value = initialQuery;
+                clearBtn.style.display = 'flex';
+                performSearch(initialQuery);
+            }
         }
+
+        // Expose render function for bridge to call
+        window._searchPageRender = (results) => {
+            allResults = results;
+            renderCurrentPage();
+        };
     })();
 </script>
 {% endblock %}

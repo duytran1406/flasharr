@@ -22,12 +22,27 @@ from .websocket.server import get_websocket_server
 from aiohttp import web
 import aiohttp
 
+# Setup logging
+log_dir = Path("data")
+log_dir.mkdir(exist_ok=True)
+log_file = log_dir / "flasharr.log"
+
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# Stream Handler (for Docker logs/stdout)
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+
+# File Handler (for UI System Log)
+file_handler = logging.FileHandler(log_file)
+file_handler.setFormatter(formatter)
+
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO,
+    handlers=[stream_handler, file_handler]
 )
 logger = logging.getLogger(__name__)
-logging.getLogger('flasharr').setLevel(logging.DEBUG)
+logging.getLogger('flasharr').setLevel(logging.INFO)
 
 # Load version
 try:

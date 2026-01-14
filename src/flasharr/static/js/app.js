@@ -152,6 +152,9 @@ if (typeof window.FshareBridge === 'undefined') {
             this.networkGraphActive = false;
             this.selectedDownloads = new Set();
             this.filters = { category: 'all', status: 'all' };
+            this.lastSearchResults = [];
+            this.lastSearchQuery = '';
+            this.searchViewMode = localStorage.getItem('search_view_mode') || 'grid';
 
             // WebSocket Client
             this.ws = new FshareWebSocketClient();
@@ -164,12 +167,19 @@ if (typeof window.FshareBridge === 'undefined') {
         init() {
             this.setupEventListeners();
             this.initTheme();
+            this.initContextMenu();
 
             // Restore from storage so UI isn't empty on load
             const storedStats = localStorage.getItem('fshare_stats');
             if (storedStats) {
                 try { this.stats = JSON.parse(storedStats); } catch (e) { }
             }
+
+            const storedResults = localStorage.getItem('fshare_last_search_results');
+            if (storedResults) {
+                try { this.lastSearchResults = JSON.parse(storedResults); } catch (e) { }
+            }
+            this.lastSearchQuery = localStorage.getItem('fshare_last_search_query') || '';
 
             // Clear legacy data request
             localStorage.removeItem('fshare_downloads');
@@ -195,6 +205,9 @@ if (typeof window.FshareBridge === 'undefined') {
             // Load logs if container exists
             if (document.getElementById('system-log')) {
                 this.loadSystemLogs();
+                // Pull logs every 5 seconds
+                if (window.logInterval) clearInterval(window.logInterval);
+                window.logInterval = setInterval(() => this.loadSystemLogs(), 5000);
             }
 
             // Check for search query param
@@ -267,7 +280,74 @@ if (typeof window.FshareBridge === 'undefined') {
 
         async initialLoad() {
             // One-time fetch to get initial state before WS takes over
-            await this.fetchDownloads();
+            await Promise.all([
+                this.fetchDownloads(),
+                this.fetchStats(),
+                this.checkAccountHealth()
+            ]);
+        }
+
+        async checkAccountHealth() {
+            try {
+                // Only check if we haven't recently (e.g., last 5 mins) to optimize
+                const lastCheck = localStorage.getItem('last_account_check');
+                const now = Date.now();
+                if (lastCheck && (now - parseInt(lastCheck)) < 300000) return;
+
+                const response = await fetch('/api/verify-account', { method: 'POST' });
+                const data = await response.json();
+
+                localStorage.setItem('last_account_check', now);
+
+                if (data.status === 'error' && data.message !== 'No account configured') {
+                    this.showAccountErrorModal(data.message);
+                    this.updateAccountStatus({ a: false, type: 'Error' });
+                } else if (data.status === 'ok') {
+                    // Force refresh visuals
+                    if (data.account) {
+                        this.updateAccountStatus({
+                            a: data.account.available,
+                            premium: data.account.premium,
+                            type: data.account.account_type,
+                            traffic: data.account.traffic_left
+                        });
+                        this.setText('fshare-daily-quota', data.account.traffic_left || '-- / --');
+                    }
+                }
+            } catch (e) {
+                console.error('Account check failed:', e);
+            }
+        }
+
+        showAccountErrorModal(msg) {
+            const modalHTML = `
+            <div id="account-error-modal" class="modal-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 99999; display: flex; justify-content: center; align-items: center; animation: fadeIn 0.3s ease;">
+                <div class="service-card" style="width: 100%; max-width: 480px; border-color: #ef4444; box-shadow: 0 0 50px rgba(239, 68, 68, 0.2);">
+                    <div class="service-header" style="margin-bottom: 1.5rem;">
+                        <div class="service-icon" style="background: rgba(239, 68, 68, 0.1); color: #ef4444;">
+                            <span class="material-icons">no_accounts</span>
+                        </div>
+                        <div class="service-title" style="color: #ef4444;">Account Alert</div>
+                    </div>
+                    <div style="margin-bottom: 2rem; color: var(--text-secondary); line-height: 1.6;">
+                        <h3 style="color: white; margin-bottom: 0.5rem; font-size: 1.1rem;">Fshare Connection Failed</h3>
+                        <p>${msg}</p>
+                        <p style="margin-top: 1rem; font-size: 0.9rem; background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 8px;">
+                            Please check your credentials in <a href="/settings" style="color: #3b82f6; text-decoration: none; font-weight: 600;">Settings</a>.
+                        </p>
+                    </div>
+                    <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                        <button onclick="document.getElementById('account-error-modal').remove()" class="btn-primary" style="background: transparent; border: 1px solid rgba(255,255,255,0.1);">DISMISS</button>
+                        <button onclick="window.location.href='/settings'" class="btn-primary" style="background: #3b82f6;">GO TO SETTINGS</button>
+                    </div>
+                </div>
+            </div>`;
+
+            // Remove existing if any
+            const existing = document.getElementById('account-error-modal');
+            if (existing) existing.remove();
+
+            document.body.insertAdjacentHTML('beforeend', modalHTML);
         }
 
         // Unified Task Update Handler
@@ -286,6 +366,7 @@ if (typeof window.FshareBridge === 'undefined') {
 
         handleFullSync(tasks) {
             // Completely replace local state
+            console.log('🔄 Applying Full Sync:', tasks.length, 'items');
             this.downloads = tasks.map(t => this.normalizeTaskData(t));
             this.notifyDownloadsChanged();
         }
@@ -387,7 +468,7 @@ if (typeof window.FshareBridge === 'undefined') {
                 category: d.category || d.c || 'Uncategorized',
                 error_message: d.error_message || d.er || '',
                 added: d.added || d.created_at || d.a || null,
-                info: ""
+                info: d.url || d.u || ""
             };
         }
 
@@ -494,12 +575,25 @@ if (typeof window.FshareBridge === 'undefined') {
             this.updateStatusIndicator('pyload-status-indicator', fd.connected);
 
             const primary = fd.primary_account || {};
-            const isPremium = primary.valid;
+            const isPremium = primary.premium || primary.valid;
             this.updateBadge('fshare-account-status', isPremium, isPremium ? 'PREMIUM' : 'N/A');
+            this.setText('fshare-daily-quota', primary.traffic_left || '-- / --');
 
             this.setText('active-downloads-count', String(fd.active || 0).padStart(2, '0'));
             // fd.total is mapped from stats.q (queue size) in updateStatsFromWS
             this.setText('queue-count', String(fd.total || 0).padStart(2, '0'));
+
+            // Footer Updates (Downloads Page)
+            this.setText('footer-current-speed', fd.speed || '0 B/s');
+            this.setText('footer-queue-count', fd.total || 0);
+
+            const footerDot = document.getElementById('footer-account-dot');
+            const footerStatus = document.getElementById('footer-account-status');
+            if (footerDot && footerStatus) {
+                footerDot.style.background = isPremium ? '#22c55e' : '#64748b';
+                footerDot.style.boxShadow = isPremium ? '0 0 10px rgba(34, 197, 94, 0.4)' : 'none';
+                footerStatus.textContent = isPremium ? 'PREMIUM' : 'FREE';
+            }
         }
 
         updateNetworkGraph() {
@@ -585,6 +679,20 @@ if (typeof window.FshareBridge === 'undefined') {
 
         async loadDownloads() { return await this.fetchDownloads(); }
         async runFullPollCheck() { return await this.fetchDownloads(); }
+
+        async fetchStats() {
+            try {
+                const response = await fetch('/api/stats');
+                const data = await response.json();
+                if (data.status === 'ok') {
+                    console.log('📊 Initial Stats Loaded:', data);
+                    this.stats = data;
+                    this.updateDashboard();
+                }
+            } catch (e) {
+                console.error('Fetch stats failed:', e);
+            }
+        }
 
         getFilteredDownloads() {
             const query = (document.getElementById('downloads-search-input')?.value || '').toLowerCase();
@@ -849,10 +957,10 @@ if (typeof window.FshareBridge === 'undefined') {
         }
 
         createDashboardDownloadRow(d) {
-            return this.createFullDownloadRow(d);
+            return this.createFullDownloadRow(d, false);
         }
 
-        createFullDownloadRow(d) {
+        createFullDownloadRow(d, showActions = true) {
             const s = (d.status || '').toLowerCase();
             let state = 'warning';
             let displayStatus = d.status.toUpperCase();
@@ -869,13 +977,14 @@ if (typeof window.FshareBridge === 'undefined') {
             }
 
             const isRunning = state === 'running';
+            const contextMenuAttr = showActions ? `oncontextmenu="bridge.showContextMenu(event, '${d.fid}')"` : '';
 
             const toggleBtn = canToggle ? `<button class="icon-btn" onclick="bridge.toggleDownload('${d.fid}'); event.stopPropagation();"><span class="material-icons" style="font-size: 20px">${isRunning ? 'pause' : 'play_arrow'}</span></button>` : '';
             const retryBtn = state === 'error' ? `<button class="icon-btn" onclick="bridge.retryDownload('${d.fid}'); event.stopPropagation();" style="color: #fbbf24;"><span class="material-icons" style="font-size: 20px">replay</span></button>` : '';
             const actionBtns = `<div style="display: flex; gap: 0.5rem; align-items: center; justify-content: center;">${retryBtn}${toggleBtn}<button class="icon-btn delete-btn" onclick="bridge.deleteDownload('${d.fid}'); event.stopPropagation();"><span class="material-icons" style="font-size: 20px">delete_outline</span></button></div>`;
 
             return `
-            <tr id="row-${d.fid}" class="main-row row-${state}">
+            <tr id="row-${d.fid}" class="main-row row-${state}" ${contextMenuAttr}>
                 <!-- 1. NAME -->
                 <td class="cell-name" style="width: 200px; max-width: 200px; position: relative;">
                     <div class="download-name" title="${this.escapeHtml(d.name)}" style="width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600;">${this.escapeHtml(d.name)}</div>
@@ -910,7 +1019,7 @@ if (typeof window.FshareBridge === 'undefined') {
                 <!-- 8. ADDED -->
                 <td class="cell-added" style="font-size: 0.85rem; color: var(--text-muted); width: 130px;">${this.formatAddedDate(d.added)}</td>
                 <!-- 9. ACTIONS -->
-                <td class="cell-actions" style="width: 100px;">${actionBtns}</td>
+                ${showActions ? `<td class="cell-actions" style="width: 100px;">${actionBtns}</td>` : ''}
             </tr>`;
         }
 
@@ -1047,26 +1156,42 @@ if (typeof window.FshareBridge === 'undefined') {
         // Search Operations
         async search(query) {
             if (!query) return;
+            this.lastSearchQuery = query;
+            localStorage.setItem('fshare_last_search_query', query);
+
             if (window.location.pathname !== '/search') { this.redirectToSearch(query); return; }
 
-            const resultsContainer = document.getElementById('search-results');
+            const resultsContainer = document.getElementById('search-results-grid'); // Fixed ID
             if (!resultsContainer) return;
-            resultsContainer.innerHTML = '<div style="text-align: center; padding: 3rem;"><p>Searching Fshare...</p></div>';
+
+            // Show loading
+            resultsContainer.innerHTML = '<div class="loading-state" style="display: flex;"><span class="material-icons spinning">refresh</span><p>Searching Fshare...</p></div>';
 
             try {
                 const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
                 const data = await response.json();
-                if (data.results && data.results.length > 0) this.displayResults(data.results);
-                else resultsContainer.innerHTML = '<div style="text-align: center; padding: 3rem;"><p class="text-secondary">No results found</p></div>';
+                if (data.results && data.results.length > 0) {
+                    this.lastSearchResults = data.results;
+                    localStorage.setItem('fshare_last_search_results', JSON.stringify(data.results));
+                    this.displayResults(data.results);
+                } else {
+                    this.lastSearchResults = [];
+                    localStorage.removeItem('fshare_last_search_results');
+                    resultsContainer.innerHTML = '<div class="empty-state" style="display: flex;"><span class="material-icons">search_off</span><p>No results found</p></div>';
+                }
             } catch (error) {
                 console.error('Search error:', error);
-                resultsContainer.innerHTML = '<p style="color: var(--accent-red);">Search failed</p>';
+                resultsContainer.innerHTML = '<div class="empty-state" style="display: flex; color: var(--accent-red);"><p>Search failed</p></div>';
             }
         }
 
         displayResults(results) {
-            const container = document.getElementById('search-results');
-            if (container) container.innerHTML = results.map(result => this.createResultCard(result)).join('');
+            // This is primarily handled by the search.html script now to respect its pagination/filters
+            // but we provide a fallback or trigger if needed.
+            const grid = document.getElementById('search-results-grid');
+            if (grid && window._searchPageRender) {
+                window._searchPageRender(results);
+            }
         }
 
         createResultCard(result) {
@@ -1157,9 +1282,16 @@ if (typeof window.FshareBridge === 'undefined') {
             if (searchInput) searchInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') this.search(searchInput.value); });
 
             // Theme selection listeners
-            document.querySelectorAll('input[name="theme"]').forEach(input => {
-                input.addEventListener('change', (e) => this.applyTheme(e.target.value));
-            });
+            const attachThemeListeners = () => {
+                document.querySelectorAll('input[name="theme"]').forEach(input => {
+                    input.removeEventListener('change', this._themeChangeHandler);
+                    this._themeChangeHandler = (e) => this.applyTheme(e.target.value);
+                    input.addEventListener('change', this._themeChangeHandler);
+                });
+            };
+            attachThemeListeners();
+            // Also expose to window for extreme cases
+            window._flasharr_attachThemeListeners = attachThemeListeners;
         }
 
         initSidebar() {
@@ -1189,32 +1321,105 @@ if (typeof window.FshareBridge === 'undefined') {
         }
 
         initTheme() {
-            const theme = localStorage.getItem('flasharr_theme') || 'dark';
-            this.applyTheme(theme);
+            // First check localStorage for immediate application (prevent flicker)
+            let theme = localStorage.getItem('flasharr_theme') || 'dark';
+            this.applyTheme(theme, false); // Don't save back to localStorage during init
+
+            // On settings page, the settings loading will handle the definitive state
         }
 
-        applyTheme(theme) {
+        applyTheme(theme, save = true) {
+            if (!theme) return;
+
             document.body.classList.remove('light-mode');
 
             if (theme === 'light') {
                 document.body.classList.add('light-mode');
             } else if (theme === 'system') {
-                if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
-                    document.body.classList.add('light-mode');
-                }
+                const isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+                document.body.classList.toggle('light-mode', isLight);
 
-                // Watch for system changes
                 if (!this.theme_watcher_ready) {
                     this.theme_watcher_ready = true;
                     window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', e => {
-                        const currentTheme = localStorage.getItem('flasharr_theme');
-                        if (currentTheme === 'system') {
+                        if (localStorage.getItem('flasharr_theme') === 'system') {
                             document.body.classList.toggle('light-mode', e.matches);
                         }
                     });
                 }
             }
-            localStorage.setItem('flasharr_theme', theme);
+
+            if (save) {
+                localStorage.setItem('flasharr_theme', theme);
+                // Also update settings radio buttons if they exist
+                const radio = document.querySelector(`input[name="theme"][value="${theme}"]`);
+                if (radio) radio.checked = true;
+            }
+        }
+
+        initContextMenu() {
+            const menu = document.getElementById('context-menu');
+            if (!menu) return;
+
+            // Hide on click anywhere
+            document.addEventListener('click', () => menu.style.display = 'none');
+            document.addEventListener('scroll', () => menu.style.display = 'none');
+
+            // Prevent context menu on the menu itself
+            menu.addEventListener('contextmenu', e => e.preventDefault());
+
+            // Menu actions
+            document.getElementById('menu-resume').onclick = () => this.toggleDownload(this.contextFid);
+            document.getElementById('menu-pause').onclick = () => this.toggleDownload(this.contextFid);
+            document.getElementById('menu-retry').onclick = () => this.retryDownload(this.contextFid);
+            document.getElementById('menu-delete').onclick = () => this.deleteDownload(this.contextFid);
+            document.getElementById('menu-copy').onclick = async () => {
+                const item = this.downloads.find(d => d.fid === this.contextFid);
+                if (item && item.info) {
+                    try {
+                        await navigator.clipboard.writeText(item.info);
+                        // Optional: show a mini toast
+                    } catch (err) {
+                        alert('Failed to copy: ' + err);
+                    }
+                } else {
+                    alert('URL not available for this item');
+                }
+            };
+        }
+
+        showContextMenu(e, fid) {
+            e.preventDefault();
+            this.contextFid = fid;
+            const menu = document.getElementById('context-menu');
+            if (!menu) return;
+
+            const item = this.downloads.find(d => d.fid === fid);
+            if (!item) return;
+
+            // Update menu based on item state
+            const isRunning = ['running', 'downloading', 'starting', 'extracting'].includes(item.status.toLowerCase());
+            document.getElementById('menu-resume').style.display = isRunning ? 'none' : 'flex';
+            document.getElementById('menu-pause').style.display = isRunning ? 'flex' : 'none';
+            document.getElementById('menu-retry').style.display = (item.status.toLowerCase() === 'error' || item.status.toLowerCase() === 'failed') ? 'flex' : 'none';
+
+            menu.style.display = 'block';
+
+            // Position menu
+            let x = e.clientX;
+            let y = e.clientY;
+
+            // Boundary checks
+            const winW = window.innerWidth;
+            const winH = window.innerHeight;
+            const menuW = menu.offsetWidth;
+            const menuH = menu.offsetHeight;
+
+            if (x + menuW > winW) x = winW - menuW - 10;
+            if (y + menuH > winH) y = winH - menuH - 10;
+
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
         }
     }
 

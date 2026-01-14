@@ -578,6 +578,60 @@ class FshareClient:
         except Exception as e:
             logger.error(f"Folder enumeration error: {e}")
             return files
+
+    def get_daily_quota(self) -> Optional[str]:
+        """
+        Request Fshare profile HTML and parse Daily Quota information.
+        This sends a request to /account/profile and extracts the usage stats.
+
+        Returns:
+            String containing daily quota info (e.g. "5.2 GB / 100 GB") or None.
+        """
+        try:
+            # Ensure we have a valid session
+            self.ensure_authenticated()
+            
+            logger.debug("Fetching profile page for daily quota...")
+            response = self.session.get("https://www.fshare.vn/account/profile", timeout=self.timeout)
+            
+            # Check for session expiration (redirect to login)
+            if "site/login" in response.url:
+                logger.warning("Session expired (redirected to login). Attempting re-authentication...")
+                self._token = None # Invalidate local token
+                if self.login():
+                    # Retry fetch after successful login
+                    response = self.session.get("https://www.fshare.vn/account/profile", timeout=self.timeout)
+                else:
+                    logger.error("Re-authentication failed during daily quota check")
+                    return None
+
+            if response.status_code != 200:
+                logger.error(f"Failed to get profile page. Status: {response.status_code}")
+                return None
+                
+            html = response.text
+            
+            # Parse traffic/daily quota
+            # Pattern: <a href="...">Dung lượng tải trong ngày: </a> 0 Bytes / 150 GB </p>
+            traffic_match = re.search(r'Dung lượng tải trong ngày:\s*</a>\s*(.*?)\s*</p>', html, re.IGNORECASE | re.DOTALL)
+            
+            if traffic_match:
+                raw_traffic = traffic_match.group(1).strip()
+                # Clean up multiple spaces and newlines
+                clean_traffic = re.sub(r'\s+', ' ', raw_traffic)
+                logger.info(f"Daily quota parsed: {clean_traffic}")
+                
+                # Update internal state as side effect
+                self._traffic_left = clean_traffic
+                
+                return clean_traffic
+            
+            logger.warning("Could not find daily quota pattern in profile page")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error getting daily quota: {e}")
+            return None
     
     def get_download_link_premium(
         self,

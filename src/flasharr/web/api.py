@@ -11,6 +11,7 @@ import json
 import psutil
 from flask import Blueprint, jsonify, request, current_app
 from typing import Any, Dict
+from datetime import datetime
 from pathlib import Path
 
 from ..core.config import get_config
@@ -52,7 +53,7 @@ def get_stats() -> Dict[str, Any]:
         # or from the engine directly if needed
         downloader = None
         if hasattr(current_app, 'sabnzbd') and current_app.sabnzbd:
-            downloader = current_app.sabnzbd.download_client
+            downloader = current_app.sabnzbd.downloader
             
         if downloader:
             status = downloader.get_status()
@@ -104,7 +105,7 @@ def get_downloads() -> Dict[str, Any]:
         if not hasattr(current_app, 'sabnzbd') or not current_app.sabnzbd:
             return jsonify({"status": "error", "message": "Downloader not initialized"}), 503
             
-        downloader = current_app.sabnzbd.download_client
+        downloader = current_app.sabnzbd.downloader
         queue_data = downloader.get_queue() 
         formatted = []
         
@@ -117,7 +118,7 @@ def get_downloads() -> Dict[str, Any]:
             "downloads": formatted,
         })
     except Exception as e:
-        logger.error(f"Error getting downloads: {e}")
+        logger.error(f"Error getting downloads: {e}", exc_info=True)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 def _format_task(task):
@@ -203,12 +204,16 @@ def delete_download(task_id: str) -> Dict[str, Any]:
         if not hasattr(current_app, 'sabnzbd') or not current_app.sabnzbd:
             return jsonify({"status": "error", "message": "Downloader not initialized"}), 503
             
-        downloader = current_app.sabnzbd.download_client
-        success = downloader.delete_download(task_id)
+        success = current_app.sabnzbd.delete_item(task_id)
         return jsonify({"status": "ok", "message": "Deleted", "success": success})
     except Exception as e:
         logger.error(f"Error deleting download: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@api_bp.route("/download/delete/<task_id>", methods=["DELETE", "GET"])
+def delete_download_alias(task_id: str):
+    """Alias for delete_download to support frontend."""
+    return delete_download(task_id)
 
 
 @api_bp.route("/downloads/<task_id>/pause", methods=["POST"])
@@ -218,12 +223,15 @@ def pause_download(task_id: str) -> Dict[str, Any]:
         if not hasattr(current_app, 'sabnzbd') or not current_app.sabnzbd:
             return jsonify({"status": "error", "message": "Downloader not initialized"}), 503
             
-        downloader = current_app.sabnzbd.download_client
-        success = downloader.pause_download(task_id)
-        return jsonify({"status": "ok", "message": "Paused", "success": success})
+        success = current_app.sabnzbd.toggle_item(task_id) # toggle_item handles both pause/resume in SAB emulator
+        return jsonify({"status": "ok", "message": "Paused/Toggled", "success": success})
     except Exception as e:
         logger.error(f"Error pausing download: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@api_bp.route("/download/pause/<task_id>", methods=["POST", "GET"])
+def pause_download_alias(task_id: str):
+    return pause_download(task_id)
 
 
 @api_bp.route("/downloads/<task_id>/resume", methods=["POST"])
@@ -233,11 +241,27 @@ def resume_download(task_id: str) -> Dict[str, Any]:
         if not hasattr(current_app, 'sabnzbd') or not current_app.sabnzbd:
             return jsonify({"status": "error", "message": "Downloader not initialized"}), 503
             
-        downloader = current_app.sabnzbd.download_client
-        success = downloader.resume_download(task_id)
-        return jsonify({"status": "ok", "message": "Resumed", "success": success})
+        success = current_app.sabnzbd.toggle_item(task_id)
+        return jsonify({"status": "ok", "message": "Resumed/Toggled", "success": success})
     except Exception as e:
         logger.error(f"Error resuming download: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@api_bp.route("/download/resume/<task_id>", methods=["POST", "GET"])
+def resume_download_alias(task_id: str):
+    return resume_download(task_id)
+
+@api_bp.route("/download/retry/<task_id>", methods=["POST", "GET"])
+def retry_download(task_id: str):
+    """Retry a failed download."""
+    try:
+        if not hasattr(current_app, 'sabnzbd') or not current_app.sabnzbd:
+            return jsonify({"status": "error", "message": "Downloader not initialized"}), 503
+            
+        success = current_app.sabnzbd.retry_item(task_id)
+        return jsonify({"status": "ok", "message": "Retried", "success": success})
+    except Exception as e:
+        logger.error(f"Error retrying download: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -379,7 +403,7 @@ def get_settings():
         settings = {
             "download_path": config.download.download_dir,
             "max_concurrent_downloads": config.download.max_concurrent,
-            "speed_limit_kbps": 0,
+            "speed_limit_mbps": 0,
             "auto_resume": True,
             "category_paths": {"radarr": "movies", "sonarr": "tv"},
             "theme": "dark"
@@ -388,6 +412,80 @@ def get_settings():
             with open(settings_file, "r") as f:
                 settings.update(json.load(f))
         return jsonify({"status": "ok", "settings": settings})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@api_bp.route("/settings", methods=["PUT"])
+def update_settings():
+    """Update app settings."""
+    try:
+        data = request.get_json()
+        settings_file = Path("data/settings.json")
+        settings = {}
+        if settings_file.exists():
+            with open(settings_file, "r") as f:
+                settings = json.load(f)
+        
+        settings.update(data)
+        
+        with open(settings_file, "w") as f:
+            json.dump(settings, f, indent=4)
+            
+        # Apply runtime settings changes
+        if 'max_concurrent_downloads' in data:
+            if hasattr(current_app, 'sabnzbd') and current_app.sabnzbd:
+                current_app.sabnzbd.downloader.engine.update_max_concurrent(int(data['max_concurrent_downloads']))
+                
+        if 'speed_limit_mbps' in data:
+            if hasattr(current_app, 'sabnzbd') and current_app.sabnzbd:
+                limit = int(data['speed_limit_mbps']) * 1024 * 1024 if int(data['speed_limit_mbps']) > 0 else 0
+                current_app.sabnzbd.downloader.engine.set_speed_limit(limit)
+
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        logger.error(f"Error saving settings: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@api_bp.route("/verify-account", methods=["POST"])
+def verify_account():
+    """Verify primary account and fetch latest stats."""
+    try:
+        if not hasattr(current_app, 'account_manager'):
+             return jsonify({"status": "error", "message": "Account validation service unavailable"}), 503
+
+        primary = current_app.account_manager.get_primary()
+        if not primary:
+             return jsonify({"status": "error", "message": "No account configured"}), 404
+
+        # Force refresh which calls login() -> check profile -> updates daily quota
+        account = current_app.account_manager.refresh_account(primary['email'])
+        
+        # Check if valid/premium
+        is_valid = account.get('available', False)
+        
+        if not is_valid:
+            return jsonify({
+                "status": "error", 
+                "message": "Account login failed or session invalid",
+                "account": account
+            }), 401
+
+        return jsonify({
+            "status": "ok", 
+            "message": "Account verified successfully",
+            "account": account
+        })
+    except Exception as e:
+        logger.error(f"Account verification failed: {e}")
+        return jsonify({"status": "error", "message": f"Verification failed: {str(e)}"}), 500
+
+@api_bp.route("/settings/generate-api-key", methods=["POST"])
+def generate_api_key():
+    """Generate a new random API key."""
+    try:
+        import secrets
+        new_key = secrets.token_hex(16)
+        return jsonify({"status": "ok", "key": new_key})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 
@@ -417,3 +515,47 @@ def get_version() -> Dict[str, Any]:
     except:
         pass
     return jsonify({"status": "ok", "version": version})
+
+@api_bp.route("/logs")
+def get_logs():
+    """Get system logs."""
+    try:
+        # For now, return some mock logs or try to read from a file if it exists
+        # In a real app, we'd use a log collector or read the actual log file
+        logs = []
+        log_file = Path("data/flasharr.log")
+        if not log_file.exists():
+             # Check common locations
+             alt_paths = [Path("flasharr.log"), Path("/app/data/flasharr.log")]
+             for p in alt_paths:
+                 if p.exists():
+                     log_file = p
+                     break
+        
+        if log_file.exists():
+            with open(log_file, "r") as f:
+                lines = f.readlines()[-50:] # Get last 50 lines
+                for line in lines:
+                    parts = line.split(" - ")
+                    if len(parts) >= 4:
+                        logs.append({
+                            "time": parts[0],
+                            "level": parts[2].lower(),
+                            "message": " - ".join(parts[3:]).strip()
+                        })
+                    else:
+                        logs.append({
+                            "time": "NOW",
+                            "level": "info",
+                            "message": line.strip()
+                        })
+        
+        if not logs:
+            logs = [
+                {"time": datetime.now().strftime("%H:%M:%S"), "level": "info", "message": "Flasharr Beta system initialized."},
+                {"time": datetime.now().strftime("%H:%M:%S"), "level": "success", "message": "API Backend is running and healthy."}
+            ]
+            
+        return jsonify({"status": "ok", "logs": logs})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500

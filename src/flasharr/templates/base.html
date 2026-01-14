@@ -5,14 +5,81 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Flasharr{% endblock %}</title>
+    <!-- Modals -->
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <!-- Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.png') }}">
+    <style>
+        /* Context Menu Styles */
+        .context-menu {
+            position: fixed;
+            z-index: 10000;
+            background: rgba(23, 23, 23, 0.95);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 6px;
+            min-width: 180px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+            animation: menuFadeIn 0.15s ease-out;
+        }
+
+        @keyframes menuFadeIn {
+            from {
+                opacity: 0;
+                transform: scale(0.95);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .menu-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            color: #e2e8f0;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: all 0.2s;
+        }
+
+        .menu-item:hover {
+            background: rgba(255, 255, 255, 0.08);
+            color: white;
+        }
+
+        .menu-item.delete {
+            color: #f87171;
+        }
+
+        .menu-item.delete:hover {
+            background: rgba(248, 113, 113, 0.15);
+        }
+
+        .menu-item .material-icons {
+            font-size: 18px;
+            opacity: 0.7;
+        }
+
+        .menu-divider {
+            height: 1px;
+            background: rgba(255, 255, 255, 0.06);
+            margin: 4px 0;
+        }
+    </style>
 </head>
 
 <body>
@@ -78,6 +145,18 @@
             <!-- Version Label -->
             <div class="version-label">v{{ version }}</div>
         </main>
+    </div>
+
+    <!-- Context Menu (Moved to end of body) -->
+    <div id="context-menu" class="context-menu" style="display: none;">
+        <div class="menu-item" id="menu-resume"><span class="material-icons">play_arrow</span> Resume</div>
+        <div class="menu-item" id="menu-pause"><span class="material-icons">pause</span> Pause</div>
+        <div class="menu-item" id="menu-retry" style="color: #fbbf24;"><span class="material-icons">replay</span> Retry
+        </div>
+        <div class="menu-divider"></div>
+        <div class="menu-item" id="menu-copy"><span class="material-icons">content_copy</span> Copy URL</div>
+        <div class="menu-divider"></div>
+        <div class="menu-item delete" id="menu-delete"><span class="material-icons">delete_outline</span> Delete</div>
     </div>
 
     <!-- Scripts -->
@@ -171,7 +250,11 @@
 
                         // Special hook for Dashboard wakeup
                         if (url === '/' && window.bridge) {
-                            window.bridge.wakeupDashboard();
+                            window.bridge.wakeupDashboardChart();
+                            // Re-bind sidebar and search events after DOM update
+                            window.bridge.setupEventListeners();
+                        } else if (window.bridge) {
+                            window.bridge.setupEventListeners();
                         }
 
                         // Update browser history

@@ -12,6 +12,16 @@ This guide covers installation of Flasharr using Docker (recommended) or manual 
 
 ---
 
+## Deployment Credentials
+
+> [!IMPORTANT]
+> Use these credentials for accessing development and deployment instances.
+
+- **LXC 106 (Dev Server)**: `root / 123456`
+- **LXC 112 (Downloader)**: `root / <user-defined>`
+
+---
+
 ## Docker Installation (Recommended)
 
 ### 1. Clone the Repository

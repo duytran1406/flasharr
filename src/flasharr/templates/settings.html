@@ -191,18 +191,18 @@
                         <label>Theme</label>
                         <div class="theme-selector">
                             <label class="theme-option">
-                                <input type="radio" name="theme" value="dark" checked>
+                                <input type="radio" name="theme" value="dark">
                                 <div class="theme-preview dark-preview">
                                     <span class="material-icons">dark_mode</span>
                                 </div>
-                                <span>Dark</span>
+                                <span>Oceanholic (Dark)</span>
                             </label>
                             <label class="theme-option">
                                 <input type="radio" name="theme" value="light">
                                 <div class="theme-preview light-preview">
                                     <span class="material-icons">light_mode</span>
                                 </div>
-                                <span>Light</span>
+                                <span>Arctic (Light)</span>
                             </label>
                             <label class="theme-option">
                                 <input type="radio" name="theme" value="system">
@@ -616,14 +616,16 @@
                     document.getElementById('enable_sabnzbd').checked = s.enable_sabnzbd !== false;
 
                     // Appearance
-                    const themeInput = document.querySelector(`input[name="theme"][value="${s.theme || 'dark'}"]`);
+                    const theme = s.theme || localStorage.getItem('flasharr_theme') || 'dark';
+                    const themeInput = document.querySelector(`input[name="theme"][value="${theme}"]`);
                     if (themeInput) themeInput.checked = true;
                     document.getElementById('language').value = s.language || 'en';
                     document.getElementById('refresh_interval').value = s.refresh_interval || 3000;
 
-                    // Sync app theme if window.app exists
-                    if (window.app && s.theme) {
-                        window.app.applyTheme(s.theme);
+                    // Sync app theme if bridge exists
+                    const bridge = window.fshareBridgeInstance;
+                    if (bridge) {
+                        bridge.applyTheme(theme);
                     }
                 }
             } catch (error) {
@@ -728,6 +730,18 @@
                 document.getElementById('sabnzbd_api_key').value = data.key;
                 showToast('New SABnzbd key generated');
             }
+        });
+
+        // Theme Click-to-Save logic
+        document.querySelectorAll('input[name="theme"]').forEach(radio => {
+            radio.addEventListener('click', (e) => {
+                const theme = e.target.value;
+                const bridge = window.fshareBridgeInstance;
+                if (bridge) {
+                    bridge.applyTheme(theme);
+                }
+                saveSettings({ theme });
+            });
         });
 
         // Export and Reset buttons removed from UI, listeners removed to prevent JS errors

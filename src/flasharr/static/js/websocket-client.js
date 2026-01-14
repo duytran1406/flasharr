@@ -158,6 +158,10 @@ if (typeof window.FshareWebSocketClient === 'undefined') {
                         this.handleAccountStatus(data);
                         break;
 
+                    case 'sa': // Sync all
+                        this.handleSyncAll(data);
+                        break;
+
                     case 'hb': // Heartbeat
                         // Respond to heartbeat
                         this.send({ t: 'hb' });
@@ -233,6 +237,19 @@ if (typeof window.FshareWebSocketClient === 'undefined') {
          */
         handleAccountStatus(data) {
             this.trigger('account_status', data);
+        }
+
+        /**
+         * Handle full state sync
+         */
+        handleSyncAll(tasks) {
+            this.taskCache = {};
+            if (Array.isArray(tasks)) {
+                tasks.forEach(t => {
+                    if (t && t.i) this.taskCache[t.i] = t;
+                });
+            }
+            this.trigger('sync_all', tasks);
         }
 
         /**
