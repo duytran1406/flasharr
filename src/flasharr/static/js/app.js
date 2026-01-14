@@ -985,6 +985,13 @@ if (typeof window.FshareBridge === 'undefined') {
                 visible.forEach(d => this.selectedDownloads.delete(d.fid));
             }
             this.notifyDownloadsChanged();
+
+            // Force update header state (though render might do it, explicit is safer)
+            const cb = document.getElementById('select-all-checkbox');
+            if (cb) {
+                cb.checked = checked;
+                cb.indeterminate = false;
+            }
         }
 
         toggleSelection(fid) {
@@ -997,11 +1004,15 @@ if (typeof window.FshareBridge === 'undefined') {
             const row = document.getElementById(`row-${fid}`);
             if (row) row.classList.toggle('row-selected', this.selectedDownloads.has(fid));
 
-            // Update "Select All" checkbox state logic could go here, but simple re-render works
+            // Update "Select All" checkbox state
             const cb = document.getElementById('select-all-checkbox');
             if (cb) {
                 const visible = this.getFilteredDownloads();
-                cb.checked = visible.length > 0 && visible.every(d => this.selectedDownloads.has(d.fid));
+                const count = visible.length;
+                const selectedCount = visible.filter(d => this.selectedDownloads.has(d.fid)).length;
+
+                cb.checked = count > 0 && selectedCount === count;
+                cb.indeterminate = selectedCount > 0 && selectedCount < count;
             }
         }
 
