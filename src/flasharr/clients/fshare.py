@@ -66,8 +66,6 @@ class FshareClient:
     """
     
     # API endpoints
-    # Old APIs are dead/deprecated
-    # API_BASE = "https://api2.fshare.vn/api" 
     API_V3_BASE = "https://www.fshare.vn/api/v3"
     
     API_USERAGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -352,13 +350,53 @@ class FshareClient:
         
         fcode = url.split("/file/")[-1].split("?")[0]
         
-        # Strictly use V3 API (web session)
+        # Try V3 API (internal web API) first
         info = self.get_file_info_v3(fcode)
         if info:
             return info
+
+        # Fallback to HTML scraping if V3 API fails
+        logger.info(f"V3 API failed for {fcode}, falling back to HTML scraping...")
+        return self.get_file_info_html(url)
+
+    def get_file_info_html(self, url: str) -> Optional[FshareFile]:
+        """
+        Get file information by scraping the file page HTML.
+        """
+        try:
+            response = self.session.get(url, timeout=self.timeout)
+            if response.status_code != 200:
+                logger.error(f"HTML scraping failed: {response.status_code}")
+                return None
             
-        logger.error(f"Failed to get file info for {fcode}.")
-        return None
+            html = response.text
+            fcode = url.split("/file/")[-1].split("?")[0]
+            
+            # Parse name from title or h1
+            # <h1 ... class="...file-name...">Filename.ext</h1>
+            name = "Unknown"
+            name_match = re.search(r'<h1[^>]*class="[^"]*file-name[^"]*"[^>]*>(.*?)</h1>', html, re.IGNORECASE | re.DOTALL)
+            if name_match:
+                name = name_match.group(1).strip()
+            else:
+                title_match = re.search(r'<title>(.*?)</title>', html)
+                if title_match:
+                     title_text = title_match.group(1)
+                     if " - Fshare" in title_text:
+                         name = title_text.split(" - Fshare")[0].strip()
+                     else:
+                         name = title_text.strip()
+            
+            return FshareFile(
+                name=name,
+                size=0, # Size parsing from raw HTML is unreliable without specific class
+                fcode=fcode,
+                url=url,
+            )
+            
+        except Exception as e:
+            logger.error(f"HTML scraping error: {e}")
+            return None
     
     def get_file_info_v3(self, fcode: str) -> Optional[FshareFile]:
         """
