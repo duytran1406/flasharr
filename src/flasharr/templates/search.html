@@ -559,22 +559,6 @@
                 <span>Adding...</span>
             </div>
         `;
-            <div class="card-actions">
-                <button class="download-btn" data-url="${escapeHtml(result.url)}" data-name="${escapeHtml(result.name)}">
-                    <span class="material-icons">download</span>
-                    <span class="btn-text">Download</span>
-                </button>
-                <button class="copy-btn" data-url="${escapeHtml(result.url)}" title="Copy Link">
-                    <span class="material-icons">content_copy</span>
-                </button>
-            </div>
-            
-            <!--Loading Overlay-- >
-                <div class="card-overlay">
-                    <div class="spinner"></div>
-                    <span>Adding...</span>
-                </div>
-            `;
 
             // Add download event listener
             card.querySelector('.download-btn').addEventListener('click', function () {
@@ -656,7 +640,7 @@
             top: 20px;
             right: 20px;
             padding: 1rem 1.5rem;
-            background: ${ type === 'success' ? 'rgba(34, 197, 94, 0.9)' : 'rgba(239, 68, 68, 0.9)' };
+            background: ${type === 'success' ? 'rgba(34, 197, 94, 0.9)' : 'rgba(239, 68, 68, 0.9)'};
             color: white;
             border - radius: 8px;
             z - index: 10000;
