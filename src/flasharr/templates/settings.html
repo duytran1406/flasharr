@@ -2,38 +2,30 @@
 
 {% block title %}Settings - Fshare Nexus{% endblock %}
 
+{% block header_content %}
+<div class="settings-tabs-header" style="display: flex; gap: 0.5rem; height: 100%; align-items: center;">
+    <button class="tab-btn active" data-tab="account"
+        style="height: 36px; padding: 0 16px; border-radius: 6px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 8px; transition: all 0.2s;">
+        <span class="material-icons" style="font-size: 18px;">person</span> Account
+    </button>
+    <button class="tab-btn" data-tab="downloads"
+        style="height: 36px; padding: 0 16px; border-radius: 6px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 8px; transition: all 0.2s;">
+        <span class="material-icons" style="font-size: 18px;">cloud_download</span> Downloads
+    </button>
+    <button class="tab-btn" data-tab="integration"
+        style="height: 36px; padding: 0 16px; border-radius: 6px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 8px; transition: all 0.2s;">
+        <span class="material-icons" style="font-size: 18px;">extension</span> Integration
+    </button>
+    <button class="tab-btn" data-tab="appearance"
+        style="height: 36px; padding: 0 16px; border-radius: 6px; border: none; background: transparent; color: var(--text-muted); cursor: pointer; font-weight: 600; font-size: 0.85rem; display: flex; align-items: center; gap: 8px; transition: all 0.2s;">
+        <span class="material-icons" style="font-size: 18px;">palette</span> Appearance
+    </button>
+</div>
+{% endblock %}
+
 {% block content %}
 <div class="settings-container">
-    <!-- Settings Header -->
-    <div class="settings-header">
-        <h1 class="settings-title">
-            <span class="material-icons">settings</span>
-            Settings
-        </h1>
-        <div class="settings-actions">
-            <!-- Header buttons removed as per request -->
-        </div>
-    </div>
-
-    <!-- Tabs Navigation -->
-    <div class="settings-tabs">
-        <button class="tab-btn active" data-tab="account">
-            <span class="material-icons">person</span>
-            Account
-        </button>
-        <button class="tab-btn" data-tab="downloads">
-            <span class="material-icons">cloud_download</span>
-            Downloads
-        </button>
-        <button class="tab-btn" data-tab="integration">
-            <span class="material-icons">extension</span>
-            Integration
-        </button>
-        <button class="tab-btn" data-tab="appearance">
-            <span class="material-icons">palette</span>
-            Appearance
-        </button>
-    </div>
+    <!-- Tab Content -->
 
     <!-- Tab Content -->
     <div class="settings-content">

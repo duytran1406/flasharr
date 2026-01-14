@@ -2,6 +2,14 @@
 
 {% block title %}Dashboard - Fshare Nexus{% endblock %}
 
+{% block header_content %}
+<div class="search-container" style="width: 300px;">
+    <input type="text" class="search-input" placeholder="Search Fshare..." id="header-search-input" autocomplete="off"
+        style="background: var(--surface); border: 1px solid var(--outline);">
+    <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
+</div>
+{% endblock %}
+
 {% block content %}
 <div class="dashboard-stats-container">
 

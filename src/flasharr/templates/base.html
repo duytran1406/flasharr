@@ -179,15 +179,12 @@
             <!-- Global Status Bar (Pane B Header) -->
             <header class="global-status-bar">
                 <div class="status-bar-left">
-                    {% if request.path == '/' %}
-                    <div class="search-container" style="width: 300px;">
-                        <input type="text" class="search-input" placeholder="Search Fshare..." id="header-search-input"
-                            autocomplete="off" style="background: var(--surface); border: 1px solid var(--outline);">
-                        <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
+                    <div class="status-bar-left">
+                        {% block header_content %}
+                        <!-- Default Header Content (Fallback) -->
+                        <h2 class="section-title">Fshare Nexus</h2>
+                        {% endblock %}
                     </div>
-                    {% else %}
-                    <h2 class="section-title">{% block section_title %}Fshare Nexus{% endblock %}</h2>
-                    {% endif %}
                 </div>
 
                 <div class="status-bar-right">

@@ -2,24 +2,30 @@
 
 {% block title %}Downloads - Fshare Nexus{% endblock %}
 
-{% block custom_header %}
+{% block header_content %}
 <div class="elegant-toolbar"
-    style="width: 100%; margin: 0; border: none; background: transparent; backdrop-filter: none; box-shadow: none;">
-    <div class="search-wrapper">
+    style="width: 100%; margin: 0; border: none; background: transparent; backdrop-filter: none; box-shadow: none; display: flex; align-items: center; gap: 1rem;">
+
+    <!-- Queue Filter -->
+    <div class="search-wrapper" style="flex: 1; max-width: 400px;">
         <span class="material-icons">search</span>
-        <input type="text" class="elegant-search-input" placeholder="Search by name..." id="downloads-search-input"
-            oninput="bridge.loadDownloads()" autocomplete="off">
+        <input type="text" class="elegant-search-input" placeholder="Filter queue..." id="downloads-search-input"
+            oninput="bridge.filterDownloads(this.value)" autocomplete="off">
     </div>
 
+    <!-- Batch Actions -->
     <div class="action-group">
         <button class="icon-action-btn btn-add" onclick="bridge.showAddModal()" title="Add Link">
-            <span class="material-icons">queue</span>
+            <span class="material-icons">add</span>
         </button>
         <button class="icon-action-btn btn-start" onclick="bridge.startAllDownloads()" title="Start All">
             <span class="material-icons">play_arrow</span>
         </button>
         <button class="icon-action-btn btn-pause" onclick="bridge.pauseAllDownloads()" title="Pause All">
             <span class="material-icons">pause</span>
+        </button>
+        <button class="icon-action-btn btn-refresh" onclick="bridge.refreshDownloads()" title="Refresh">
+            <span class="material-icons">refresh</span>
         </button>
     </div>
 </div>
