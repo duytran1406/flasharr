@@ -7,6 +7,10 @@
         style="background: var(--surface); border: 1px solid var(--outline);">
     <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
 </div>
+<script>
+    // Ensure header search is initialized if this template is loaded directly
+    if (typeof initHeaderSearch === 'function') initHeaderSearch();
+</script>
 {% endblock %}
 
 {% block custom_header %}
@@ -135,8 +139,8 @@
         const loadingState = document.getElementById('loading-state');
         const emptyState = document.getElementById('empty-state');
 
-        // Hide loading state initially
-        loadingState.style.display = 'none';
+        // Hide loading state initially if element exists
+        if (loadingState) loadingState.style.display = 'none';
 
         let searchTimeout;
         let currentFilters = {
@@ -164,15 +168,17 @@
         }
 
         // Show/hide clear button
-        searchInput.addEventListener('input', (e) => {
-            clearBtn.style.display = e.target.value ? 'flex' : 'none';
+        if (searchInput) {
+            searchInput.addEventListener('input', (e) => {
+                if (clearBtn) clearBtn.style.display = e.target.value ? 'flex' : 'none';
 
-            // Debounced search
-            clearTimeout(searchTimeout);
-            searchTimeout = setTimeout(() => {
-                performSearch(e.target.value);
-            }, 500);
-        });
+                // Debounced search
+                clearTimeout(searchTimeout);
+                searchTimeout = setTimeout(() => {
+                    performSearch(e.target.value);
+                }, 500);
+            });
+        }
 
         clearBtn.addEventListener('click', () => {
             searchInput.value = '';
