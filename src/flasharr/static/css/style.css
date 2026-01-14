@@ -610,6 +610,64 @@ h4,
 
 /* Removed .service-card:hover to prevent entire table highlighting */
 
+/* MUI Table Header Adaptation */
+.mui-head-cell {
+  background: var(--surface-variant);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.75rem;
+  padding: 1rem 0.5rem;
+  text-align: left;
+  border-bottom: 2px solid var(--border-color); /* Thicker active border */
+  transition: all 0.2s;
+  position: relative;
+  user-select: none;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.mui-head-cell.sortable {
+  cursor: pointer;
+}
+
+.mui-head-cell.sortable:hover {
+  color: var(--text-color);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.mui-head-cell.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+}
+
+.mui-sort-icon {
+  font-size: 16px !important;
+  vertical-align: middle;
+  opacity: 0.3;
+  margin-left: 4px;
+  transition: all 0.2s;
+}
+
+.mui-head-cell:hover .mui-sort-icon,
+.mui-head-cell.active .mui-sort-icon {
+  opacity: 1;
+}
+
+.mui-head-cell.checkbox-cell {
+  width: 48px;
+  text-align: center;
+  padding-left: 1rem;
+}
+
+.mui-checkbox {
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  margin: 0;
+  vertical-align: middle;
+}
+
 .service-header {
   display: flex;
   align-items: center;

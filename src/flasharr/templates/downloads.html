@@ -40,43 +40,38 @@
             <table class="download-table">
                 <thead>
                     <tr>
-                        <!-- Checkbox disabled
-                        <th style="width: 48px; text-align: center; padding-left: 1rem;">
+                        <th class="mui-head-cell checkbox-cell">
                             <input type="checkbox" id="select-all-checkbox"
-                                onclick="bridge.toggleSelectAll(this.checked)"
-                                style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--accent-blue);">
-                        </th> -->
-                        <th onclick="bridge.sortDownloads('name')" style="cursor: pointer; width: 300px;">
-                            NAME <span class="material-icons" id="sort-icon-name"
-                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                                onclick="bridge.toggleSelectAll(this.checked)" class="mui-checkbox">
                         </th>
-                        <th onclick="bridge.sortDownloads('size')" style="cursor: pointer; width: 100px;">
-                            SIZE <span class="material-icons" id="sort-icon-size"
-                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        <th class="mui-head-cell sortable" onclick="bridge.sortDownloads('name')" style="width: 300px;">
+                            NAME <span class="material-icons mui-sort-icon" id="sort-icon-name">swap_vert</span>
                         </th>
-                        <th onclick="bridge.sortDownloads('progress')" style="cursor: pointer; width: 220px;">
-                            PROGRESS <span class="material-icons" id="sort-icon-progress"
-                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        <th class="mui-head-cell sortable" onclick="bridge.sortDownloads('size')" style="width: 100px;">
+                            SIZE <span class="material-icons mui-sort-icon" id="sort-icon-size">swap_vert</span>
                         </th>
-                        <th onclick="bridge.sortDownloads('status')" style="cursor: pointer; width: 100px;">
-                            STATUS <span class="material-icons" id="sort-icon-status"
-                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        <th class="mui-head-cell sortable" onclick="bridge.sortDownloads('progress')"
+                            style="width: 220px;">
+                            PROGRESS <span class="material-icons mui-sort-icon" id="sort-icon-progress">swap_vert</span>
                         </th>
-                        <th onclick="bridge.sortDownloads('speed')" style="cursor: pointer; width: 100px;">
-                            SPEED <span class="material-icons" id="sort-icon-speed"
-                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        <th class="mui-head-cell sortable" onclick="bridge.sortDownloads('status')"
+                            style="width: 100px;">
+                            STATUS <span class="material-icons mui-sort-icon" id="sort-icon-status">swap_vert</span>
                         </th>
-                        <th onclick="bridge.sortDownloads('eta')" style="cursor: pointer; width: 100px;">
-                            ETA <span class="material-icons" id="sort-icon-eta"
-                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        <th class="mui-head-cell sortable" onclick="bridge.sortDownloads('speed')"
+                            style="width: 100px;">
+                            SPEED <span class="material-icons mui-sort-icon" id="sort-icon-speed">swap_vert</span>
                         </th>
-                        <th onclick="bridge.sortDownloads('category')" style="cursor: pointer; width: 120px;">
-                            CATEGORY <span class="material-icons" id="sort-icon-category"
-                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        <th class="mui-head-cell sortable" onclick="bridge.sortDownloads('eta')" style="width: 100px;">
+                            ETA <span class="material-icons mui-sort-icon" id="sort-icon-eta">swap_vert</span>
                         </th>
-                        <th onclick="bridge.sortDownloads('added')" style="cursor: pointer; width: 120px;">
-                            ADDED <span class="material-icons" id="sort-icon-added"
-                                style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
+                        <th class="mui-head-cell sortable" onclick="bridge.sortDownloads('category')"
+                            style="width: 120px;">
+                            CATEGORY <span class="material-icons mui-sort-icon" id="sort-icon-category">swap_vert</span>
+                        </th>
+                        <th class="mui-head-cell sortable" onclick="bridge.sortDownloads('added')"
+                            style="width: 150px;">
+                            ADDED <span class="material-icons mui-sort-icon" id="sort-icon-added">swap_vert</span>
                         </th>
                     </tr>
                 </thead>

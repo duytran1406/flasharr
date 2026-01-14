@@ -977,8 +977,15 @@ if (typeof window.FshareBridge === 'undefined') {
             this.notifyDownloadsChanged();
         }
 
-        // Checkbox temporarily disabled per user request
-        toggleSelectAll(checked) { }
+        toggleSelectAll(checked) {
+            const visible = this.getFilteredDownloads();
+            if (checked) {
+                visible.forEach(d => this.selectedDownloads.add(d.fid));
+            } else {
+                visible.forEach(d => this.selectedDownloads.delete(d.fid));
+            }
+            this.notifyDownloadsChanged();
+        }
 
         toggleSelection(fid) {
             if (this.selectedDownloads.has(fid)) {
@@ -1233,6 +1240,12 @@ if (typeof window.FshareBridge === 'undefined') {
 
             return `
             <tr id="row-${d.fid}" class="main-row row-${state}" ${contextMenuAttr}>
+                <!-- 0. CHECKBOX -->
+                <td style="width: 48px; text-align: center; padding-left: 1rem;">
+                    <input type="checkbox" class="mui-checkbox" 
+                           onclick="bridge.toggleSelection('${d.fid}'); event.stopPropagation();"
+                           ${this.selectedDownloads.has(d.fid) ? 'checked' : ''}>
+                </td>
                 <!-- 1. NAME -->
                 <td class="cell-name" style="width: 300px; max-width: 300px; position: relative;">
                     <div class="download-name" title="${this.escapeHtml(d.name)}" style="width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 0.9rem;">${this.escapeHtml(d.name)}</div>
