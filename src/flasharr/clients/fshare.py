@@ -167,10 +167,20 @@ class FshareClient:
     @property
     def is_authenticated(self) -> bool:
         """Check if client has a valid authentication token or session cookies."""
+        # Prefer web_session token validation
+        if self._token == "web_session" and self._token_expires:
+             if datetime.now() < self._token_expires:
+                 return True
+             else:
+                 logger.debug("Web session token expired")
+                 return False
+
         if self._token and self._token_expires:
             return datetime.now() < self._token_expires
         
         # Fallback: check session cookies
+        # Note: relying solely on cookies without _token set can cause issues 
+        # but we allow it for restored sessions if they are basic.
         if self.session.cookies.get('_identity-app') or self.session.cookies.get('session_id'):
             return True
             
@@ -193,6 +203,7 @@ class FshareClient:
             
             # Clear existing cookies to ensure a fresh session
             self.session.cookies.clear()
+            self._token = None # Clear token
             
             # Step 1: Get CSRF token from homepage
             homepage = self.session.get(
@@ -261,64 +272,9 @@ class FshareClient:
                 
                 # Fetch account profile page to extract account information
                 try:
-                    profile_page = self.session.get("https://www.fshare.vn/account/profile", timeout=self.timeout)
-                    html = profile_page.text
-                    
-                    # Updated regex patterns based on user feedback
-                    
-                    # ACCOUNT_TYPE: <a href="/account/profile">Loại tài khoản</a>                    <span>Vip</span>
-                    account_type_match = re.search(r'Loại tài khoản</a>\s*<span>(.*?)</span>', html, re.IGNORECASE | re.DOTALL)
-                    if account_type_match:
-                        self._account_type = account_type_match.group(1).strip()
-                        self._is_premium = 'VIP' in self._account_type.upper()
-                        logger.info(f"Account type: {self._account_type} (Premium: {self._is_premium})")
-                    else:
-                        logger.warning("Could not parse account type, checking for fallback indicators")
-                        self._is_premium = 'VIP' in html or 'img alt="VIP"' in html or 'level-vip' in html.lower()
-                    
-                    # VALID_UNTIL: <a href="/account/profile">Hạn dùng:</a>                    <span ...>31/01/2026</span>
-                    valid_until_match = re.search(r'Hạn dùng:</a>\s*<span[^>]*>(.*?)</span>', html, re.IGNORECASE | re.DOTALL)
-                    if valid_until_match:
-                        try:
-                            import time
-                            expiry_str = valid_until_match.group(1).strip()
-                            # Try multiple date formats
-                            for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%I:%M:%S %p %d-%m-%Y']:
-                                try:
-                                    expiry_time = time.mktime(time.strptime(expiry_str, fmt))
-                                    self._premium_expiry = int(expiry_time)
-                                    logger.info(f"Account expires: {expiry_str}")
-                                    break
-                                except ValueError:
-                                    continue
-                            else:
-                                logger.warning(f"Could not parse expiry date format: {expiry_str}")
-                                self._premium_expiry = None
-                        except Exception as e:
-                            logger.warning(f"Error parsing expiry date: {e}")
-                            self._premium_expiry = None
-                    else:
-                        # Check for lifetime
-                        if re.search(r'Vĩnh viễn|Lifetime|Forever', html, re.IGNORECASE):
-                             self._premium_expiry = -1
-                        else:
-                             self._premium_expiry = None
-
-                    # TRAFFIC: <a href="...">Dung lượng tải trong ngày: </a>                            0 Bytes /                             150 GB                        </p>
-                    # We will capture the whole string "0 Bytes / 150 GB"
-                    traffic_match = re.search(r'Dung lượng tải trong ngày:\s*</a>\s*(.*?)\s*</p>', html, re.IGNORECASE | re.DOTALL)
-                    if traffic_match:
-                        raw_traffic = traffic_match.group(1).strip()
-                        # Clean up multiple spaces
-                        raw_traffic = re.sub(r'\s+', ' ', raw_traffic)
-                        self._traffic_left = raw_traffic
-                        logger.info(f"Daily traffic: {self._traffic_left}")
-                    else:
-                        logger.debug("Could not find daily traffic information")
-                        self._traffic_left = None
-                    
+                    self._parse_profile(self.session.get("https://www.fshare.vn/account/profile", timeout=self.timeout).text)
                 except Exception as e:
-                    logger.warning(f"Could not fetch account profile page: {e}")
+                    logger.warning(f"Could not fetch/parse account profile page: {e}")
                     # Fallback to basic detection
                     self._is_premium = True  # Assume premium if logged in
                     self._premium_expiry = None
@@ -348,6 +304,57 @@ class FshareClient:
             logger.error(f"❌ Fshare connection error: {e}")
             raise FshareConnectionError(f"Failed to connect to Fshare: {e}")
 
+    def _parse_profile(self, html: str):
+        """Helper to parse profile HTML."""
+        # ACCOUNT_TYPE: <a href="/account/profile">Loại tài khoản</a>                    <span>Vip</span>
+        account_type_match = re.search(r'Loại tài khoản</a>\s*<span>(.*?)</span>', html, re.IGNORECASE | re.DOTALL)
+        if account_type_match:
+            self._account_type = account_type_match.group(1).strip()
+            self._is_premium = 'VIP' in self._account_type.upper()
+            logger.info(f"Account type: {self._account_type} (Premium: {self._is_premium})")
+        else:
+            logger.warning("Could not parse account type, checking for fallback indicators")
+            self._is_premium = 'VIP' in html or 'img alt="VIP"' in html or 'level-vip' in html.lower()
+        
+        # VALID_UNTIL: <a href="/account/profile">Hạn dùng:</a>                    <span ...>31/01/2026</span>
+        valid_until_match = re.search(r'Hạn dùng:</a>\s*<span[^>]*>(.*?)</span>', html, re.IGNORECASE | re.DOTALL)
+        if valid_until_match:
+            try:
+                import time
+                expiry_str = valid_until_match.group(1).strip()
+                # Try multiple date formats
+                for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%I:%M:%S %p %d-%m-%Y']:
+                    try:
+                        expiry_time = time.mktime(time.strptime(expiry_str, fmt))
+                        self._premium_expiry = int(expiry_time)
+                        logger.info(f"Account expires: {expiry_str}")
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    logger.warning(f"Could not parse expiry date format: {expiry_str}")
+                    self._premium_expiry = None
+            except Exception as e:
+                logger.warning(f"Error parsing expiry date: {e}")
+                self._premium_expiry = None
+        else:
+            # Check for lifetime
+            if re.search(r'Vĩnh viễn|Lifetime|Forever', html, re.IGNORECASE):
+                    self._premium_expiry = -1
+            else:
+                    self._premium_expiry = None
+
+        # TRAFFIC: <a href="...">Dung lượng tải trong ngày: </a>                            0 Bytes /                             150 GB                        </p>
+        traffic_match = re.search(r'Dung lượng tải trong ngày:\s*</a>\s*(.*?)\s*</p>', html, re.IGNORECASE | re.DOTALL)
+        if traffic_match:
+            raw_traffic = traffic_match.group(1).strip()
+            # Clean up multiple spaces
+            raw_traffic = re.sub(r'\s+', ' ', raw_traffic)
+            self._traffic_left = raw_traffic
+            logger.info(f"Daily traffic: {self._traffic_left}")
+        else:
+            logger.debug("Could not find daily traffic information")
+            self._traffic_left = None
 
     def ensure_authenticated(self) -> bool:
         """
@@ -656,6 +663,16 @@ class FshareClient:
             logger.info(f"Loading file page: {url}")
             page_response = self.session.get(url, timeout=self.timeout)
             
+            # CHECK FOR REDIRECT TO LOGIN (Fix for "cannot start download" after session timeout)
+            if "site/login" in page_response.url:
+                 logger.warning("Session expired (redirected to login) while loading file page. Re-authenticating...")
+                 self._token = None
+                 if self.login():
+                      page_response = self.session.get(url, timeout=self.timeout)
+                 else:
+                      logger.error("Re-authentication failed during download page load")
+                      return None
+
             if page_response.status_code != 200:
                 logger.error(f"Failed to load file page: {page_response.status_code}")
                 return None
