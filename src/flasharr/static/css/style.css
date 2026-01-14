@@ -762,10 +762,13 @@ h4,
 }
 
 .mui-head-cell.checkbox-cell,
-td:first-child {
-  padding: 0 0 0 16px;
-  /* Adjust left padding for checkbox column */
+td:first-child,
+.download-table td.checkbox-cell {
+  padding: 0;
   width: 50px;
+  min-width: 50px;
+  max-width: 50px;
+  text-align: center;
 }
 
 /* Update stat-value font to match table if used elsewhere */
