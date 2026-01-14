@@ -1,10 +1,10 @@
 #!/bin/bash
 # Flasharr Deployment Script for LXC 112
-# Version: 0.1.3-beta
+# Version: 0.1.4-beta
 
 set -e
 
-echo "=== Flasharr v0.1.3-beta Deployment ==="
+echo "=== Flasharr v0.1.4-beta Deployment ==="
 echo ""
 
 # Navigate to project directory
@@ -27,7 +27,8 @@ echo ""
 
 # Stop current container
 echo "🛑 Stopping current container..."
-docker compose down
+docker compose down || true
+docker rm -f flasharr || true
 
 # Rebuild image
 echo "🔨 Building new image..."
