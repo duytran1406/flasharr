@@ -283,7 +283,7 @@
         (function () {
             const navItems = document.querySelectorAll('.nav-item');
             const contentArea = document.querySelector('.content-area');
-            const header = document.querySelector('.header');
+            const headerLeft = document.querySelector('.status-bar-left');
 
             // Intercept navigation clicks
             navItems.forEach(item => {
@@ -294,9 +294,14 @@
                     // Don't reload if already on this page
                     if (window.location.pathname === url) return;
 
+                    // Update URL history
+                    window.history.pushState({}, '', url);
+
                     // Update active state
-                    navItems.forEach(nav => nav.classList.remove('active'));
-                    item.classList.add('active');
+                    navItems.forEach(nav => {
+                        nav.classList.remove('active');
+                        if (nav.getAttribute('href') === url) nav.classList.add('active');
+                    });
 
                     // Fetch and load new content
                     try {
@@ -311,12 +316,19 @@
                         const newContent = doc.querySelector('.content-area');
                         if (newContent) {
                             contentArea.innerHTML = newContent.innerHTML;
+                            // Re-initialize app logic if necessary (e.g. charts)
+                            if (window.bridge) {
+                                // Small delay to ensure DOM is ready
+                                setTimeout(() => {
+                                    if (url === '/') window.bridge.initDashboardCharts();
+                                }, 50);
+                            }
                         }
 
                         // Update header
-                        const newHeader = doc.querySelector('.header');
-                        if (newHeader) {
-                            header.innerHTML = newHeader.innerHTML;
+                        const newHeaderLeft = doc.querySelector('.status-bar-left');
+                        if (newHeaderLeft && headerLeft) {
+                            headerLeft.innerHTML = newHeaderLeft.innerHTML;
                         }
 
                         // Execute any scripts in the new content
