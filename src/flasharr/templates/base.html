@@ -211,6 +211,11 @@
 
     <!-- Context Menu (Moved to end of body) -->
     <div id="context-menu" class="context-menu" style="display: none;">
+        <div class="menu-item"
+            onclick="bridge.showDetailsModal(bridge.contextFid); document.getElementById('context-menu').style.display='none'">
+            <span class="material-icons">info</span> Details
+        </div>
+        <div class="menu-divider"></div>
         <div class="menu-item" id="menu-resume"><span class="material-icons">play_arrow</span> Resume</div>
         <div class="menu-item" id="menu-pause"><span class="material-icons">pause</span> Pause</div>
         <div class="menu-item" id="menu-retry" style="color: #fbbf24;"><span class="material-icons">replay</span> Retry
