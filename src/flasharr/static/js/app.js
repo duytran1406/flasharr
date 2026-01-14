@@ -154,6 +154,14 @@ if (typeof window.FshareBridge === 'undefined') {
             this.filters = { category: 'all', status: 'all' };
             this.lastSearchResults = [];
             this.lastSearchQuery = '';
+
+            // Persist logs
+            this.systemLogs = [];
+            try {
+                const storedLogs = localStorage.getItem('fshare_system_logs');
+                if (storedLogs) this.systemLogs = JSON.parse(storedLogs);
+            } catch (e) { }
+
             this.searchViewMode = localStorage.getItem('search_view_mode') || 'grid';
 
             // WebSocket Client
@@ -181,9 +189,14 @@ if (typeof window.FshareBridge === 'undefined') {
             }
             this.lastSearchQuery = localStorage.getItem('fshare_last_search_query') || '';
 
-            // Clear legacy data request
-            localStorage.removeItem('fshare_downloads');
-            this.downloads = [];
+            // Try to load downloads from storage if available to avoid empty flicker
+            const storedDownloads = localStorage.getItem('fshare_downloads');
+            if (storedDownloads) {
+                try {
+                    this.downloads = JSON.parse(storedDownloads);
+                    console.log('📦 Loaded', this.downloads.length, 'downloads from storage');
+                } catch (e) { }
+            }
 
             this.wakeupDashboardChart();
             this.initSidebar();
@@ -202,8 +215,11 @@ if (typeof window.FshareBridge === 'undefined') {
                 this.notifyDownloadsChanged();
             }
 
-            // Load logs if container exists
+            // Load logs immediately from cache if available
             if (document.getElementById('system-log')) {
+                if (this.systemLogs.length > 0) {
+                    this.renderSystemLogs();
+                }
                 this.loadSystemLogs();
                 // Pull logs every 5 seconds
                 if (window.logInterval) clearInterval(window.logInterval);
@@ -312,6 +328,16 @@ if (typeof window.FshareBridge === 'undefined') {
                             traffic: data.account.traffic_left
                         });
                         this.setText('fshare-daily-quota', data.account.traffic_left || '-- / --');
+
+                        // Update stats object to persist this data
+                        if (!this.stats.fshare_downloader) this.stats.fshare_downloader = {};
+                        if (!this.stats.fshare_downloader.primary_account) this.stats.fshare_downloader.primary_account = {};
+
+                        this.stats.fshare_downloader.primary_account.premium = data.account.premium;
+                        this.stats.fshare_downloader.primary_account.traffic_left = data.account.traffic_left;
+                        this.stats.fshare_downloader.primary_account.valid = data.account.available;
+
+                        localStorage.setItem('fshare_stats', JSON.stringify(this.stats));
                     }
                 }
             } catch (e) {
@@ -582,6 +608,11 @@ if (typeof window.FshareBridge === 'undefined') {
             this.setText('active-downloads-count', String(fd.active || 0).padStart(2, '0'));
             // fd.total is mapped from stats.q (queue size) in updateStatsFromWS
             this.setText('queue-count', String(fd.total || 0).padStart(2, '0'));
+
+            // If we have active downloads row on dashboard, force render
+            if (document.getElementById('download-manager-list') && this.downloads.length > 0) {
+                this.renderDashboardDownloads(this.downloads.slice(0, 3));
+            }
 
             // Footer Updates (Downloads Page)
             this.setText('footer-current-speed', fd.speed || '0 B/s');
@@ -1312,6 +1343,31 @@ if (typeof window.FshareBridge === 'undefined') {
             const k = 1024, sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'], i = Math.floor(Math.log(bytes) / Math.log(k));
             // Ensure 1 digit fraction (e.g., "5.0 MB/s")
             return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
+        }
+
+        async loadSystemLogs() {
+            const container = document.getElementById('system-log');
+            if (!container) return;
+            try {
+                const response = await fetch('/api/logs?lines=50');
+                const data = await response.json();
+                if (data.status === 'ok') {
+                    // Update internal state
+                    this.systemLogs = data.logs;
+                    localStorage.setItem('fshare_system_logs', JSON.stringify(this.systemLogs));
+                    this.renderSystemLogs();
+                }
+            } catch (e) {
+                console.error("Failed to load logs:", e);
+            }
+        }
+
+        renderSystemLogs() {
+            const container = document.getElementById('system-log');
+            if (!container || !this.systemLogs.length) return;
+
+            container.innerHTML = this.systemLogs.map(line => `<div>${this.escapeHtml(line)}</div>`).join('');
+            container.scrollTop = container.scrollHeight;
         }
 
         escapeHtml(text) {
