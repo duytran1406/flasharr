@@ -2304,24 +2304,47 @@ td:first-child,
 }
 
 /* Range slider */
+/* Range slider */
+.form-range {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.15);
+  /* Increased visibility */
+  border-radius: 3px;
+  outline: none;
+  margin: 10px 0;
+  /* Add margin for handle space */
+}
+
 .form-range::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   background: rgb(var(--accent-500));
   border-radius: 50%;
   cursor: pointer;
-  transition: transform 0.2s;
+  border: 2px solid var(--bg-card);
+  /* Add border for definition */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s, box-shadow 0.2s;
+  margin-top: -7px;
+  /* Center thumb on track (6px height vs 20px thumb) */
 }
 
 .form-range::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
+  transform: scale(1.1);
+  box-shadow: 0 0 0 4px rgba(var(--accent-500-rgb), 0.2);
 }
 
 .range-value {
-  display: inline-block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   min-width: 2rem;
-  text-align: center;
+  height: 2rem;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 6px;
   font-weight: 600;
   color: rgb(var(--accent-500));
   margin-left: 0.75rem;
@@ -2333,6 +2356,7 @@ td:first-child,
   align-items: center;
   gap: 0.75rem;
   cursor: pointer;
+  user-select: none;
 }
 
 .toggle-label-right {
@@ -2355,9 +2379,14 @@ td:first-child,
   position: relative;
   width: 44px;
   height: 24px;
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.15);
+  /* Increased contrast */
   border-radius: 12px;
-  transition: background 0.2s;
+  transition: all 0.2s;
+  flex-shrink: 0;
+  /* CRITICAL: Prevent collapse overlap */
+  display: inline-block;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .toggle-switch::before {
@@ -2365,24 +2394,29 @@ td:first-child,
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  /* Slightly smaller than height - padding */
+  height: 18px;
   background: white;
   border-radius: 50%;
-  transition: transform 0.2s;
+  transition: transform 0.2s, background-color 0.2s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 .toggle-input:checked+.toggle-switch {
   background: rgb(var(--accent-500));
+  border-color: transparent;
 }
 
 .toggle-input:checked+.toggle-switch::before {
   transform: translateX(20px);
+  background: white;
 }
 
 .toggle-text {
   font-size: 0.875rem;
   color: var(--text-color);
+  font-weight: 500;
 }
 
 /* Category paths */
