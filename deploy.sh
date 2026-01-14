@@ -1,10 +1,10 @@
 #!/bin/bash
 # Flasharr Deployment Script for LXC 112
-# Version: 0.1.2-beta
+# Version: 0.1.3-beta
 
 set -e
 
-echo "=== Flasharr v0.1.2-beta Deployment ==="
+echo "=== Flasharr v0.1.3-beta Deployment ==="
 echo ""
 
 # Navigate to project directory
@@ -22,7 +22,7 @@ fi
 
 # Show version
 echo ""
-echo "📌 Version: 0.1.2-beta
+echo "📌 Version: $(cat VERSION)"
 echo ""
 
 # Stop current container
