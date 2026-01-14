@@ -509,52 +509,46 @@
 
             card.innerHTML = `
             <div class="card-main-content">
-                <div class="result-card-header">
-                    <div class="header-content" style="width: 100%;">
-                        <h3 class="result-title" title="${escapeHtml(result.name)}">${escapeHtml(result.name)}</h3>
-                        <!-- Grid View Tags -->
-                        <div class="result-tags-inline">
-                             <span class="quality-badge quality-${qualityBadge.toLowerCase()}">${qualityBadge}</span>
-                             ${isSeries ? `<span class="tag tag-series">${seriesBadge}</span>` : ''}
-                             ${hasVietsub ? '<span class="tag tag-vietsub">#VIETSUB</span>' : ''}
-                             ${hasVietdub ? '<span class="tag tag-vietdub">#VIETDUB</span>' : ''}
-                        </div>
-                        <div class="result-subtitle" title="${escapeHtml(originalFilename)}">${escapeHtml(originalFilename)}</div>
-                    </div>
+                <!-- Col Name -->
+                <div class="col-name header-content">
+                    <h3 class="result-title" title="${escapeHtml(result.name)}">${escapeHtml(result.name)}</h3>
+                    <div class="result-subtitle" title="${escapeHtml(originalFilename)}">${escapeHtml(originalFilename)}</div>
                 </div>
 
-                <!-- List View Columns (Hidden in Grid via CSS order/display) -->
-                <div class="meta-quality mobile-hide" style="display: none;">
+                <!-- Col Quality -->
+                <div class="col-quality mobile-hide">
                     <span class="quality-badge quality-${qualityBadge.toLowerCase()}">${qualityBadge}</span>
                 </div>
-                
-                <div class="meta-tags-col mobile-hide" style="display: none;">
-                    ${hasVietsub ? '<span class="tag tag-vietsub" title="Vietsub">VS</span>' : ''}
-                    ${hasVietdub ? '<span class="tag tag-vietdub" title="Vietdub">VD</span>' : ''}
+
+                <!-- Col Tags -->
+                <div class="col-tags mobile-hide">
+                     ${hasVietsub ? '<span class="tag tag-vietsub" title="Vietsub">VS</span>' : ''}
+                     ${hasVietdub ? '<span class="tag tag-vietdub" title="Vietdub">VD</span>' : ''}
                 </div>
 
-                <div class="result-meta-grid">
-                     <div class="meta-item meta-size" title="Size">
-                        <span class="material-icons">storage</span>
-                        <span class="meta-value">${window.bridge ? window.bridge.formatSize(result.size) : (result.size || 'N/A')}</span>
-                    </div>
-                    <div class="meta-item meta-season" title="Season/Episode">
-                        <span class="material-icons">tv</span>
-                         <span class="meta-value">${isSeries ? seriesBadge : '--'}</span>
-                    </div>
-                    <div class="meta-item meta-score" title="Relevance Score">
-                        <span class="material-icons">star</span>
-                        <span class="meta-value">${score}</span>
-                    </div>
+                <!-- Col Size -->
+                <div class="col-size meta-text">
+                    <span class="meta-value">${window.bridge ? window.bridge.formatSize(result.size) : (result.size || 'N/A')}</span>
+                </div>
+                
+                <!-- Col S/E -->
+                 <div class="col-season meta-text">
+                    <span class="meta-value">${isSeries ? seriesBadge : '--'}</span>
+                </div>
+
+                <!-- Col Score -->
+                <div class="col-score meta-text">
+                     <span class="material-icons" style="font-size: 14px; vertical-align: middle; color: gold;">star</span>
+                     <span class="meta-value">${score}</span>
                 </div>
             </div>
 
-            <div class="card-actions">
-                <button class="download-btn" data-url="${escapeHtml(result.url)}" data-name="${escapeHtml(result.name)}">
+            <!-- Col Action -->
+            <div class="col-action card-actions">
+                <button class="action-btn download-btn" data-url="${escapeHtml(result.url)}" data-name="${escapeHtml(result.name)}">
                     <span class="material-icons">download</span>
-                    <span class="btn-text">Download</span>
                 </button>
-                <button class="copy-btn" data-url="${escapeHtml(result.url)}" title="Copy Link">
+                <button class="action-btn copy-btn" data-url="${escapeHtml(result.url)}" title="Copy Link">
                     <span class="material-icons">content_copy</span>
                 </button>
             </div>
@@ -565,6 +559,22 @@
                 <span>Adding...</span>
             </div>
         `;
+            <div class="card-actions">
+                <button class="download-btn" data-url="${escapeHtml(result.url)}" data-name="${escapeHtml(result.name)}">
+                    <span class="material-icons">download</span>
+                    <span class="btn-text">Download</span>
+                </button>
+                <button class="copy-btn" data-url="${escapeHtml(result.url)}" title="Copy Link">
+                    <span class="material-icons">content_copy</span>
+                </button>
+            </div>
+            
+            <!--Loading Overlay-- >
+                <div class="card-overlay">
+                    <div class="spinner"></div>
+                    <span>Adding...</span>
+                </div>
+            `;
 
             // Add download event listener
             card.querySelector('.download-btn').addEventListener('click', function () {
@@ -646,13 +656,13 @@
             top: 20px;
             right: 20px;
             padding: 1rem 1.5rem;
-            background: ${type === 'success' ? 'rgba(34, 197, 94, 0.9)' : 'rgba(239, 68, 68, 0.9)'};
+            background: ${ type === 'success' ? 'rgba(34, 197, 94, 0.9)' : 'rgba(239, 68, 68, 0.9)' };
             color: white;
-            border-radius: 8px;
-            z-index: 10000;
-            font-weight: 500;
-            box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.5);
-        `;
+            border - radius: 8px;
+            z - index: 10000;
+            font - weight: 500;
+            box - shadow: 0 10px 30px - 5px rgba(0, 0, 0, 0.5);
+            `;
             notification.textContent = message;
             document.body.appendChild(notification);
 
@@ -670,7 +680,7 @@
         // Initial state from bridge
         if (allResults.length > 0) {
             // Apply view mode
-            const viewBtn = document.querySelector(`.view-btn[data-view="${currentView}"]`);
+            const viewBtn = document.querySelector(`.view - btn[data - view="${currentView}"]`);
             if (viewBtn) viewBtn.click();
 
             if (searchInput.value) {
