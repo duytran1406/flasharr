@@ -2,18 +2,6 @@
 
 {% block title %}Search - Fshare Nexus{% endblock %}
 {% block header_content %}
-<div class="search-container" style="width: 300px;">
-    <input type="text" class="search-input" placeholder="Search Fshare..." id="header-search-input" autocomplete="off"
-        style="background: var(--surface); border: 1px solid var(--outline);">
-    <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
-</div>
-<script>
-    // Ensure header search is initialized if this template is loaded directly
-    if (typeof initHeaderSearch === 'function') initHeaderSearch();
-</script>
-{% endblock %}
-
-{% block custom_header %}
 <div class="search-header-container" style="display: flex; align-items: center; gap: 1rem; width: 100%;">
     <div class="search-input-wrapper" style="flex: 1;">
         <span class="material-icons search-icon">search</span>
@@ -180,14 +168,16 @@
             });
         }
 
-        clearBtn.addEventListener('click', () => {
-            searchInput.value = '';
-            clearBtn.style.display = 'none';
-            resultsGrid.innerHTML = '';
-            resultsCount.textContent = 'Found 0 results';
-            loadingState.style.display = 'none';
-            emptyState.style.display = 'none';
-        });
+        if (clearBtn) {
+            clearBtn.addEventListener('click', () => {
+                searchInput.value = '';
+                clearBtn.style.display = 'none';
+                resultsGrid.innerHTML = '';
+                resultsCount.textContent = 'Found 0 results';
+                loadingState.style.display = 'none';
+                emptyState.style.display = 'none';
+            });
+        }
 
         // Filter toggles
         document.querySelectorAll('.filter-btn').forEach(btn => {
