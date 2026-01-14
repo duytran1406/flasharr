@@ -1285,13 +1285,30 @@ if (typeof window.FshareBridge === 'undefined') {
 
         async submitManualLink() {
             const input = document.getElementById('manual-link-input'), btn = document.getElementById('submit-link-btn'), url = input.value.trim();
-            if (!url) return;
+            if (!url) {
+                this.showNotification('Please enter a valid URL', 'warning');
+                return;
+            }
             try {
                 btn.disabled = true; btn.textContent = "ADDING...";
                 const response = await fetch('/api/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
                 const result = await response.json();
-                if (result.success) { this.hideAddModal(); await this.fetchDownloads(); }
-                else alert(result.error || 'Failed to add');
+
+                if (result.success) {
+                    this.showNotification('Download added to queue successfully', 'success');
+                    this.hideAddModal();
+                    input.value = '';
+                    await this.fetchDownloads();
+                } else {
+                    const msg = result.error || 'Unknown error';
+                    if (msg.toLowerCase().includes('authorized') || msg.toLowerCase().includes('login') || msg.toLowerCase().includes('session')) {
+                        this.showNotification('Session Invalid: Please check your account settings.', 'error');
+                    } else {
+                        this.showNotification(`Failed to add: ${msg}`, 'error');
+                    }
+                }
+            } catch (e) {
+                this.showNotification('Connection Error: Could not reach server', 'error');
             } finally { btn.disabled = false; btn.textContent = "ADD TO QUEUE"; }
         }
 
