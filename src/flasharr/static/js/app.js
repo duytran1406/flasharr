@@ -1063,6 +1063,10 @@ if (typeof window.FshareBridge === 'undefined') {
             const isSelected = this.selectedDownloads.has(d.fid);
             row.className = `main-row row-${state}${row.classList.contains('is-expanded') ? ' is-expanded' : ''}${isSelected ? ' row-selected' : ''}`;
 
+            // Update Checkbox State
+            const checkbox = row.querySelector('.mui-checkbox');
+            if (checkbox) checkbox.checked = isSelected;
+
             // Helper for simple text updates
             const updateText = (selector, text) => {
                 const el = row.querySelector(selector);
@@ -1258,10 +1262,10 @@ if (typeof window.FshareBridge === 'undefined') {
             return `
             <tr id="row-${d.fid}" class="main-row row-${state} ${isSelected ? 'row-selected' : ''}" ${contextMenuAttr}>
                 <!-- 0. CHECKBOX -->
-                <td style="width: 48px; text-align: center; padding-left: 1rem;">
+                <td class="checkbox-cell">
                     <input type="checkbox" class="mui-checkbox" 
                            onclick="bridge.toggleSelection('${d.fid}'); event.stopPropagation();"
-                           ${this.selectedDownloads.has(d.fid) ? 'checked' : ''}>
+                           ${isSelected ? 'checked' : ''}>
                 </td>
                 <!-- 1. NAME -->
                 <td class="cell-name" style="width: 300px; max-width: 300px; position: relative;">
