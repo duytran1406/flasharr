@@ -345,10 +345,10 @@
                     localStorage.removeItem('fshare_last_search_results');
                     localStorage.removeItem('fshare_last_search_query');
                 }
-                resultsGrid.innerHTML = '';
-                resultsCount.textContent = 'Found 0 results';
-                loadingState.style.display = 'none';
-                emptyState.style.display = 'none';
+                if (resultsGrid) resultsGrid.innerHTML = '';
+                if (resultsCount) resultsCount.textContent = 'Found 0 results';
+                if (loadingState) loadingState.style.display = 'none';
+                if (emptyState) emptyState.style.display = 'none';
                 return;
             }
 
@@ -359,16 +359,18 @@
             }
 
             // Show loading
-            loadingState.style.display = 'flex';
-            emptyState.style.display = 'none';
-            resultsGrid.innerHTML = '';
-            resultsGrid.appendChild(loadingState);
+            if (loadingState) loadingState.style.display = 'flex';
+            if (emptyState) emptyState.style.display = 'none';
+            if (resultsGrid) {
+                resultsGrid.innerHTML = '';
+                if (loadingState) resultsGrid.appendChild(loadingState);
+            }
 
             try {
                 const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
                 const data = await response.json();
 
-                loadingState.style.display = 'none';
+                if (loadingState) loadingState.style.display = 'none';
 
                 if (data.results && data.results.length > 0) {
                     allResults = data.results;
@@ -383,15 +385,15 @@
                         bridge.lastSearchResults = [];
                         localStorage.removeItem('fshare_last_search_results');
                     }
-                    emptyState.style.display = 'flex';
-                    resultsGrid.appendChild(emptyState);
-                    resultsCount.textContent = 'Found 0 results';
+                    if (emptyState) emptyState.style.display = 'flex';
+                    if (resultsGrid && emptyState) resultsGrid.appendChild(emptyState);
+                    if (resultsCount) resultsCount.textContent = 'Found 0 results';
                 }
             } catch (error) {
                 console.error('Search error:', error);
-                loadingState.style.display = 'none';
-                emptyState.style.display = 'flex';
-                resultsGrid.appendChild(emptyState);
+                if (loadingState) loadingState.style.display = 'none';
+                if (emptyState) emptyState.style.display = 'flex';
+                if (resultsGrid && emptyState) resultsGrid.appendChild(emptyState);
             }
         }
 
