@@ -3,50 +3,18 @@
 {% block title %}Search - Fshare Nexus{% endblock %}
 {% block header_content %}
 <div class="search-header-container" style="display: flex; align-items: center; gap: 1rem; width: 100%;">
-    <div class="search-input-wrapper" style="flex: 1;">
+    <div class="search-input-wrapper">
         <span class="material-icons search-icon">search</span>
-        <input type="text" id="search-page-input" class="search-query-input"
-            placeholder="Search movies, series, or files..." value="{{ query or '' }}" autofocus>
+        <input type="text" id="search-page-input" class="search-query-input" placeholder="Search Fshare..."
+            value="{{ query or '' }}" autofocus>
         <button class="clear-search-btn" id="clear-search-btn" style="display: none;">
             <span class="material-icons">close</span>
         </button>
     </div>
 
-    <!-- Filters in header -->
-    <div style="display: flex; gap: 0.5rem; align-items: center;">
-        <button class="filter-btn" data-filter="vietsub">
-            <span class="filter-label">Vietsub</span>
-            <span class="material-icons check-icon">cancel</span>
-        </button>
-
-        <button class="filter-btn" data-filter="vietdub">
-            <span class="filter-label">Vietdub</span>
-            <span class="material-icons check-icon">cancel</span>
-        </button>
-
-        <button class="filter-btn" data-filter="sort">
-            <span class="filter-label">Sort: Relevance</span>
-            <span class="material-icons">expand_more</span>
-        </button>
-        <div class="filter-dropdown" id="sort-dropdown">
-            <label class="filter-option">
-                <input type="radio" name="sort" value="score" checked>
-                <span>Relevance</span>
-            </label>
-            <label class="filter-option">
-                <input type="radio" name="sort" value="size_desc">
-                <span>Size (Largest)</span>
-            </label>
-            <label class="filter-option">
-                <input type="radio" name="sort" value="size_asc">
-                <span>Size (Smallest)</span>
-            </label>
-        </div>
-    </div>
-
     <!-- View Toggle -->
     <div class="view-toggle"
-        style="display: flex; gap: 0.25rem; background: rgba(255,255,255,0.05); padding: 4px; border-radius: 8px; margin-left: auto;">
+        style="display: flex; gap: 0.25rem; background: rgba(255,255,255,0.05); padding: 4px; border-radius: 8px;">
         <button class="view-btn active" data-view="grid" title="Grid View"
             style="display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; background: transparent; border: none; border-radius: 6px; color: var(--text-muted); cursor: pointer; transition: all 0.2s;">
             <span class="material-icons" style="font-size: 20px;">grid_view</span>
@@ -61,27 +29,57 @@
 
 {% block content %}
 <div class="search-page-container">
-    <!-- Results Count -->
-    <div class="results-header">
-        <span class="results-count" id="results-count">Found 0 results</span>
+    <!-- Filter Toolbar -->
+    <div class="search-filter-toolbar">
+        <div class="filter-chip-group">
+            <button class="filter-btn" data-filter="vietsub">
+                <span class="material-icons" style="font-size: 16px;">subtitles</span>
+                <span class="filter-label">Vietsub</span>
+                <span class="material-icons check-icon" style="font-size: 16px;">add</span>
+            </button>
+            <button class="filter-btn" data-filter="vietdub">
+                <span class="material-icons" style="font-size: 16px;">mic</span>
+                <span class="filter-label">Vietdub</span>
+                <span class="material-icons check-icon" style="font-size: 16px;">add</span>
+            </button>
+        </div>
+
+        <div style="flex: 1;"></div>
+
+        <div style="position: relative;">
+            <button class="filter-btn" data-filter="sort">
+                <span class="material-icons">sort</span>
+                <span class="filter-label">Sort: Relevance</span>
+            </button>
+            <div class="filter-dropdown" id="sort-dropdown" style="right: 0; left: auto;">
+                <label class="filter-option">
+                    <input type="radio" name="sort" value="score" checked>
+                    <span>Relevance</span>
+                </label>
+                <label class="filter-option">
+                    <input type="radio" name="sort" value="size_desc">
+                    <span>Size (Largest)</span>
+                </label>
+                <label class="filter-option">
+                    <input type="radio" name="sort" value="size_asc">
+                    <span>Size (Smallest)</span>
+                </label>
+            </div>
+        </div>
+
+        <span class="results-count" id="results-count"
+            style="margin-left: 1rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">0 Results</span>
     </div>
 
-    <!-- Search List Header (Hidden by default) -->
-    <div class="search-list-header" id="search-list-header"
-        style="display: none; padding: 0 1.5rem; margin-bottom: 0.5rem; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">
-        <div style="flex: 2; display: flex; gap: 0.5rem;">
-            <div onclick="sortResults('name')"
-                style="flex:1; cursor: pointer; display: flex; align-items: center; gap:4px">NAME</div>
-            <div onclick="sortResults('quality')"
-                style="width: 80px; cursor: pointer; display: flex; align-items: center; gap:4px">QUALITY</div>
-        </div>
-        <div style="flex: 1; text-align: center; cursor: pointer;" onclick="sortResults('vietsub')">TAGS</div>
-        <div style="flex: 1.5; display: flex; justify-content: flex-end; gap: 2rem; margin-right: 2rem;">
-            <div onclick="sortResults('size')" style="flex: 1; text-align: right; cursor: pointer;">SIZE</div>
-            <div onclick="sortResults('season')" style="flex: 1; text-align: right; cursor: pointer;">S/E</div>
-            <div onclick="sortResults('score')" style="flex: 1; text-align: right; cursor: pointer;">SCORE</div>
-        </div>
-        <div style="flex: 0 0 140px; text-align: right;">ACTION</div>
+    <!-- Search List Header (Strict Alignment) -->
+    <div class="search-list-header" id="search-list-header" style="display: none;">
+        <div class="col-name mui-head-cell" onclick="sortResults('name')">NAME</div>
+        <div class="col-quality mui-head-cell" onclick="sortResults('quality')">QUALITY</div>
+        <div class="col-tags mui-head-cell" onclick="sortResults('vietsub')">TAGS</div>
+        <div class="col-size mui-head-cell" onclick="sortResults('size')">SIZE</div>
+        <div class="col-season mui-head-cell" onclick="sortResults('season')">S/E</div>
+        <div class="col-score mui-head-cell" onclick="sortResults('score')">SCORE</div>
+        <div class="col-action mui-head-cell">ACTION</div>
     </div>
 
     <!-- Search Results Grid -->
@@ -509,12 +507,12 @@
             const episode = result.episode ? String(result.episode).padStart(2, '0') : '--';
             const seriesBadge = isSeries ? `S${season}E${episode}` : '';
 
-            // Structured content for List/Grid flexibility
             card.innerHTML = `
             <div class="card-main-content">
                 <div class="result-card-header">
-                    <div class="header-content">
+                    <div class="header-content" style="width: 100%;">
                         <h3 class="result-title" title="${escapeHtml(result.name)}">${escapeHtml(result.name)}</h3>
+                        <!-- Grid View Tags -->
                         <div class="result-tags-inline">
                              <span class="quality-badge quality-${qualityBadge.toLowerCase()}">${qualityBadge}</span>
                              ${isSeries ? `<span class="tag tag-series">${seriesBadge}</span>` : ''}
@@ -525,20 +523,29 @@
                     </div>
                 </div>
 
+                <!-- List View Columns (Hidden in Grid via CSS order/display) -->
+                <div class="meta-quality mobile-hide" style="display: none;">
+                    <span class="quality-badge quality-${qualityBadge.toLowerCase()}">${qualityBadge}</span>
+                </div>
+                
+                <div class="meta-tags-col mobile-hide" style="display: none;">
+                    ${hasVietsub ? '<span class="tag tag-vietsub" title="Vietsub">VS</span>' : ''}
+                    ${hasVietdub ? '<span class="tag tag-vietdub" title="Vietdub">VD</span>' : ''}
+                </div>
+
                 <div class="result-meta-grid">
                      <div class="meta-item meta-size" title="Size">
                         <span class="material-icons">storage</span>
                         <span class="meta-value">${window.bridge ? window.bridge.formatSize(result.size) : (result.size || 'N/A')}</span>
                     </div>
-                    <div class="meta-item meta-score" title="Relevance Score">
-                        <span class="material-icons">star</span>
-                        <span class="meta-value">${score}/100</span>
-                    </div>
-                    ${isSeries ? `
                     <div class="meta-item meta-season" title="Season/Episode">
                         <span class="material-icons">tv</span>
-                        <span class="meta-value">${seriesBadge}</span>
-                    </div>` : ''}
+                         <span class="meta-value">${isSeries ? seriesBadge : '--'}</span>
+                    </div>
+                    <div class="meta-item meta-score" title="Relevance Score">
+                        <span class="material-icons">star</span>
+                        <span class="meta-value">${score}</span>
+                    </div>
                 </div>
             </div>
 
