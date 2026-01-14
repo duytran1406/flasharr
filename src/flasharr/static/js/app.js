@@ -350,6 +350,97 @@ if (typeof window.FshareBridge === 'undefined') {
             }
         }
 
+        // --- Notification System ---
+        showNotification(message, type = 'info') {
+            // Remove existing container if any (cleanup)
+            let container = document.getElementById('notification-container');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'notification-container';
+                container.style.cssText = `
+                    position: fixed;
+                    top: 20px;
+                    right: 20px;
+                    z-index: 10000;
+                    display: flex;
+                    flex-direction: column;
+                    gap: 10px;
+                `;
+                document.body.appendChild(container);
+            }
+
+            const toast = document.createElement('div');
+
+            // Icon mapping
+            const icons = {
+                'success': 'check_circle',
+                'error': 'error',
+                'warning': 'warning',
+                'info': 'info'
+            };
+
+            // Color mapping
+            const colors = {
+                'success': '#22c55e', // Green
+                'error': '#ef4444',   // Red
+                'warning': '#f59e0b', // Amber
+                'info': '#3b82f6'     // Blue
+            };
+
+            const bgColor = colors[type] || colors.info;
+            const iconName = icons[type] || icons.info;
+
+            toast.style.cssText = `
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                background: rgba(30, 41, 59, 1);
+                border-left: 4px solid ${bgColor};
+                color: #f8fafc;
+                padding: 16px 20px;
+                border-radius: 8px;
+                box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -2px rgba(0, 0, 0, 0.3);
+                font-family: 'Inter', sans-serif;
+                font-weight: 500;
+                font-size: 0.9rem;
+                min-width: 300px;
+                max-width: 450px;
+                transform: translateX(100%);
+                opacity: 0;
+                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                pointer-events: auto;
+            `;
+
+            toast.innerHTML = `
+                <span class="material-icons" style="color: ${bgColor}; font-size: 24px;">${iconName}</span>
+                <div style="flex: 1; line-height: 1.4;">
+                    ${type === 'error' ? '<div style="font-weight:700; color:' + bgColor + '; margin-bottom:2px">Error</div>' : ''}
+                    <div>${this.escapeHtml(message)}</div>
+                </div>
+                <button onclick="this.parentElement.remove()" style="background:none; border:none; color: #94a3b8; cursor: pointer; padding: 4px;">
+                    <span class="material-icons" style="font-size: 18px;">close</span>
+                </button>
+            `;
+
+            container.appendChild(toast);
+
+            // Animate in
+            requestAnimationFrame(() => {
+                toast.style.transform = 'translateX(0)';
+                toast.style.opacity = '1';
+            });
+
+            // Auto dismiss
+            const duration = type === 'error' ? 6000 : 3000;
+            setTimeout(() => {
+                if (toast.parentElement) {
+                    toast.style.opacity = '0';
+                    toast.style.transform = 'translateX(100%)';
+                    setTimeout(() => toast.remove(), 300);
+                }
+            }, duration);
+        }
+
         showAccountErrorModal(msg) {
             const modalHTML = `
             <div id="account-error-modal" class="modal-overlay" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 99999; display: flex; justify-content: center; align-items: center; animation: fadeIn 0.3s ease;">
@@ -1415,16 +1506,31 @@ if (typeof window.FshareBridge === 'undefined') {
                 const response = await fetch('/api/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url, name }) });
                 const data = await response.json();
                 if (data.success) {
-                    if (btn) btn.innerHTML = `✅ Added`;
-                    alert(`✅ Added to queue: ${data.normalized}`);
-                    await this.runFullPollCheck();
+                    this.showNotification('Added to queue successfully', 'success');
+                    if (btn) {
+                        btn.innerHTML = `<span class="material-icons">check</span> Added`;
+                        btn.classList.add('btn-success');
+                    }
+                    // Refresh if dashboard list exists
+                    if (document.getElementById('dash-minified-queue')) {
+                        await this.runFullPollCheck();
+                    }
                 } else {
-                    if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
-                    alert('❌ Failed to add: ' + (data.error || 'Unknown error'));
+                    const msg = data.error || 'Failed to add';
+                    if (msg.toLowerCase().includes('authorized') || msg.toLowerCase().includes('login') || msg.toLowerCase().includes('session')) {
+                        this.showNotification('Session Invalid. Please login in Settings.', 'error');
+                        // Optional: automatically prompt login or redirect?
+                        // For now, notification is enough as requested.
+                    } else {
+                        this.showNotification(`Failed: ${msg}`, 'error');
+                    }
+                    if (btn) btn.innerHTML = originalHtml || 'Download';
                 }
-            } catch (error) {
-                console.error('Download error:', error);
-                if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
+            } catch (e) {
+                this.showNotification('Network Error: Failed to reach server', 'error');
+                if (btn) btn.innerHTML = originalHtml || 'Download';
+            } finally {
+                if (btn && !btn.classList.contains('btn-success')) btn.disabled = false;
             }
         }
 
