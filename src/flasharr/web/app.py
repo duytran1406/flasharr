@@ -5,6 +5,7 @@ Creates and configures the Flask application.
 """
 
 import logging
+import time
 from pathlib import Path
 from flask import Flask
 
@@ -72,7 +73,7 @@ def create_app(config_override: dict = None) -> Flask:
                 version = f.read().strip()
         except:
             pass
-        return dict(version=version)
+        return dict(version=version, now=int(time.time()))
 
     app.register_blueprint(main_bp)
     app.register_blueprint(api_bp, url_prefix="/api")

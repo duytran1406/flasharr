@@ -57,7 +57,7 @@
     <!-- Global FAB (Add Download) -->
 
     <!-- Styles -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ version }}&t={{ now }}">
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.png') }}">
     <style>
         /* Context Menu Styles */
@@ -178,23 +178,27 @@
         <main class="main-content">
             <!-- Global Status Bar (Pane B Header) -->
             <header class="global-status-bar">
-                <div class="status-bar-left">
+                <div
+                    style="width: 100%; max-width: 1600px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; height: 100%;">
                     <div class="status-bar-left">
-                        {% block header_content %}
-                        <!-- Default Header Content (Fallback) -->
-                        <h2 class="section-title">Fshare Nexus</h2>
-                        {% endblock %}
+                        <div class="status-bar-left">
+                            {% block header_content %}
+                            <!-- Default Header Content (Fallback) -->
+                            <h2 class="section-title">Fshare Nexus</h2>
+                            {% endblock %}
+                        </div>
                     </div>
-                </div>
 
-                <div class="status-bar-right">
-                    <div class="global-stat down">
-                        <label><span class="material-icons" style="font-size: 10px;">arrow_downward</span> Down</label>
-                        <span class="value" id="global-down-speed">0 B/s</span>
-                    </div>
-                    <div class="global-stat">
-                        <label>Daily Quota</label>
-                        <span class="value" id="global-quota">-- / --</span>
+                    <div class="status-bar-right">
+                        <div class="global-stat down">
+                            <label><span class="material-icons" style="font-size: 10px;">arrow_downward</span>
+                                Down</label>
+                            <span class="value" id="global-down-speed">0 B/s</span>
+                        </div>
+                        <div class="global-stat">
+                            <label>Daily Quota</label>
+                            <span class="value" id="global-quota">-- / --</span>
+                        </div>
                     </div>
                 </div>
             </header>
@@ -227,8 +231,8 @@
     </div>
 
     <!-- Scripts -->
-    <script src="{{ url_for('static', filename='js/websocket-client.js') }}?v={{ version }}"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}?v={{ version }}"></script>
+    <script src="{{ url_for('static', filename='js/websocket-client.js') }}?v={{ version }}&t={{ now }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v={{ version }}&t={{ now }}"></script>
     <script>
         // Header search functionality
         function initHeaderSearch() {
