@@ -230,17 +230,24 @@
     <script src="{{ url_for('static', filename='js/app.js') }}?v={{ version }}"></script>
     <script>
         // Header search functionality
-        const headerSearch = document.getElementById('header-search-input');
-        if (headerSearch) {
-            headerSearch.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') {
-                    const query = e.target.value;
-                    if (query) {
-                        window.location.href = `/search?q=${encodeURIComponent(query)}`;
+        function initHeaderSearch() {
+            const headerSearch = document.getElementById('header-search-input');
+            if (headerSearch) {
+                // Remove old listeners to be safe (clone node approach if needed, but simple re-attach usually okay if single page)
+                // Better: Check if already attached or just use event delegation
+                headerSearch.onkeypress = (e) => {
+                    if (e.key === 'Enter') {
+                        const query = e.target.value;
+                        if (query) {
+                            window.location.href = `/search?q=${encodeURIComponent(query)}`;
+                        }
                     }
-                }
-            });
+                };
+            }
         }
+
+        // Init on load
+        initHeaderSearch();
 
         // Theme Toggle Logic
         const themeBtn = document.getElementById('theme-toggle-btn');
@@ -329,6 +336,8 @@
                         const newHeaderLeft = doc.querySelector('.status-bar-left');
                         if (newHeaderLeft && headerLeft) {
                             headerLeft.innerHTML = newHeaderLeft.innerHTML;
+                            // Re-init header search listener
+                            if (typeof initHeaderSearch === 'function') initHeaderSearch();
                         }
 
                         // Execute any scripts in the new content
