@@ -96,6 +96,7 @@ class DownloadClientProtocol(Protocol):
         filename: Optional[str] = None,
         package_name: Optional[str] = None,
         category: str = "Uncategorized",
+        skip_resolve: bool = False,
     ) -> bool:
         """Add a download to the client."""
         ...
@@ -306,12 +307,14 @@ class SABnzbdEmulator:
             nzo_id = str(uuid.uuid4())
             
             # Send to download client
+            # Pass skip_resolve=True because we just resolved it manually above
             success = self.downloader.add_download(
                 download_url,
                 filename=normalized_filename,
                 package_name=parsed.title,
                 category=resolved_category,
                 task_id=nzo_id,
+                skip_resolve=True,
             )
             
             if not success:
@@ -802,7 +805,8 @@ class SABnzbdEmulator:
                     self._history[nzo_id] = item
                 except Exception as e:
                     logger.warning(f"Failed to restore history item {nzo_id}: {e}")
-            
+                    
             logger.info(f"Queue restored: {len(self._queue)} items, {len(self._history)} history")
+            
         except Exception as e:
             logger.error(f"Failed to load queue: {e}")

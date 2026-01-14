@@ -180,7 +180,16 @@ class FshareClient:
             FshareConnectionError: If connection fails
         """
         try:
-            logger.info("Logging into Fshare...")
+            import inspect
+            try:
+                caller_frame = inspect.stack()[1]
+                caller_name = caller_frame.function
+                caller_line = caller_frame.lineno
+                location = f"{caller_name}:{caller_line}"
+            except:
+                location = "Unknown"
+                
+            logger.info(f"Logging into Fshare... (Called by: {location})")
             
             # Clear existing cookies to ensure a fresh session
             self.session.cookies.clear()

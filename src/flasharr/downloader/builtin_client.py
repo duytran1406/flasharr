@@ -89,6 +89,7 @@ class BuiltinDownloadClient:
         package_name: Optional[str] = None,
         category: str = "Uncategorized",
         task_id: Optional[str] = None,
+        skip_resolve: bool = False,
     ) -> bool:
         """
         Add a download to the engine.
@@ -98,13 +99,14 @@ class BuiltinDownloadClient:
             filename: Target filename
             package_name: Package/group name
             category: Download category
+            skip_resolve: If True, skip Fshare URL resolution (assume direct link)
             
         Returns:
             True if added successfully
         """
         try:
             # Check if this is a Fshare URL that needs resolution
-            if self.fshare_handler.is_fshare_url(url):
+            if not skip_resolve and self.fshare_handler.is_fshare_url(url):
                 logger.info(f"Resolving Fshare URL: {url}")
                 
                 # Resolve to direct download link
