@@ -38,6 +38,12 @@ def settings_page():
     return render_template("settings.html")
 
 
+@main_bp.route("/design-preview")
+def design_preview():
+    """Render the wireframe for design validation."""
+    return render_template("wireframe_search.html")
+
+
 @main_bp.route("/about")
 def about_page():
     """Render the about/documentation page."""

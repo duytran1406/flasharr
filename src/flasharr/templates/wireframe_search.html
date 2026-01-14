@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search Wireframe</title>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-body: #0f172a;
+            --bg-card: #1e293b;
+            --surface: #1e293b;
+            --text-color: #f1f5f9;
+            --text-muted: #94a3b8;
+            --primary: #06b6d4;
+            --border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            background: var(--bg-body);
+            color: var(--text-color);
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 20px;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 0;
+            padding: 1rem;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .search-input {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 12px 16px;
+            color: white;
+            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .view-toggle {
+            display: flex;
+            gap: 4px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 4px;
+            border-radius: 8px;
+        }
+
+        .btn-icon {
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            border-radius: 6px;
+        }
+
+        .btn-icon.active {
+            background: rgba(6, 182, 212, 0.2);
+            color: var(--primary);
+        }
+
+        /* Filter Toolbar */
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 1rem 1.5rem;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .chip {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+
+        .chip.active {
+            background: rgba(6, 182, 212, 0.15);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+
+        .sort-dropdown {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-color);
+        }
+
+        /* List Header */
+        .list-header {
+            display: flex;
+            padding: 12px 24px;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            border-bottom: 1px solid var(--border-color);
+            margin-top: 1rem;
+        }
+
+        /* Columns */
+        .col-name {
+            flex: 1;
+            min-width: 300px;
+        }
+
+        .col-quality {
+            flex: 0 0 100px;
+        }
+
+        .col-tags {
+            flex: 0 0 120px;
+            text-align: center;
+        }
+
+        .col-size {
+            flex: 0 0 100px;
+            text-align: right;
+        }
+
+        .col-se {
+            flex: 0 0 80px;
+            text-align: center;
+        }
+
+        .col-score {
+            flex: 0 0 80px;
+            text-align: right;
+        }
+
+        .col-action {
+            flex: 0 0 120px;
+            text-align: right;
+        }
+
+        /* Row */
+        .row {
+            display: flex;
+            padding: 16px 24px;
+            align-items: center;
+            border-bottom: 1px solid var(--border-color);
+            transition: background 0.2s;
+        }
+
+        .row:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .title {
+            font-weight: 600;
+            font-size: 0.95rem;
+            color: #f8fafc;
+        }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 700;
+        }
+
+        .badge-1080p {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .badge-tag {
+            background: rgba(6, 182, 212, 0.15);
+            color: var(--primary);
+            border: 1px solid rgba(6, 182, 212, 0.3);
+        }
+
+        .meta-text {
+            font-size: 0.9rem;
+            color: #cbd5e1;
+        }
+
+        .action-btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: 1px solid var(--border-color);
+            background: transparent;
+            color: var(--text-muted);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+
+        .action-download {
+            background: var(--primary);
+            color: white;
+            border: none;
+            margin-right: 8px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div
+        style="max-width: 1200px; margin: 0 auto; background: var(--bg-card); border-radius: 12px; overflow: hidden; border: 1px solid var(--border-color);">
+
+        <!-- Header -->
+        <div class="header">
+            <div class="search-input">
+                <span class="material-icons">search</span>
+                <span>Avengers Age of Ultron...</span>
+            </div>
+            <div class="view-toggle">
+                <button class="btn-icon"><span class="material-icons">grid_view</span></button>
+                <button class="btn-icon active"><span class="material-icons">view_list</span></button>
+            </div>
+        </div>
+
+        <!-- Filter Toolbar -->
+        <div class="toolbar">
+            <div class="chip active">
+                <span class="material-icons" style="font-size: 16px;">check</span> Vietsub
+            </div>
+            <div class="chip">
+                <span class="material-icons" style="font-size: 16px;">add</span> Vietdub
+            </div>
+
+            <div style="flex: 1"></div>
+
+            <button class="sort-dropdown">
+                <span class="material-icons" style="font-size: 18px;">sort</span>
+                Sort: Relevance
+            </button>
+            <span
+                style="font-size: 0.85rem; color: var(--text-muted); margin-left: 1rem; padding-left: 1rem; border-left: 1px solid var(--border-color);">Found
+                23 results</span>
+        </div>
+
+        <!-- List Header -->
+        <div class="list-header">
+            <div class="col-name">Name</div>
+            <div class="col-quality">Quality</div>
+            <div class="col-tags">Tags</div>
+            <div class="col-size">Size</div>
+            <div class="col-se">S/E</div>
+            <div class="col-score">Score</div>
+            <div class="col-action">Action</div>
+        </div>
+
+        <!-- Row 1 -->
+        <div class="row">
+            <div class="col-name">
+                <div class="title">Avengers Age Of Ultron -W4NK3R-KM</div>
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">original_filename.mkv</div>
+            </div>
+            <div class="col-quality"><span class="badge badge-1080p">1080P</span></div>
+            <div class="col-tags">
+                <span class="badge badge-tag">VS</span>
+            </div>
+            <div class="col-size meta-text">19.79 GB</div>
+            <div class="col-se meta-text">--</div>
+            <div class="col-score meta-text"><span class="material-icons"
+                    style="font-size: 14px; vertical-align: middle; color: gold;">star</span> 35</div>
+            <div class="col-action">
+                <button class="action-btn action-download"><span class="material-icons"
+                        style="font-size: 18px;">download</span></button>
+                <button class="action-btn"><span class="material-icons"
+                        style="font-size: 18px;">content_copy</span></button>
+            </div>
+        </div>
+
+        <!-- Row 2 -->
+        <div class="row">
+            <div class="col-name">
+                <div class="title">Captain America: Civil War</div>
+                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 4px;">
+                    Captain.America.Civil.War.2016.1080p.BluRay.x264.VPPV.mkv</div>
+            </div>
+            <div class="col-quality"><span class="badge badge-1080p">1080P</span></div>
+            <div class="col-tags">
+                <span class="badge badge-tag">VS</span>
+                <span class="badge badge-tag"
+                    style="color: #a855f7; border-color: rgba(168, 85, 247, 0.3); background: rgba(168, 85, 247, 0.15);">VD</span>
+            </div>
+            <div class="col-size meta-text">22.15 GB</div>
+            <div class="col-se meta-text">--</div>
+            <div class="col-score meta-text"><span class="material-icons"
+                    style="font-size: 14px; vertical-align: middle; color: gold;">star</span> 98</div>
+            <div class="col-action">
+                <button class="action-btn action-download"><span class="material-icons"
+                        style="font-size: 18px;">download</span></button>
+                <button class="action-btn"><span class="material-icons"
+                        style="font-size: 18px;">content_copy</span></button>
+            </div>
+        </div>
+
+    </div>
+
+</body>
+
+</html>
