@@ -596,13 +596,21 @@ if (typeof window.FshareBridge === 'undefined') {
 
             if (!fd) return;
 
+            // Global Status Bar Updates
+            this.setText('global-down-speed', fd.speed || '0 B/s');
+            this.setText('global-up-speed', '0 B/s'); // Placeholder until upload speed is available
+
+            const primary = fd.primary_account || {};
+            const isPremium = primary.premium || false;
+            const isValid = primary.valid || false;
+            this.setText('global-quota', primary.traffic_left || '-- / --');
+
+            // Legacy/Other Updates
             this.setText('header-active', fd.active || 0);
             this.updateStatusIndicator('network-status-indicator', fd.connected);
             this.updateStatusIndicator('pyload-status-indicator', fd.connected);
 
-            const primary = fd.primary_account || {};
-            const isPremium = primary.premium || primary.valid;
-            this.updateBadge('fshare-account-status', isPremium, isPremium ? 'PREMIUM' : 'N/A');
+            this.updateBadge('fshare-account-status', isValid, isPremium ? 'PREMIUM' : (isValid ? 'FREE' : 'N/A'));
             this.setText('fshare-daily-quota', primary.traffic_left || '-- / --');
 
             this.setText('active-downloads-count', String(fd.active || 0).padStart(2, '0'));
@@ -621,9 +629,9 @@ if (typeof window.FshareBridge === 'undefined') {
             const footerDot = document.getElementById('footer-account-dot');
             const footerStatus = document.getElementById('footer-account-status');
             if (footerDot && footerStatus) {
-                footerDot.style.background = isPremium ? '#22c55e' : '#64748b';
+                footerDot.style.background = isPremium ? '#22c55e' : (isValid ? '#eab308' : '#64748b');
                 footerDot.style.boxShadow = isPremium ? '0 0 10px rgba(34, 197, 94, 0.4)' : 'none';
-                footerStatus.textContent = isPremium ? 'PREMIUM' : 'FREE';
+                footerStatus.textContent = isPremium ? 'PREMIUM' : (isValid ? 'FREE' : 'N/A');
             }
         }
 
@@ -855,18 +863,11 @@ if (typeof window.FshareBridge === 'undefined') {
                 }
             }
 
-            // Details Row Update (Actions)
+            // Details Row Update (Actions Removed as per request)
             const detailsRow = document.getElementById(`details-${d.fid}`);
             if (detailsRow) {
-                const actionContainer = detailsRow.querySelector('.details-content');
-                if (actionContainer) {
-                    const toggleBtn = canToggle ? `<button class="icon-btn" onclick="bridge.toggleDownload('${d.fid}'); event.stopPropagation();"><span class="material-icons" style="font-size: 20px">${isRunning ? 'pause' : 'play_arrow'}</span></button>` : '';
-                    const retryBtn = state === 'error' ? `<button class="icon-btn" onclick="bridge.retryDownload('${d.fid}'); event.stopPropagation();" style="color: #fbbf24;"><span class="material-icons" style="font-size: 20px">replay</span></button>` : '';
-                    const actionBtns = `<div style="display: flex; gap: 0.5rem; align-items: center;">${retryBtn}${toggleBtn}<button class="icon-btn delete-btn" onclick="bridge.deleteDownload('${d.fid}'); event.stopPropagation();"><span class="material-icons" style="font-size: 20px">delete_outline</span></button></div>`;
-
-                    const newHtml = `<span style="font-size: 0.8rem; font-weight: 600; color: var(--text-muted); margin-right: auto;">Actions & Controls:</span> ${actionBtns}`;
-                    if (actionContainer.innerHTML !== newHtml) actionContainer.innerHTML = newHtml;
-                }
+                // If it exists (legacy or other view), just hide it
+                detailsRow.style.display = 'none';
             }
 
             return true;
@@ -877,8 +878,8 @@ if (typeof window.FshareBridge === 'undefined') {
             if (!container) return;
 
             // If count mismatch or first load, re-render
-            const currentRows = container.querySelectorAll('tr');
-            if (currentRows.length !== downloads.length * 2 || downloads.length === 0) {
+            const currentRows = container.querySelectorAll('.main-row');
+            if (currentRows.length !== downloads.length || downloads.length === 0) {
                 container.innerHTML = downloads.length ? downloads.map(d => this.createDashboardDownloadRow(d)).join('') : `<tr><td colspan="8" style="text-align: center; padding: 2rem; color: var(--text-muted);">No active downloads</td></tr>`;
                 return;
             }
@@ -912,9 +913,9 @@ if (typeof window.FshareBridge === 'undefined') {
 
             // Simple heuristic: if length matches and IDs match, update. Else re-render.
             let match = true;
-            if (currentRows.length === downloads.length * 2) {
+            if (currentRows.length === downloads.length) {
                 for (let i = 0; i < downloads.length; i++) {
-                    if (currentRows[i * 2].id !== `row-${downloads[i].fid}`) {
+                    if (currentRows[i].id !== `row-${downloads[i].fid}`) {
                         match = false;
                         break;
                     }
@@ -1010,47 +1011,44 @@ if (typeof window.FshareBridge === 'undefined') {
             const isRunning = state === 'running';
             const contextMenuAttr = showActions ? `oncontextmenu="bridge.showContextMenu(event, '${d.fid}')"` : '';
 
-            const toggleBtn = canToggle ? `<button class="icon-btn" onclick="bridge.toggleDownload('${d.fid}'); event.stopPropagation();"><span class="material-icons" style="font-size: 20px">${isRunning ? 'pause' : 'play_arrow'}</span></button>` : '';
-            const retryBtn = state === 'error' ? `<button class="icon-btn" onclick="bridge.retryDownload('${d.fid}'); event.stopPropagation();" style="color: #fbbf24;"><span class="material-icons" style="font-size: 20px">replay</span></button>` : '';
-            const actionBtns = `<div style="display: flex; gap: 0.5rem; align-items: center; justify-content: center;">${retryBtn}${toggleBtn}<button class="icon-btn delete-btn" onclick="bridge.deleteDownload('${d.fid}'); event.stopPropagation();"><span class="material-icons" style="font-size: 20px">delete_outline</span></button></div>`;
+            // Note: actionBtns removed from main row as per request.
+            // Controls now predominantly via Context Menu.
 
             return `
             <tr id="row-${d.fid}" class="main-row row-${state}" ${contextMenuAttr}>
                 <!-- 1. NAME -->
-                <td class="cell-name" style="width: 200px; max-width: 200px; position: relative;">
-                    <div class="download-name" title="${this.escapeHtml(d.name)}" style="width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600;">${this.escapeHtml(d.name)}</div>
+                <td class="cell-name" style="width: 300px; max-width: 300px; position: relative;">
+                    <div class="download-name" title="${this.escapeHtml(d.name)}" style="width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 0.9rem;">${this.escapeHtml(d.name)}</div>
                 </td>
                 <!-- 2. SIZE -->
-                <td class="cell-size" style="font-family: 'Roboto Mono', monospace; font-size: 0.85rem; width: 100px;">${d.size}</td>
+                <td class="cell-size" style="font-family: 'Roboto Mono', monospace; font-size: 0.76rem; width: 100px;">${d.size}</td>
                 <!-- 3. PROGRESS -->
                 <td class="cell-progress" style="width: 220px;">
                     <div style="display: flex; align-items: center; gap: 8px; width: 100%;">
                         <div class="progress-bar" style="flex: 1; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; margin: 0;">
                             <div class="progress-fill" style="width: ${d.progress}%; height: 100%; background: #3b82f6; transition: width 0.3s ease;"></div>
                         </div>
-                        <span class="progress-text" style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); min-width: 40px;">${d.progress}%</span>
+                        <span class="progress-text" style="font-size: 0.68rem; font-weight: 700; color: var(--text-muted); min-width: 40px;">${d.progress}%</span>
                     </div>
                 </td>
                 <!-- 4. STATUS -->
                 <td class="cell-status" style="width: 100px;">
                     <div style="display: flex; flex-direction: column; gap: 4px;">
-                        <span class="status-badge ${state}" style="width: fit-content;">${displayStatus}</span>
+                        <span class="status-badge ${state}" style="width: fit-content; font-size: 0.68rem;">${displayStatus}</span>
                         <button class="icon-btn error-view-btn" onclick="bridge.showError('${this.escapeHtml(d.error_message)}'); event.stopPropagation();" 
                                 style="color: #ef4444; padding: 0; width: fit-content; display: ${state === 'error' && d.error_message ? 'flex' : 'none'}; align-items: center; gap: 4px;">
-                            <span class="material-icons" style="font-size: 14px;">error_outline</span> <span style="font-size: 0.7rem;">View Error</span>
+                            <span class="material-icons" style="font-size: 13px;">error_outline</span> <span style="font-size: 0.63rem;">View Error</span>
                         </button>
                     </div>
                 </td>
                 <!-- 5. SPEED -->
-                <td class="cell-speed" style="font-family: 'Roboto Mono', monospace; font-size: 0.85rem; width: 100px;">${isRunning ? d.speed : '-'}</td>
+                <td class="cell-speed" style="font-family: 'Roboto Mono', monospace; font-size: 0.76rem; width: 100px;">${isRunning ? d.speed : '-'}</td>
                 <!-- 6. ETA -->
-                <td class="cell-eta" style="font-family: 'Roboto Mono', monospace; font-size: 0.85rem; width: 100px;">${d.eta}</td>
+                <td class="cell-eta" style="font-family: 'Roboto Mono', monospace; font-size: 0.76rem; width: 100px;">${d.eta}</td>
                 <!-- 7. CATEGORY -->
-                <td class="cell-category" style="width: 120px;"><span class="category-badge cat-${(d.category || '').toLowerCase()}">${d.category || 'Uncategorized'}</span></td>
+                <td class="cell-category" style="width: 120px;"><span class="category-badge cat-${(d.category || '').toLowerCase()}" style="font-size: 0.63rem;">${d.category || 'Uncategorized'}</span></td>
                 <!-- 8. ADDED -->
-                <td class="cell-added" style="font-size: 0.85rem; color: var(--text-muted); width: 130px;">${this.formatAddedDate(d.added)}</td>
-                <!-- 9. ACTIONS -->
-                ${showActions ? `<td class="cell-actions" style="width: 100px;">${actionBtns}</td>` : ''}
+                <td class="cell-added" style="font-size: 0.76rem; color: var(--text-muted); width: 150px;">${this.formatAddedDate(d.added)}</td>
             </tr>`;
         }
 
@@ -1457,6 +1455,8 @@ if (typeof window.FshareBridge === 'undefined') {
             const isRunning = ['running', 'downloading', 'starting', 'extracting'].includes(item.status.toLowerCase());
             document.getElementById('menu-resume').style.display = isRunning ? 'none' : 'flex';
             document.getElementById('menu-pause').style.display = isRunning ? 'flex' : 'none';
+
+            // Ensure Retry is visible for error items
             document.getElementById('menu-retry').style.display = (item.status.toLowerCase() === 'error' || item.status.toLowerCase() === 'failed') ? 'flex' : 'none';
 
             menu.style.display = 'block';
@@ -1476,6 +1476,74 @@ if (typeof window.FshareBridge === 'undefined') {
 
             menu.style.left = x + 'px';
             menu.style.top = y + 'px';
+        }
+
+        // Details Modal Logic
+        showDetailsModal(fid) {
+            // If fid is provided, we can fetch specific details.
+            // For now, we use the data we have in this.downloads
+            const item = this.downloads.find(d => d.fid === fid);
+            if (!item) return;
+
+            this.currentDetailFid = fid;
+            document.getElementById('details-modal-title').textContent = item.name;
+            document.getElementById('details-modal').style.display = 'flex';
+
+            // Reset Tabs
+            this.switchDetailsTab('files');
+
+            // Populate Files (Mock for now or use item.files if available)
+            const filesContainer = document.getElementById('details-content-files');
+            if (item.files && item.files.length > 0) {
+                filesContainer.innerHTML = item.files.map(f => `
+                    <div style="padding: 0.5rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between;">
+                        <span style="font-size: 0.85rem;">${this.escapeHtml(f.name || item.name)}</span>
+                        <span style="font-size: 0.8rem; font-family: 'Roboto Mono'; color: var(--text-muted);">${f.size || item.size}</span>
+                    </div>
+                 `).join('');
+            } else {
+                // Fallback if no specific file list
+                filesContainer.innerHTML = `
+                    <div style="padding: 0.5rem; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between;">
+                        <span style="font-size: 0.85rem;">${this.escapeHtml(item.name)}</span>
+                        <span style="font-size: 0.8rem; font-family: 'Roboto Mono'; color: var(--text-muted);">${item.size}</span>
+                    </div>`;
+            }
+
+            // Populate Log (Mock or use error message)
+            const logContainer = document.getElementById('details-content-log');
+            if (item.error_message) {
+                logContainer.innerHTML = `<div style="color: var(--error); font-family: 'Roboto Mono'; font-size: 0.8rem;">${this.escapeHtml(item.error_message)}</div>`;
+            } else {
+                logContainer.innerHTML = `<div style="color: var(--text-muted); font-style: italic;">No recent errors.</div>`;
+            }
+
+            // Peers (Placeholder)
+            document.getElementById('details-content-peers').innerHTML = `<div style="color: var(--text-muted);">Direct Download - No peers data via Fshare API.</div>`;
+        }
+
+        closeDetailsModal() {
+            document.getElementById('details-modal').style.display = 'none';
+            this.currentDetailFid = null;
+        }
+
+        switchDetailsTab(tabName) {
+            // Tabs: files, peers, log
+            ['files', 'peers', 'log'].forEach(t => {
+                document.getElementById(`details-content-${t}`).style.display = (t === tabName) ? 'block' : 'none';
+                const btn = document.getElementById(`tab-btn-${t}`);
+                if (btn) {
+                    if (t === tabName) {
+                        btn.classList.add('active');
+                        btn.style.borderBottom = '2px solid var(--primary)';
+                        btn.style.color = 'var(--text-color)';
+                    } else {
+                        btn.classList.remove('active');
+                        btn.style.borderBottom = '2px solid transparent';
+                        btn.style.color = 'var(--text-muted)';
+                    }
+                }
+            });
         }
     }
 

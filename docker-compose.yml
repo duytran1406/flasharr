@@ -10,9 +10,9 @@ services:
     env_file:
       - /mnt/appdata/Flasharr/.env
     volumes:
-      - /mnt/appdata/Flasharr/data:/app/data
+      - ./data:/app/data
       - /data/fshare-downloader:/downloads
-      - /root/Flasharr/src/flasharr/static:/app/src/flasharr/static
+      - ./src/flasharr/static:/app/src/flasharr/static
     environment:
       # Server configuration
       INDEXER_PORT: 8484

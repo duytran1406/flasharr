@@ -76,8 +76,9 @@ class WebSocketServer:
     - Heartbeat (keep connections alive)
     """
     
-    def __init__(self, engine):
+    def __init__(self, engine, sabnzbd=None):
         self.engine = engine
+        self.sabnzbd = sabnzbd
         self.clients: Dict[str, WebSocketClient] = {}
         self._running = False
         self._heartbeat_task: Optional[asyncio.Task] = None
@@ -318,9 +319,18 @@ class WebSocketServer:
         # Get current stats
         stats = self.engine.get_engine_stats() if hasattr(self.engine, 'get_engine_stats') else {}
         
+        # Use sabnzbd for counts if available (more accurate for history/queue)
+        if self.sabnzbd:
+            counts = self.sabnzbd.get_counts()
+            active_val = counts.get("active", 0)
+            total_val = counts.get("total", 0)
+        else:
+            active_val = stats.get("active_downloads", 0)
+            total_val = stats.get("queue_size", 0)
+
         current_stats = {
-            "a": stats.get("active_downloads", 0),
-            "q": stats.get("queue_size", 0),
+            "a": active_val,
+            "q": total_val,
             "sp": int(stats.get("total_speed", 0))
         }
         
@@ -384,11 +394,14 @@ class WebSocketServer:
 _ws_server: Optional[WebSocketServer] = None
 
 
-def get_websocket_server(engine=None) -> WebSocketServer:
+def get_websocket_server(engine=None, sabnzbd=None) -> WebSocketServer:
     """Get or create global WebSocket server."""
     global _ws_server
     if _ws_server is None and engine:
-        _ws_server = WebSocketServer(engine)
+        _ws_server = WebSocketServer(engine, sabnzbd)
+    elif _ws_server and sabnzbd and not _ws_server.sabnzbd:
+        # Late binding of sabnzbd service
+        _ws_server.sabnzbd = sabnzbd
     return _ws_server
 
 

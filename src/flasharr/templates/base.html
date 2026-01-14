@@ -5,14 +5,60 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Flasharr{% endblock %}</title>
-    <!-- Modals -->
+    <!-- Details Modal (Pane C) -->
+    <div id="details-modal" class="modal-overlay" style="display: none; align-items: center; justify-content: center;">
+        <div class="elegant-modal" role="dialog" aria-modal="true" style="max-width: 650px; width: 95%;">
+            <div class="modal-header" style="background: var(--surface-variant);">
+                <h3 class="modal-title" id="details-modal-title">Download Details</h3>
+                <button type="button" class="close-modal-btn" onclick="bridge.closeDetailsModal()">
+                    <span class="material-icons">close</span>
+                </button>
+            </div>
+            <div class="modal-body" style="padding: 0;">
+                <div class="details-tabs"
+                    style="display: flex; border-bottom: 1px solid var(--border-color); background: var(--surface);">
+                    <button class="tab-btn active" onclick="bridge.switchDetailsTab('files')" id="tab-btn-files"
+                        style="flex: 1; padding: 1rem; border: none; background: transparent; cursor: pointer; color: var(--text-color); font-weight: 600; border-bottom: 2px solid var(--primary);">Files</button>
+                    <button class="tab-btn" onclick="bridge.switchDetailsTab('peers')" id="tab-btn-peers"
+                        style="flex: 1; padding: 1rem; border: none; background: transparent; cursor: pointer; color: var(--text-muted); font-weight: 600; border-bottom: 2px solid transparent;">Peers/Trackers</button>
+                    <button class="tab-btn" onclick="bridge.switchDetailsTab('log')" id="tab-btn-log"
+                        style="flex: 1; padding: 1rem; border: none; background: transparent; cursor: pointer; color: var(--text-muted); font-weight: 600; border-bottom: 2px solid transparent;">Log</button>
+                </div>
+                <div id="details-content-files" class="details-pane"
+                    style="padding: 1rem; max-height: 400px; overflow-y: auto;">
+                    <!-- Files List -->
+                </div>
+                <div id="details-content-peers" class="details-pane"
+                    style="padding: 1rem; display: none; max-height: 400px; overflow-y: auto;">
+                    <!-- Peers/Trackers -->
+                </div>
+                <div id="details-content-log" class="details-pane"
+                    style="padding: 1rem; display: none; max-height: 400px; overflow-y: auto;">
+                    <!-- Log -->
+                </div>
+            </div>
+            <div class="modal-footer"
+                style="justify-content: flex-end; padding: 1rem; border-top: 1px solid var(--border-color);">
+                <button class="btn btn-secondary" onclick="bridge.closeDetailsModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Generic Modal Overlay -->
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
-        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Roboto+Mono:wght@400;500&display=swap"
         rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+
+
+    <!-- Global FAB (Add Download) -->
+    <button class="fab-add" onclick="bridge.showAddModal()" aria-label="Add Download" style="display: flex;">
+        <span class="material-icons">add</span>
+    </button>
+
     <!-- Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.png') }}">
@@ -120,21 +166,46 @@
                     <span class="nav-text">About</span>
                 </a>
             </nav>
+
+            <div class="sidebar-footer">
+                <button class="icon-btn" id="theme-toggle-btn" title="Toggle Theme"
+                    style="width: 100%; border-radius: 8px; justify-content: center; display: flex; gap: 10px; padding: 10px; background: transparent; border: 1px solid var(--outline);">
+                    <span class="material-icons">dark_mode</span>
+                    <span class="nav-text">Dark Mode</span>
+                </button>
+            </div>
         </aside>
 
         <!-- Main Content Wrapper -->
         <main class="main-content">
-            <!-- Header -->
-            <header class="header">
-                {% if request.path == '/' %}
-                <div class="search-container">
-                    <input type="text" class="search-input" placeholder="Search Fshare..." id="header-search-input"
-                        autocomplete="off">
-                    <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
+            <!-- Global Status Bar (Pane B Header) -->
+            <header class="global-status-bar">
+                <div class="status-bar-left">
+                    {% if request.path == '/' %}
+                    <div class="search-container" style="width: 300px;">
+                        <input type="text" class="search-input" placeholder="Search Fshare..." id="header-search-input"
+                            autocomplete="off" style="background: var(--surface); border: 1px solid var(--outline);">
+                        <div class="autocomplete-dropdown" id="autocomplete-dropdown"></div>
+                    </div>
+                    {% else %}
+                    <h2 class="section-title">{% block section_title %}Fshare Nexus{% endblock %}</h2>
+                    {% endif %}
                 </div>
-                {% elif request.path in ['/downloads', '/search'] %}
-                {% block custom_header %}{% endblock %}
-                {% endif %}
+
+                <div class="status-bar-right">
+                    <div class="global-stat down">
+                        <label><span class="material-icons" style="font-size: 10px;">arrow_downward</span> Down</label>
+                        <span class="value" id="global-down-speed">0 B/s</span>
+                    </div>
+                    <div class="global-stat up">
+                        <label><span class="material-icons" style="font-size: 10px;">arrow_upward</span> Up</label>
+                        <span class="value" id="global-up-speed">0 B/s</span>
+                    </div>
+                    <div class="global-stat">
+                        <label>Daily Quota</label>
+                        <span class="value" id="global-quota">-- / --</span>
+                    </div>
+                </div>
             </header>
 
             <!-- Page Content -->
@@ -174,6 +245,40 @@
                     }
                 }
             });
+        }
+
+        // Theme Toggle Logic
+        const themeBtn = document.getElementById('theme-toggle-btn');
+        if (themeBtn) {
+            function updateThemeUI(isLight) {
+                const icon = themeBtn.querySelector('.material-icons');
+                const text = themeBtn.querySelector('.nav-text');
+                if (isLight) {
+                    icon.textContent = 'light_mode';
+                    text.textContent = 'Light Mode';
+                    themeBtn.style.color = 'var(--primary)';
+                    themeBtn.style.borderColor = 'var(--primary)';
+                } else {
+                    icon.textContent = 'dark_mode';
+                    text.textContent = 'Dark Mode';
+                    themeBtn.style.color = 'var(--text-muted)';
+                    themeBtn.style.borderColor = 'var(--outline)';
+                }
+            }
+
+            // Initial State
+            updateThemeUI(document.body.classList.contains('light-mode'));
+
+            themeBtn.onclick = () => {
+                const isNowLight = document.body.classList.contains('light-mode');
+                // Toggle to opposite
+                const newTheme = isNowLight ? 'dark' : 'light';
+
+                if (window.bridge) {
+                    window.bridge.applyTheme(newTheme);
+                    updateThemeUI(newTheme === 'light');
+                }
+            };
         }
     </script>
     {% block scripts %}{% endblock %}

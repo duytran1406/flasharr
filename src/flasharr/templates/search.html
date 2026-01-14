@@ -483,7 +483,7 @@
 
         function createResultCard(result) {
             const card = document.createElement('div');
-            card.className = 'result-card';
+            card.className = 'result-card'; // CSS handles list/grid transformation based on container class
 
             const qualityBadge = result.quality || '1080P';
             const hasVietsub = result.vietsub || false;
@@ -496,44 +496,53 @@
             const episode = result.episode ? String(result.episode).padStart(2, '0') : '--';
             const seriesBadge = isSeries ? `S${season}E${episode}` : '';
 
+            // Structured content for List/Grid flexibility
             card.innerHTML = `
-            <div class="result-card-header">
-                <div style="flex: 1; min-width: 0; margin-right: 0.5rem;">
-                    <h3 class="result-title" title="${escapeHtml(result.name)}">${escapeHtml(result.name)}</h3>
-                    <div class="result-subtitle" title="${escapeHtml(originalFilename)}">${escapeHtml(originalFilename)}</div>
+            <div class="card-main-content">
+                <div class="result-card-header">
+                    <div class="header-content">
+                        <h3 class="result-title" title="${escapeHtml(result.name)}">${escapeHtml(result.name)}</h3>
+                        <div class="result-tags-inline">
+                             <span class="quality-badge quality-${qualityBadge.toLowerCase()}">${qualityBadge}</span>
+                             ${isSeries ? `<span class="tag tag-series">${seriesBadge}</span>` : ''}
+                             ${hasVietsub ? '<span class="tag tag-vietsub">#VIETSUB</span>' : ''}
+                             ${hasVietdub ? '<span class="tag tag-vietdub">#VIETDUB</span>' : ''}
+                        </div>
+                        <div class="result-subtitle" title="${escapeHtml(originalFilename)}">${escapeHtml(originalFilename)}</div>
+                    </div>
                 </div>
-                <span class="quality-badge quality-${qualityBadge.toLowerCase()}">${qualityBadge}</span>
-            </div>
-            <div class="result-tags">
-                ${isSeries ? `<span class="tag tag-series">${seriesBadge}</span>` : ''}
-                ${hasVietsub ? '<span class="tag tag-vietsub">#VIETSUB</span>' : ''}
-                ${hasVietdub ? '<span class="tag tag-vietdub">#VIETDUB</span>' : ''}
-            </div>
-            <div class="result-meta">
-                <div class="meta-item">
-                    <span class="material-icons">storage</span>
-                    <span>${window.bridge ? window.bridge.formatSize(result.size) : (result.size || 'N/A')}</span>
+
+                <div class="result-meta-grid">
+                     <div class="meta-item meta-size" title="Size">
+                        <span class="material-icons">storage</span>
+                        <span class="meta-value">${window.bridge ? window.bridge.formatSize(result.size) : (result.size || 'N/A')}</span>
+                    </div>
+                    <div class="meta-item meta-score" title="Relevance Score">
+                        <span class="material-icons">star</span>
+                        <span class="meta-value">${score}/100</span>
+                    </div>
+                    ${isSeries ? `
+                    <div class="meta-item meta-season" title="Season/Episode">
+                        <span class="material-icons">tv</span>
+                        <span class="meta-value">${seriesBadge}</span>
+                    </div>` : ''}
                 </div>
-                <div class="meta-item">
-                    <span class="material-icons">star</span>
-                    <span>Score: ${score}/100</span>
-                </div>
             </div>
-            <div style="display: flex; gap: 0.5rem; margin-top: auto;">
-                <button class="download-btn" data-url="${escapeHtml(result.url)}" data-name="${escapeHtml(result.name)}" style="flex: 1;">
+
+            <div class="card-actions">
+                <button class="download-btn" data-url="${escapeHtml(result.url)}" data-name="${escapeHtml(result.name)}">
                     <span class="material-icons">download</span>
-                    <span>Download</span>
+                    <span class="btn-text">Download</span>
                 </button>
-                <button class="copy-btn" data-url="${escapeHtml(result.url)}" title="Copy Link"
-                    style="width: 42px; border-radius: 8px; border: none; background: rgba(255,255,255,0.08); color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s;">
-                    <span class="material-icons" style="font-size: 20px;">content_copy</span>
+                <button class="copy-btn" data-url="${escapeHtml(result.url)}" title="Copy Link">
+                    <span class="material-icons">content_copy</span>
                 </button>
             </div>
             
             <!-- Loading Overlay -->
             <div class="card-overlay">
                 <div class="spinner"></div>
-                <span>Adding to Queue...</span>
+                <span>Adding...</span>
             </div>
         `;
 

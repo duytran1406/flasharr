@@ -51,21 +51,28 @@ def get_stats() -> Dict[str, Any]:
 
         # Get downloader status from SABnzbd service if available
         # or from the engine directly if needed
-        downloader = None
-        if hasattr(current_app, 'sabnzbd') and current_app.sabnzbd:
-            downloader = current_app.sabnzbd.downloader
+        sab = getattr(current_app, 'sabnzbd', None)
+        downloader = sab.downloader if sab else None
+        
+        active_cnt = 0
+        total_cnt = 0
+        total_speed = 0
+        connected = False
+
+        if sab:
+            counts = sab.get_counts()
+            active_cnt = counts.get("active", 0)
+            total_cnt = counts.get("total", 0)
             
-        if downloader:
+            status = downloader.get_status() if downloader else {}
+            total_speed = status.get("total_speed", 0)
+            connected = True
+        elif downloader:
             status = downloader.get_status()
             total_speed = status.get("total_speed", 0)
             active_cnt = status.get("active", 0)
-            total_cnt = status.get("queued", 0) + active_cnt
+            total_cnt = status.get("total", 0) # Fallback
             connected = True
-        else:
-            total_speed = 0
-            active_cnt = 0
-            total_cnt = 0
-            connected = False
 
         return jsonify({
             "status": "ok",
@@ -238,10 +245,13 @@ def delete_download(task_id: str) -> Dict[str, Any]:
             return jsonify({"status": "error", "message": "Downloader not initialized"}), 503
             
         success = current_app.sabnzbd.delete_item(task_id)
-        return jsonify({"status": "ok", "message": "Deleted", "success": success})
+        if not success:
+            return jsonify({"status": "error", "message": "Item not found in queue or history", "success": False}), 404
+            
+        return jsonify({"status": "ok", "message": f"Deleted {task_id}", "success": True})
     except Exception as e:
         logger.error(f"Error deleting download: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return jsonify({"status": "error", "message": str(e), "success": False}), 500
 
 @api_bp.route("/download/delete/<task_id>", methods=["DELETE", "GET"])
 def delete_download_alias(task_id: str):
@@ -493,8 +503,8 @@ def verify_account():
         # Force refresh which calls login() -> check profile -> updates daily quota
         account = current_app.account_manager.refresh_account(primary['email'])
         
-        # Check if valid/premium
-        is_valid = account.get('available', False)
+        # If refresh_account succeeded, the account is valid/functional
+        is_valid = account is not None and 'email' in account
         
         if not is_valid:
             return jsonify({

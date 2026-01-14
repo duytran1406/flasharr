@@ -1,40 +1,50 @@
 :root {
-  /* Oceanholic Dark Theme (Default) */
-  --primary: #76b6c4;
-  --on-primary: #052b32;
-  --primary-container: #1d4d57;
-  --on-primary-container: #b3e7f1;
+  /* Oceanholic Dark Theme (Deep Ocean Brand) */
+  --primary: #1DE9B6;
+  /* Teal A400 */
+  --on-primary: #000000;
+  --primary-container: #004D40;
+  --on-primary-container: #A7FFEB;
 
-  --secondary: #b0ccd3;
-  --on-secondary: #1b343a;
-  --secondary-container: #324b51;
-  --on-secondary-container: #cce8ef;
+  --secondary: #00BFA5;
+  /* Teal A700 */
+  --on-secondary: #000000;
+  --secondary-container: #004D40;
+  --on-secondary-container: #E0F2F1;
 
-  --surface: #0a1215;
-  --on-surface: #dee3e5;
-  --surface-variant: #3f484b;
-  --on-surface-variant: #bfc8cb;
-  --surface-container: #142125;
-  --outline: #899295;
+  --surface: #0F1C24;
+  /* Deep Oceanic Blue-Black */
+  --on-surface: #E0F7FA;
+  /* High Emphasis */
+  --surface-variant: #182936;
+  /* Elevation 1 (Paper) */
+  --on-surface-variant: #B0BEC5;
+  /* Medium Emphasis */
+  --surface-container: #233544;
+  /* Elevation 2 */
+
+  --outline: #2E4552;
+  --error: #CF6679;
 
   --bg-color: var(--surface);
   --text-color: var(--on-surface);
   --text-muted: var(--on-surface-variant);
 
-  --bg-card: var(--surface-container);
-  --bg-card-hover: #1c2b30;
-  --border-color: var(--surface-variant);
+  --bg-card: var(--surface-variant);
+  --bg-card-hover: #233544;
+  --border-color: rgba(29, 233, 182, 0.1);
   --sidebar-bg: var(--surface);
 
-  /* Elevation Shadows (Material M3) */
-  --elevation-1: 0 1px 3px 1px rgba(0, 0, 0, 0.15), 0 1px 2px rgba(0, 0, 0, 0.3);
-  --elevation-2: 0 2px 6px 2px rgba(0, 0, 0, 0.15), 0 1px 2px rgba(0, 0, 0, 0.3);
-  --elevation-3: 0 4px 8px 3px rgba(0, 0, 0, 0.15), 0 1px 3px rgba(0, 0, 0, 0.3);
+  /* Elevation Shadows (Strict M2) */
+  --elevation-1: 0px 2px 1px -1px rgba(0, 0, 0, 0.2), 0px 1px 1px 0px rgba(0, 0, 0, 0.14), 0px 1px 3px 0px rgba(0, 0, 0, 0.12);
+  --elevation-2: 0px 3px 1px -2px rgba(0, 0, 0, 0.2), 0px 2px 2px 0px rgba(0, 0, 0, 0.14), 0px 1px 5px 0px rgba(0, 0, 0, 0.12);
+  --elevation-3: 0px 3px 3px -2px rgba(0, 0, 0, 0.2), 0px 3px 4px 0px rgba(0, 0, 0, 0.14), 0px 1px 8px 0px rgba(0, 0, 0, 0.12);
 
-  --radius-s: 8px;
-  --radius-m: 12px;
-  --radius-l: 16px;
-  --radius-xl: 28px;
+  --radius-s: 4px;
+  /* M2 Shape */
+  --radius-m: 4px;
+  --radius-l: 8px;
+  --radius-xl: 12px;
   --radius-pill: 500px;
 
   --header-height: 64px;
@@ -43,32 +53,41 @@
 }
 
 body.light-mode {
-  /* Arctic Light Theme */
-  --primary: #00677d;
-  --on-primary: #ffffff;
-  --primary-container: #b3ebff;
-  --on-primary-container: #001f27;
+  /* Arctic Light Theme (FShare Brand) */
+  --primary: #D32F2F;
+  /* Crimson Red */
+  --on-primary: #FFFFFF;
+  --primary-container: #FFCDD2;
+  --on-primary-container: #480000;
 
-  --secondary: #4b6269;
-  --on-secondary: #ffffff;
-  --secondary-container: #cee7ef;
-  --on-secondary-container: #061f25;
+  --secondary: #FF5252;
+  /* Accent Red */
+  --on-secondary: #000000;
+  --secondary-container: #FFEBEE;
+  --on-secondary-container: #680005;
 
-  --surface: #f5fbff;
-  --on-surface: #171c1e;
-  --surface-variant: #dbe4e7;
-  --on-surface-variant: #3f484b;
-  --surface-container: #ffffff;
-  --outline: #70797c;
+  --surface: #F4F6F8;
+  /* Light Grey */
+  --on-surface: #212121;
+  --surface-variant: #FFFFFF;
+  /* Paper */
+  --on-surface-variant: #757575;
+  --surface-container: #FFFFFF;
+
+  --outline: #BDBDBD;
+  --error: #D32F2F;
 
   --bg-color: var(--surface);
   --text-color: var(--on-surface);
   --text-muted: var(--on-surface-variant);
 
-  --bg-card: var(--surface-container);
-  --bg-card-hover: #f0f4f8;
-  --border-color: var(--surface-variant);
-  --sidebar-bg: var(--surface);
+  --bg-card: var(--surface-variant);
+  --bg-card-hover: #FAFAFA;
+  --border-color: rgba(0, 0, 0, 0.08);
+  --sidebar-bg: #FFFFFF;
+
+  /* Update border color for light mode consistency */
+  --glass-border: rgba(0, 0, 0, 0.05);
 }
 
 * {
@@ -118,9 +137,20 @@ h4,
   bottom: 0;
   z-index: 100;
   transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: var(--elevation-1);
   border-right: none !important;
   backdrop-filter: none !important;
+}
+
+.sidebar-footer {
+  padding: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  justify-content: center;
+}
+
+.sidebar.collapsed .sidebar-footer {
+  display: flex;
+  /* Keep visible */
 }
 
 .sidebar.collapsed {
@@ -205,13 +235,68 @@ h4,
   margin-left: var(--sidebar-width-collapsed);
 }
 
-/* Header/Toolbar */
-.header {
+/* Global Status Bar (Pane B Header) */
+.global-status-bar {
   height: var(--header-height);
   display: flex;
   align-items: center;
-  padding: 0;
-  margin-bottom: 2rem;
+  justify-content: space-between;
+  padding: 0 2rem;
+  background: var(--surface-variant);
+  border-bottom: 1px solid var(--border-color);
+  box-shadow: var(--elevation-1);
+  margin-bottom: 1.5rem;
+}
+
+.status-bar-left,
+.status-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.global-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  line-height: 1.2;
+}
+
+.global-stat label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.global-stat .value {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.global-stat.down .value {
+  color: var(--primary);
+}
+
+.global-stat.up .value {
+  color: var(--secondary);
+}
+
+/* Hide search input in header on mobile if needed, or collapse stats */
+@media (max-width: 768px) {
+  .global-status-bar {
+    padding: 0 1rem;
+    height: auto;
+    min-height: var(--header-height);
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .status-bar-right {
+    display: none;
+    /* Simplify on mobile */
+  }
 }
 
 /* Elegant Downloads Header */
@@ -590,20 +675,305 @@ h4,
   background: transparent !important;
 }
 
+/* ==========================================================================
+   Search Results (Grid & List)
+   ========================================================================== */
+.search-results-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+  padding: 0.5rem 0;
+}
+
+.search-results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.result-card {
+  background: var(--surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  position: relative;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.result-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--elevation-2);
+  border-color: var(--primary);
+}
+
+/* Header & Title */
+.result-card-header {
+  margin-bottom: 0.75rem;
+}
+
+.result-title {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem 0;
+  line-height: 1.3;
+  color: var(--text-color);
+}
+
+.result-subtitle {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Tags Inline */
+.result-tags-inline {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.25rem;
+}
+
+.quality-badge {
+  font-family: 'Roboto Mono';
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-variant);
+  color: var(--text-color);
+  font-weight: 700;
+  border: 1px solid var(--border-color);
+}
+
+.tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.tag-vietsub {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+
+.tag-vietdub {
+  background: rgba(168, 85, 247, 0.15);
+  color: #c084fc;
+}
+
+.tag-series {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+/* Meta Grid */
+.result-meta-grid {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.meta-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.meta-item .material-icons {
+  font-size: 16px;
+  opacity: 0.7;
+}
+
+.meta-value {
+  font-family: 'Roboto Mono';
+}
+
+/* Actions */
+.card-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: auto;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.download-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  padding: 0.5rem;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.download-btn:hover {
+  background: var(--primary-dark);
+}
+
+.copy-btn {
+  width: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.copy-btn:hover {
+  background: var(--surface-variant);
+  color: var(--text-color);
+}
+
+/* List View Adaptation */
+.search-results-list .result-card {
+  flex-direction: row;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  height: auto;
+}
+
+.search-results-list .card-main-content {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  min-width: 0;
+}
+
+.search-results-list .result-card-header {
+  margin: 0;
+  flex: 2;
+  min-width: 0;
+}
+
+.search-results-list .result-meta-grid {
+  margin: 0;
+  flex: 1;
+  justify-content: flex-end;
+}
+
+.search-results-list .card-actions {
+  margin: 0;
+  padding: 0;
+  border: none;
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.search-results-list .download-btn .btn-text {
+  display: none;
+}
+
+/* Icon only on list to save space */
+.search-results-list .download-btn {
+  width: 40px;
+  padding: 0.4rem;
+}
+
+/* Mobile Adjustments for Search */
+@media (max-width: 768px) {
+
+  /* Force Grid/Card styling even if List is selected, or just optimized List */
+  .search-results-list .result-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  .search-results-list .card-main-content {
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    gap: 0.75rem;
+  }
+
+  .search-results-list .result-meta-grid {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .search-results-list .card-actions {
+    width: 100%;
+    border-top: 1px solid var(--border-color);
+    padding-top: 0.75rem;
+  }
+
+  .search-results-list .download-btn .btn-text {
+    display: inline;
+  }
+
+  .search-results-list .download-btn {
+    width: auto;
+    flex: 1;
+  }
+}
+
+/* FAB */
+.fab-add {
+  position: fixed;
+  bottom: 2rem;
+  right: 2rem;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--secondary);
+  color: #fff;
+  border: none;
+  box-shadow: var(--elevation-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 1000;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.fab-add:hover {
+  transform: scale(1.05);
+  box-shadow: var(--elevation-4);
+}
+
+.fab-add:active {
+  transform: scale(0.95);
+}
+
+@media (max-width: 768px) {
+  .fab-add {
+    bottom: 1.5rem;
+    right: 1.5rem;
+  }
+}
+
 /* Download Table */
+/* Dense Table Layout */
 .download-table {
   width: 100%;
   border-collapse: collapse;
+  margin-bottom: 2rem;
+  font-size: 0.9rem;
 }
 
-.download-table th {
-  text-align: left;
+.download-table th,
+.download-table td {
   padding: 0.75rem 1rem;
-  font-size: 0.75rem;
-  font-weight: 700;
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  /* Standard padding */
+  text-align: left;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -702,19 +1072,21 @@ h4,
 
 /* Row Text Colors */
 .row-paused .download-name {
-  color: #94a3b8 !important;
+  color: var(--text-muted) !important;
 }
 
 .row-running .download-name {
-  color: #ffffff !important;
+  color: var(--primary) !important;
 }
 
 .row-error .download-name {
-  color: #f87171 !important;
+  color: #ef4444 !important;
+  /* Red-500 usually safe on both, but ideally variable */
 }
 
 .row-completed .download-name {
-  color: #a78bfa !important;
+  color: #8b5cf6 !important;
+  /* Violet-500 */
 }
 
 /* Progress Bar */
@@ -1420,6 +1792,111 @@ h4,
   z-index: 50;
   pointer-events: none;
   user-select: none;
+}
+
+/* ==========================================================================
+   Responsive Table (Mobile Card View)
+   ========================================================================== */
+@media (max-width: 768px) {
+  .download-table {
+    display: block;
+  }
+
+  .download-table thead {
+    display: none;
+  }
+
+  .download-table tbody {
+    display: block;
+  }
+
+  .download-table tr {
+    display: grid;
+    grid-template-areas:
+      "name name"
+      "progress progress"
+      "details details"
+      "status status";
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--elevation-1);
+  }
+
+  /* 1. Name */
+  .cell-name {
+    grid-area: name;
+    width: 100% !important;
+    max-width: none !important;
+    padding: 0 !important;
+    border: none !important;
+  }
+
+  .download-name {
+    font-size: 1rem !important;
+    margin-bottom: 0.25rem;
+  }
+
+  /* 2. Progress */
+  .cell-progress {
+    grid-area: progress;
+    width: 100% !important;
+    padding: 0 !important;
+    border: none !important;
+  }
+
+  /* 3. Details (Speed, ETA, Size) - We aggregate them if possible, or display block */
+  /* Since we can't easily merge cells in CSS, we treat them as part of the grid flow or hide some */
+  /* Strategy: Speed, ETA, Size need to be visible. */
+
+  .cell-speed,
+  .cell-eta,
+  .cell-size {
+    display: inline-block;
+    width: auto !important;
+    padding: 0 !important;
+    border: none !important;
+    color: var(--text-muted);
+    font-size: 0.8rem !important;
+  }
+
+  /* We visually group them using the 'details' area concept, but they are separate TDs.
+       So we hack the grid areas for specific items. */
+
+  .cell-speed {
+    grid-area: details;
+    justify-self: start;
+  }
+
+  .cell-eta {
+    grid-area: details;
+    justify-self: center;
+  }
+
+  .cell-size {
+    grid-area: details;
+    justify-self: end;
+  }
+
+  /* 4. Status */
+  .cell-status {
+    grid-area: status;
+    width: 100% !important;
+    padding: 0 !important;
+    border: none !important;
+    display: flex;
+    justify-content: flex-start;
+  }
+
+  /* Hide less important columns */
+  .cell-category,
+  .cell-added {
+    display: none;
+  }
 }
 
 /* ================================

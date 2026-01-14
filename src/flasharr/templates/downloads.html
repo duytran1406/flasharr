@@ -40,7 +40,7 @@
                                 onclick="bridge.toggleSelectAll(this.checked)"
                                 style="cursor: pointer; width: 16px; height: 16px; accent-color: var(--accent-blue);">
                         </th> -->
-                        <th onclick="bridge.sortDownloads('name')" style="cursor: pointer; width: 200px;">
+                        <th onclick="bridge.sortDownloads('name')" style="cursor: pointer; width: 300px;">
                             NAME <span class="material-icons" id="sort-icon-name"
                                 style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
                         </th>
@@ -68,16 +68,15 @@
                             CATEGORY <span class="material-icons" id="sort-icon-category"
                                 style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
                         </th>
-                        <th onclick="bridge.sortDownloads('added')" style="cursor: pointer; width: 130px;">
+                        <th onclick="bridge.sortDownloads('added')" style="cursor: pointer; width: 150px;">
                             ADDED <span class="material-icons" id="sort-icon-added"
                                 style="font-size: 16px; vertical-align: middle; opacity: 0.5;">swap_vert</span>
                         </th>
-                        <th style="width: 100px; text-align: center;">ACTIONS</th>
                     </tr>
                 </thead>
                 <tbody id="downloads-full-list">
                     <tr>
-                        <td colspan="9" style="text-align: center; padding: 5rem; color: var(--text-muted);">
+                        <td colspan="8" style="text-align: center; padding: 5rem; color: var(--text-muted);">
                             <div style="display: flex; flex-direction: column; align-items: center; gap: 1rem;">
                                 <span class="material-icons"
                                     style="font-size: 3rem; opacity: 0.2;">cloud_download</span>
@@ -87,9 +86,9 @@
                     </tr>
                 </tbody>
                 <tfoot id="downloads-footer"
-                    style="background: rgba(255,255,255,0.02); border-top: 1px solid var(--border-color);">
+                    style="background: var(--bg-card); border-top: 1px solid var(--border-color);">
                     <tr>
-                        <td colspan="9" style="padding: 0.75rem 1.5rem;">
+                        <td colspan="8" style="padding: 0.75rem 1.5rem;">
                             <div
                                 style="display: flex; align-items: center; justify-content: space-between; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">
                                 <div style="display: flex; gap: 2rem; align-items: center;">
@@ -97,21 +96,22 @@
                                         <span class="material-icons"
                                             style="font-size: 16px; color: var(--text-muted);">speed</span>
                                         <span>SPEED: <span id="footer-current-speed"
-                                                style="color: white; font-family: 'Roboto Mono', monospace;">0
+                                                style="color: var(--text-color); font-family: 'Roboto Mono', monospace;">0
                                                 B/s</span></span>
                                     </div>
                                     <div style="display: flex; align-items: center; gap: 0.5rem;">
                                         <span class="material-icons"
                                             style="font-size: 16px; color: var(--text-muted);">reorder</span>
                                         <span>QUEUE: <span id="footer-queue-count"
-                                                style="color: white; font-family: 'Roboto Mono', monospace;">0</span></span>
+                                                style="color: var(--text-color); font-family: 'Roboto Mono', monospace;">0</span></span>
                                     </div>
                                     <div style="display: flex; align-items: center; gap: 0.5rem;">
                                         <span>ACCOUNT:</span>
                                         <div id="footer-account-dot"
                                             style="width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; box-shadow: 0 0 5px rgba(0,0,0,0.5);">
                                         </div>
-                                        <span id="footer-account-status" style="color: white;">CHECKING...</span>
+                                        <span id="footer-account-status"
+                                            style="color: var(--text-color);">CHECKING...</span>
                                     </div>
                                 </div>
 
@@ -197,7 +197,8 @@
         </div>
 
         <div style="margin-bottom: 2rem; color: var(--text-secondary); line-height: 1.6;">
-            <p>Are you sure you want to delete <strong id="delete-item-name" style="color: white;">this item</strong>?
+            <p>Are you sure you want to delete <strong id="delete-item-name" style="color: var(--text-color);">this
+                    item</strong>?
             </p>
             <p
                 style="font-size: 0.9rem; color: #ef4444; margin-top: 0.5rem; background: rgba(239, 68, 68, 0.1); padding: 0.75rem; border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.2);">
@@ -237,7 +238,7 @@
             </div>
         </div>
         <div class="modal-footer"
-            style="padding: 1rem 1.25rem; background: rgba(255,255,255,0.02); border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end;">
+            style="padding: 1rem 1.25rem; background: var(--bg-card); border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end;">
             <button class="btn-primary" onclick="bridge.closeErrorModal()"
                 style="padding: 0.6rem 1.5rem; border-radius: 6px; font-weight: 600;">CLOSE</button>
         </div>
@@ -274,7 +275,7 @@
     function initDownloadsPage() {
         if (bridge) {
             bridge.currentPage = 1;
-            bridge.itemsPerPage = 6;
+            bridge.itemsPerPage = 10; // Increased items per page
 
             // Register listeners BEFORE initial load to avoid race condition
             // Subscribe to bridge events for list updates

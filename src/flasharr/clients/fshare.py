@@ -8,6 +8,7 @@ Refactored version with proper typing, error handling, and integration with core
 import requests
 import logging
 import re
+import threading
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from dataclasses import dataclass
@@ -105,6 +106,12 @@ class FshareClient:
         self._premium_expiry: Optional[int] = None
         self._traffic_left: Optional[str] = None
         self._account_type: Optional[str] = None
+        
+        # Callback for when session/cookies change (to persist back to storage)
+        self._on_session_update = None
+        
+        # Lock for preventing concurrent login attempts (Promise-like behavior)
+        self._login_lock = threading.Lock()
 
     @property
     def is_premium(self) -> bool:
@@ -180,24 +187,20 @@ class FshareClient:
             FshareConnectionError: If connection fails
         """
         try:
-            import inspect
-            try:
-                caller_frame = inspect.stack()[1]
-                caller_name = caller_frame.function
-                caller_line = caller_frame.lineno
-                location = f"{caller_name}:{caller_line}"
-            except:
-                location = "Unknown"
-                
-            logger.info(f"Logging into Fshare... (Called by: {location})")
+            import traceback
+            stack = traceback.extract_stack()
+            # Get last 5 frames for context
+            trace = " -> ".join([f"{f.name}:{f.lineno}" for f in stack[-5:-1]])
+            
+            logger.info(f"Logging into Fshare... (Instance: {id(self)}, Path: {trace})")
             
             # Clear existing cookies to ensure a fresh session
             self.session.cookies.clear()
             self._token = None # Clear token
             
-            # Step 1: Get CSRF token from homepage
+            # Step 1: Get CSRF token from login page
             homepage = self.session.get(
-                "https://www.fshare.vn/",
+                "https://www.fshare.vn/site/login",
                 timeout=self.timeout
             )
             
@@ -213,12 +216,8 @@ class FshareClient:
             
             logger.debug(f"Cookies after homepage GET: {self.session.cookies.get_dict()}")
             
-            if not csrf_token:
-                logger.error("Could not find CSRF token")
-                logger.debug(f"HTML snippet: {homepage.text[:500]}")
-                raise AuthenticationError("Could not find CSRF token")
-            
-            logger.debug(f"Got CSRF token: {csrf_token[:20]}...")
+            logger.info(f"Got CSRF token: {csrf_token}")
+            logger.info(f"Using cookies: {self.session.cookies.get_dict()}")
             
             # Step 2: Submit login form with CSRF token
             response = self.session.post(
@@ -230,7 +229,7 @@ class FshareClient:
                     "LoginForm[rememberMe]": 1
                 },
                 headers={
-                    "Referer": "https://www.fshare.vn/",
+                    "Referer": "https://www.fshare.vn/site/login",
                     "Content-Type": "application/x-www-form-urlencoded",
                     "User-Agent": self.session.headers.get("User-Agent")
                 },
@@ -238,46 +237,33 @@ class FshareClient:
                 allow_redirects=True
             )
             
-            logger.info(f"Fshare login response status: {response.status_code}")
-            
-            if response.status_code not in [200, 302]:
-                logger.error(f"Fshare login HTTP error: {response.status_code}")
-                raise APIError(
-                    f"Login request failed with status {response.status_code}",
-                    status_code=response.status_code,
-                    response=response.text[:200],
-                )
-            
-            # Check if login was successful
-            if '/site/logout' in response.text:
-                logger.info("✅ Fshare login successful")
-                self._token = "web_session"
-                # Set session expiry to 7 days (assume cookies persist longer)
-                self._token_expires = datetime.now() + timedelta(days=7)
+            if response.status_code in [200, 302]:
+                # If we got a 302, we are almost certainly logged in
+                # If we got a 200, check if we are on a page that isn't the login page
+                is_logged_in = (response.status_code == 302) or ('/site/logout' in response.text)
                 
-                # Fetch account profile page to extract account information
-                try:
-                    self._parse_profile(self.session.get("https://www.fshare.vn/account/profile", timeout=self.timeout).text)
-                except Exception as e:
-                    logger.warning(f"Could not fetch/parse account profile page: {e}")
-                    # Fallback to basic detection
-                    self._is_premium = True  # Assume premium if logged in
-                
-                return True
-            else:
-                # Try to find specific error message
-                error_msg = "Invalid credentials or unexpected response"
-                if "Email hoặc mật khẩu không đúng" in response.text:
-                    error_msg = "Incorrect email or password"
-                elif "Tài khoản đang bị khóa" in response.text:
-                    error_msg = "Account is locked"
-                elif "recaptcha" in response.text.lower():
-                    error_msg = "CAPTCHA required by Fshare. Please log in through the website first."
-                else:
-                     logger.error(f"❌ Unknown login failure. URL: {response.url}. Status: {response.status_code}")
+                if is_logged_in:
+                    logger.info("✅ Fshare login successful")
+                    self._token = "web_session"
+                    self._token_expires = datetime.now() + timedelta(days=7)
                     
-                raise AuthenticationError(f"Fshare login failed: {error_msg}")
-        
+                    # Fetch account profile page to extract account information
+                    try:
+                        profile_response = self.session.get("https://www.fshare.vn/account/profile", timeout=self.timeout)
+                        self._parse_profile(profile_response.text)
+                    except Exception as e:
+                        logger.warning(f"Failed to parse profile after login: {e}")
+                        
+                    if self._on_session_update:
+                        try:
+                            self._on_session_update(self)
+                        except Exception as e:
+                            logger.error(f"Failed to trigger session update callback: {e}")
+
+                    return True
+            
+            logger.error(f"❌ Login failed. Status: {response.status_code}. Response snippet: {response.text[:500]}")
+            raise AuthenticationError(f"Fshare login failed: Invalid credentials or unexpected response")
         except requests.exceptions.RequestException as e:
             logger.error(f"❌ Fshare connection error: {e}")
             raise FshareConnectionError(f"Failed to connect to Fshare: {e}")
@@ -285,20 +271,29 @@ class FshareClient:
     def _parse_profile(self, html: str):
         """Helper to parse profile HTML."""
         # ACCOUNT_TYPE
-        account_type_match = re.search(r'Loại tài khoản</a>\s*<span>(.*?)</span>', html, re.IGNORECASE | re.DOTALL)
+        account_type_match = re.search(r'Loại tài khoản.*?<span[^>]*>(.*?)</span>', html, re.IGNORECASE | re.DOTALL)
+        if not account_type_match:
+            account_type_match = re.search(r'Loại tài khoản.*?>\s*(.*?)\s*<', html, re.IGNORECASE | re.DOTALL)
+            
         if account_type_match:
             self._account_type = account_type_match.group(1).strip()
-            self._is_premium = 'VIP' in self._account_type.upper()
+            self._is_premium = any(x in self._account_type.upper() for x in ['VIP', 'PREMIUM'])
             logger.info(f"Account type: {self._account_type} (Premium: {self._is_premium})")
         else:
             self._is_premium = 'VIP' in html or 'img alt="VIP"' in html or 'level-vip' in html.lower()
         
         # VALID_UNTIL
-        valid_until_match = re.search(r'Hạn dùng:</a>\s*<span[^>]*>(.*?)</span>', html, re.IGNORECASE | re.DOTALL)
+        # Try different possible labels/tags
+        valid_until_match = re.search(r'Hạn dùng:.*?<span[^>]*>(.*?)</span>', html, re.IGNORECASE | re.DOTALL)
+        if not valid_until_match:
+            valid_until_match = re.search(r'Hạn dùng.*?>\s*(.*?)\s*<', html, re.IGNORECASE | re.DOTALL)
+            
         if valid_until_match:
             try:
                 import time
                 expiry_str = valid_until_match.group(1).strip()
+                # Clean up string from tags if any
+                expiry_str = re.sub(r'<[^>]+>', '', expiry_str).strip()
                 for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%I:%M:%S %p %d-%m-%Y']:
                     try:
                         expiry_time = time.mktime(time.strptime(expiry_str, fmt))
@@ -309,22 +304,42 @@ class FshareClient:
             except: pass
         elif re.search(r'Vĩnh viễn|Lifetime|Forever', html, re.IGNORECASE):
              self._premium_expiry = -1
+             self._is_premium = True
 
         # TRAFFIC
-        traffic_match = re.search(r'Dung lượng tải trong ngày:\s*</a>\s*(.*?)\s*</p>', html, re.IGNORECASE | re.DOTALL)
+        # Try both the label and a more generic search
+        traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?<\w+[^>]*>(.*?)</\w+>', html, re.IGNORECASE | re.DOTALL)
+        if not traffic_match:
+             traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?:\s*</a>\s*(.*?)\s*</p>', html, re.IGNORECASE | re.DOTALL)
+        if not traffic_match:
+             traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?:\s*(.*?)\s*(?:<|$)', html, re.IGNORECASE | re.DOTALL)
+        
         if traffic_match:
             raw_traffic = traffic_match.group(1).strip()
+            raw_traffic = re.sub(r'<[^>]+>', '', raw_traffic).strip()
             self._traffic_left = re.sub(r'\s+', ' ', raw_traffic)
 
-    def ensure_authenticated(self) -> bool:
+    def ensure_authenticated(self, force_login: bool = True) -> bool:
         """
         Ensure we have a valid session, login if needed.
+        Wait for any in-progress login to finish (promise-like).
         """
         if self.is_authenticated:
             return True
             
-        logger.info("Session expired or missing, logging in...")
-        return self.login()
+        if not force_login:
+            return False
+
+        # Lock to ensure only one thread triggers a login
+        # and others wait for it to finish then reuse the result
+        with self._login_lock:
+            # Re-check after acquiring lock in case another thread logged in
+            if self.is_authenticated:
+                return True
+                
+            logger.info("Session expired or missing, logging in...")
+            success = self.login()
+            return success
     
     def search(self, query: str, limit: int = 50) -> List[FshareFile]:
         """
@@ -333,19 +348,121 @@ class FshareClient:
         logger.warning("FshareClient.search is deprecated (API dead).")
         return []
     
-    def get_download_link(self, fcode: str) -> Optional[str]:
+    def get_download_link(self, fcode_or_url: str, password: Optional[str] = None) -> Optional[str]:
         """
         Get direct download link for a file.
+        Accepts either a link code (linkcode) or a full Fshare URL.
         """
-        try:
-            self.ensure_authenticated()
-            
-            # Removed redundant token check to prevent login loops.
-            # We rely on ensure_authenticated() and the redirect implementation 
-            # in get_download_link_premium to handle session validity.
+        self.ensure_authenticated()
+        
+        url = fcode_or_url
+        if "/file/" not in url:
+            url = f"https://www.fshare.vn/file/{fcode_or_url}"
 
-            url = f"https://www.fshare.vn/file/{fcode}"
-            return self.get_download_link_premium(url)
+        try:
+            # Step 1: Load file page
+            logger.info(f"Loading file page: {url}")
+            page_response = self.session.get(url, timeout=self.timeout)
+            
+            # CHECK FOR REDIRECT TO LOGIN (Fix for session timeout)
+            if "site/login" in page_response.url:
+                 logger.warning("Session expired (redirected to login) while loading file page. Re-authenticating...")
+                 self._token = None # Clear local token to force ensure_authenticated to re-login
+                 if self.ensure_authenticated():
+                      page_response = self.session.get(url, timeout=self.timeout)
+                 else:
+                      logger.error("Re-authentication failed during download page load")
+                      return None
+
+            if page_response.status_code != 200:
+                logger.error(f"Failed to load file page: {page_response.status_code}")
+                return None
+            
+            # Step 2: Check for password
+            if password and 'password-form' in page_response.text:
+                csrf_match = re.search(r'name="_csrf-app"\s+value="([^"]+)"', page_response.text)
+                if not csrf_match:
+                    csrf_match = re.search(r'value="([^"]+)"\s+name="_csrf-app"', page_response.text)
+                
+                if csrf_match:
+                    csrf_token = csrf_match.group(1)
+                    password_data = {
+                        '_csrf-app': csrf_token,
+                        'DownloadPasswordForm[password]': password,
+                    }
+                    page_response = self.session.post(url, data=password_data, timeout=self.timeout)
+            
+            # Step 3: Find download form
+            form_match = re.search(r'<form[^>]*id="form-download"[^>]*>(.*?)</form>', page_response.text, re.DOTALL)
+            if not form_match:
+                logger.error("Download form not found on page")
+                return None
+            
+            form_html = form_match.group(0)
+            action_match = re.search(r'action="([^"]+)"', form_html)
+            if not action_match:
+                return None
+            
+            form_action = action_match.group(1)
+            if form_action.startswith('/'):
+                form_action = f"https://www.fshare.vn{form_action}"
+            
+            # Get CSRF and linkcode
+            csrf_token = None
+            patterns = [
+                r'name="_csrf-app"\s+value="([^"]+)"',
+                r'value="([^"]+)"\s+name="_csrf-app"',
+                r'name="csrf-token"\s+content="([^"]+)"',
+                r'content="([^"]+)"\s+name="csrf-token"',
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, page_response.text)
+                if match:
+                    csrf_token = match.group(1)
+                    break
+            
+            if not csrf_token:
+                logger.error("Download CSRF token not found")
+                return None
+
+            linkcode_match = re.search(r'name="linkcode" value="([^"]+)"', form_html)
+            linkcode = linkcode_match.group(1) if linkcode_match else ""
+            
+            # Submit form
+            logger.info("Submitting download form...")
+            download_data = {
+                '_csrf-app': csrf_token,
+                'linkcode': linkcode or "",
+                'withFcode5': '0',
+                'ushare': '',
+            }
+            
+            headers = {
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": url,
+                "X-CSRF-Token": csrf_token,
+                "X-Requested-With": "XMLHttpRequest",
+                "User-Agent": self.session.headers.get("User-Agent")
+            }
+            
+            response = self.session.post(form_action, data=download_data, headers=headers, timeout=self.timeout)
+            
+            if response.status_code == 200:
+                try:
+                    res_data = response.json()
+                    # The direct link is usually in the 'url' field of the JSON response
+                    direct_url = res_data.get("url")
+                    if direct_url:
+                        logger.info(f"✅ Successfully generated direct link")
+                        return direct_url
+                    else:
+                        logger.error(f"Generate link failed: {res_data.get('msg')}")
+                except Exception as e:
+                    logger.error(f"Failed to parse download response: {e}")
+            else:
+                logger.error(f"Download form submission failed with status {response.status_code}")
+                
+            return None
             
         except requests.exceptions.RequestException as e:
             logger.error(f"Error getting download link: {e}")
@@ -362,10 +479,11 @@ class FshareClient:
         # Try V3 API (internal web API) first
         info = self.get_file_info_v3(fcode)
         if info:
+            logger.info(f"✅ Successfully retrieved file info via V3 API for {fcode}")
             return info
 
         # Fallback to HTML scraping if V3 API fails
-        logger.info(f"V3 API failed for {fcode}, falling back to HTML scraping...")
+        logger.warning(f"⚠️  V3 API failed for {fcode}, falling back to HTML scraping...")
         return self.get_file_info_html(url)
 
     def get_file_info_html(self, url: str) -> Optional[FshareFile]:
@@ -374,6 +492,16 @@ class FshareClient:
         """
         try:
             response = self.session.get(url, timeout=self.timeout)
+            
+            # Check for session expiration (redirect to login)
+            if "site/login" in response.url:
+                 logger.warning("Session expired (redirected to login) while scraping file info. Re-authenticating...")
+                 self._token = None # Clear local token
+                 if self.ensure_authenticated():
+                      response = self.session.get(url, timeout=self.timeout)
+                 else:
+                      return None
+
             if response.status_code != 200:
                 logger.error(f"HTML scraping failed: {response.status_code}")
                 return None
@@ -503,154 +631,44 @@ class FshareClient:
         Request Fshare profile HTML and parse Daily Quota.
         """
         try:
-            self.ensure_authenticated()
+            # Check if we have cookies/session first without forcing a POST login
+            self.ensure_authenticated(force_login=False)
+            
             response = self.session.get("https://www.fshare.vn/account/profile", timeout=self.timeout)
             
-            # Check for session expiration (redirect to login)
-            if "site/login" in response.url:
-                logger.warning("Session expired during quota check. Re-authenticating...")
-                self._token = None
-                if self.login():
-                    response = self.session.get("https://www.fshare.vn/account/profile", timeout=self.timeout)
-                else:
-                    return None
+            # If profile page returns nothing or very short, something is wrong, don't try login
+            if not response.text or len(response.text) < 100:
+                logger.warning("Fshare profile returned no data, skipping login retry")
+                return None
+
+            # Check for session expiration (redirect to login) or restricted access
+            # If the URL is no longer the profile page, the session is likely dead or restricted.
+            if "account/profile" not in response.url or "site/login" in response.url:
+                logger.debug("Likely session expiration (redirected to login), returning None.")
+                return None
 
             if response.status_code != 200:
                 return None
                 
             html = response.text
-            traffic_match = re.search(r'Dung lượng tải trong ngày:\s*</a>\s*(.*?)\s*</p>', html, re.IGNORECASE | re.DOTALL)
+            # Use same fallback logic as _parse_profile
+            traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?<\w+[^>]*>(.*?)</\w+>', html, re.IGNORECASE | re.DOTALL)
+            if not traffic_match:
+                traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?:\s*</a>\s*(.*?)\s*</p>', html, re.IGNORECASE | re.DOTALL)
+            if not traffic_match:
+                traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?:\s*(.*?)\s*(?:<|$)', html, re.IGNORECASE | re.DOTALL)
             
             if traffic_match:
                 raw_traffic = traffic_match.group(1).strip()
-                clean_traffic = re.sub(r'\s+', ' ', raw_traffic)
-                self._traffic_left = clean_traffic
-                return clean_traffic
+                raw_traffic = re.sub(r'<[^>]+>', '', raw_traffic).strip()
+                self._traffic_left = re.sub(r'\s+', ' ', raw_traffic)
+                return self._traffic_left
             
-            return None
+            # Fallback: full parse might find it via other patterns
+            self._parse_profile(html)
+            return self._traffic_left
             
         except Exception as e:
             logger.error(f"Error getting daily quota: {e}")
             return None
     
-    def get_download_link_premium(
-        self,
-        url: str,
-        password: Optional[str] = None,
-    ) -> Optional[str]:
-        """
-        Get direct download link using form-based download.
-        """
-        self.ensure_authenticated()
-        
-        try:
-            # Step 1: Load file page
-            logger.info(f"Loading file page: {url}")
-            page_response = self.session.get(url, timeout=self.timeout)
-            
-            # CHECK FOR REDIRECT TO LOGIN (Fix for session timeout)
-            if "site/login" in page_response.url:
-                 logger.warning("Session expired (redirected to login) while loading file page. Re-authenticating...")
-                 self._token = None
-                 if self.login():
-                      page_response = self.session.get(url, timeout=self.timeout)
-                 else:
-                      logger.error("Re-authentication failed during download page load")
-                      return None
-
-            if page_response.status_code != 200:
-                logger.error(f"Failed to load file page: {page_response.status_code}")
-                return None
-            
-            # Step 2: Check for password
-            if password and 'password-form' in page_response.text:
-                csrf_match = re.search(r'name="_csrf-app"\s+value="([^"]+)"', page_response.text)
-                if not csrf_match:
-                    csrf_match = re.search(r'value="([^"]+)"\s+name="_csrf-app"', page_response.text)
-                
-                if csrf_match:
-                    csrf_token = csrf_match.group(1)
-                    password_data = {
-                        '_csrf-app': csrf_token,
-                        'DownloadPasswordForm[password]': password,
-                    }
-                    page_response = self.session.post(url, data=password_data, timeout=self.timeout)
-            
-            # Step 3: Find download form
-            form_match = re.search(r'<form[^>]*id="form-download"[^>]*>(.*?)</form>', page_response.text, re.DOTALL)
-            if not form_match:
-                logger.error("Download form not found on page")
-                return None
-            
-            form_html = form_match.group(0)
-            action_match = re.search(r'action="([^"]+)"', form_html)
-            if not action_match:
-                return None
-            
-            form_action = action_match.group(1)
-            if form_action.startswith('/'):
-                form_action = f"https://www.fshare.vn{form_action}"
-            
-            # Get CSRF and linkcode
-            csrf_token = None
-            patterns = [
-                r'name="_csrf-app"\s+value="([^"]+)"',
-                r'value="([^"]+)"\s+name="_csrf-app"',
-                r'name="csrf-token"\s+content="([^"]+)"',
-                r'content="([^"]+)"\s+name="csrf-token"',
-            ]
-            for pattern in patterns:
-                match = re.search(pattern, page_response.text)
-                if match:
-                    csrf_token = match.group(1)
-                    break
-            
-            linkcode_match = re.search(r'name="linkcode" value="([^"]+)"', form_html)
-            linkcode = linkcode_match.group(1) if linkcode_match else ""
-            
-            if not csrf_token:
-                logger.error("CSRF token not found")
-                return None
-            
-            # Submit form
-            logger.info("Submitting download form...")
-            download_data = {
-                '_csrf-app': csrf_token,
-                'linkcode': linkcode or "",
-                'withFcode5': '0',
-                'ushare': '',
-            }
-            
-            headers = {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Referer": url,
-                "X-CSRF-Token": csrf_token,
-                "X-Requested-With": "XMLHttpRequest",
-                "User-Agent": self.session.headers.get("User-Agent")
-            }
-            
-            download_response = self.session.post(
-                form_action,
-                data=download_data,
-                headers=headers,
-                timeout=self.timeout
-            )
-            
-            if download_response.status_code not in [200, 201]:
-                logger.error(f"Download form submission failed: {download_response.status_code}")
-                return None
-            
-            try:
-                data = download_response.json()
-            except:
-                return None
-            
-            if 'msg' in data and data['msg']:
-                logger.error(f"Download error message: {data['msg']}")
-                return None
-            
-            return data.get('url')
-            
-        except Exception as e:
-            logger.error(f"Form-based download error: {e}")
-            return None

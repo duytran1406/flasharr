@@ -155,6 +155,25 @@ class AccountManager:
         account = next((a for a in self.accounts if a['email'] == self.primary_email), None)
         return self._sanitize_account(account) if account else None
     
+    def _handle_session_update(self, client: FshareClient):
+        """Handle session update from client and persist to storage."""
+        account = next((a for a in self.accounts if a['email'] == client.email), None)
+        if not account:
+            return
+            
+        logger.info(f"Persisting updated session for {client.email}")
+        account['cookies'] = client.get_cookies()
+        if getattr(client, '_token_expires', None):
+            account['token_expires'] = client._token_expires.timestamp()
+            
+        # Update other fields if available
+        account['premium'] = client.is_premium
+        account['traffic_left'] = client.traffic_left
+        account['account_type'] = client.account_type
+        account['last_refresh'] = int(datetime.now().timestamp())
+        
+        self._save()
+
     def get_primary_client(self) -> Optional[FshareClient]:
         """Get a functional FshareClient for the primary account (cached)."""
         if not self.primary_email:
@@ -170,6 +189,7 @@ class AccountManager:
             
         config = FshareConfig(email=account['email'], password=account['password'])
         client = FshareClient.from_config(config)
+        client._on_session_update = self._handle_session_update
         
         # Restore session if available
         if account.get('cookies'):
@@ -218,11 +238,9 @@ class AccountManager:
         quota = client.get_daily_quota()
         
         if quota is None:
-            logger.info("Session invalid or expired, forcing new login...")
-            if not client.login():
-                raise Exception("Login failed")
+            logger.warning(f"Could not refresh account {account['email']} (No quota data)")
         else:
-            logger.info("Existing session is valid, skipping login.")
+            logger.info("Account info refreshed successfully.")
             # Since get_daily_quota doesn't parse everything, we might want to manually populate
             # some fields if they are missing from the simple quota check, 
             # OR logic relies on get_daily_quota updating internal state of client which it does for traffic.

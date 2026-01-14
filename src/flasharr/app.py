@@ -91,6 +91,11 @@ async def initialize_sabnzbd(app):
     try:
         logger.info("Initializing SABnzbd service...")
         app.sabnzbd = await create_sabnzbd_service(account_manager=app.account_manager)
+        
+        # Update WebSocket server with the new sabnzbd service
+        engine = app.sabnzbd.downloader.engine if hasattr(app.sabnzbd, 'downloader') else None
+        get_websocket_server(engine, app.sabnzbd)
+        
         logger.info("✅ SABnzbd service initialized")
     except Exception as e:
         app.init_error = str(e)
@@ -144,7 +149,7 @@ def run_app():
         # WebSocket handling
         if request.path == '/ws':
              engine = app.sabnzbd.downloader.engine if app.sabnzbd and hasattr(app.sabnzbd, 'downloader') else None
-             ws_server = get_websocket_server(engine)
+             ws_server = get_websocket_server(engine, app.sabnzbd)
              if not ws_server:
                  return web.Response(text="WebSocket server not ready", status=503)
              return await ws_server.handle_connection(request)
@@ -183,7 +188,7 @@ def run_app():
                 attempts += 1
             
             engine = app.sabnzbd.downloader.engine if app.sabnzbd and hasattr(app.sabnzbd, 'downloader') else None
-            ws_server = get_websocket_server(engine)
+            ws_server = get_websocket_server(engine, app.sabnzbd)
             if ws_server:
                 await ws_server.start()
                 logger.info("WebSocket server background tasks started")

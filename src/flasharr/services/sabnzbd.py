@@ -344,14 +344,8 @@ class SABnzbdEmulator:
             logger.error(f"Error adding URL: {e}", exc_info=True)
             return None
     
-    def get_queue(self) -> Dict[str, Any]:
-        """
-        Get current download queue in SABnzbd format.
-        
-        Returns:
-            Queue data dictionary
-        """
-        # Sync with downloader
+    def sync(self):
+        """Sync emulator state with downloader engine."""
         downloader_queue = self.downloader.get_queue()
         active_ids = []
         
@@ -366,20 +360,22 @@ class SABnzbdEmulator:
                 size_bytes = item.get('size', 0)
                 downloaded_bytes = item.get('downloaded', 0)
                 
-                q_item.mb_total = size_bytes / (1024 * 1024)
-                q_item.mb_left = max(0, (size_bytes - downloaded_bytes) / (1024 * 1024))
+                # Only update size if engine reports a non-zero value to avoid losing 
+                # metadata if the engine clears the task or hasn't resolved it yet.
+                if size_bytes > 0:
+                    q_item.mb_total = size_bytes / (1024 * 1024)
+                    q_item.size_bytes = size_bytes
+                    q_item.mb_left = max(0, (size_bytes - downloaded_bytes) / (1024 * 1024))
                 
-                # Sync raw values
-                q_item.size_bytes = size_bytes
                 q_item.downloaded_bytes = downloaded_bytes
                 q_item.speed = item.get('speed', 0.0)
                 q_item.eta_seconds = item.get('eta', 0.0)
                 
                 # Map engine status to SABnzbd status
                 status_str = str(item.get('status')).lower()
-                if status_str == "downloading":
+                if status_str in ("downloading", "starting", "extracting"):
                     q_item.status = DownloadStatus.DOWNLOADING
-                elif status_str == "queued":
+                elif status_str in ("queued", "waiting"):
                     q_item.status = DownloadStatus.QUEUED
                 elif status_str == "paused":
                     q_item.status = DownloadStatus.PAUSED
@@ -389,9 +385,7 @@ class SABnzbdEmulator:
                          self.complete_item(nzo_id)
                          continue # Skip further processing for this item since it's now in history
                 elif status_str == "failed":
-                    q_item.status = DownloadStatus.FAILED
-                    # potentially enable move to history for failed items too?
-                    self._save_queue()
+                    self.complete_item(nzo_id, status=DownloadStatus.FAILED)
                 
                 # Update time info
                 eta_seconds = item.get('eta')
@@ -421,13 +415,18 @@ class SABnzbdEmulator:
                              if engine_task:
                                  if engine_task.state == DownloadState.COMPLETED:
                                      logger.info(f"Emulator: Detected completion of {nzo_id} via engine check")
-                                     self.complete_item(nzo_id)
+                                     self.complete_item(nzo_id, status=DownloadStatus.COMPLETED)
                                  elif engine_task.state in (DownloadState.FAILED, DownloadState.CANCELLED, DownloadState.OFFLINE):
-                                     logger.info(f"Emulator: Detected failure/cancel of {nzo_id} via engine check")
-                                     # Move to history but mark as failed? For now move to history
-                                     self.complete_item(nzo_id)
-                     except Exception as e:
-                         logger.error(f"Error in emulator cleanup loop: {e}")
+                                     logger.info(f"Emulator: Detected failure/cancel of {nzo_id} via engine check. State: {engine_task.state}")
+                                     self.complete_item(nzo_id, status=DownloadStatus.FAILED)
+                                 elif engine_task.state == DownloadState.DOWNLOADING:
+                                     # Debugging flapping issue
+                                     logger.warning(f"Emulator: Item {nzo_id} MISSING from active_ids but DOWNLOADING in engine! engine_tasks count: {len(self.downloader.engine.tasks)}")
+                     except: pass
+
+    def get_queue(self) -> Dict[str, Any]:
+        """Get current download queue in SABnzbd format."""
+        self.sync()
 
         # Prepare final slots list
         # Start with all active items in the queue
@@ -447,6 +446,22 @@ class SABnzbdEmulator:
 
         slots = [item.to_queue_slot() for item in all_items]
         
+        return slots
+
+    def get_counts(self) -> Dict[str, int]:
+        """Get quick counts for dashboard."""
+        self.sync() # Ensure data is fresh
+        active = sum(1 for item in self._queue.values() if item.status == DownloadStatus.DOWNLOADING)
+        queued = sum(1 for item in self._queue.values() if item.status == DownloadStatus.QUEUED)
+        history = len(self._history)
+        return {
+            "active": active,
+            "queued": queued,
+            "history": history,
+            "total": len(self._queue) + history
+        }
+        
+    def _calculate_total_size(self):
         total_size = sum(item.mb_total for item in self._queue.values() if item.status not in (DownloadStatus.COMPLETED, DownloadStatus.FAILED))
         total_left = sum(item.mb_left for item in self._queue.values() if item.status not in (DownloadStatus.COMPLETED, DownloadStatus.FAILED))
         
@@ -556,13 +571,24 @@ class SABnzbdEmulator:
     
     def delete_item(self, nzo_id: str) -> bool:
         """
-        Delete an item from the queue and cancel download.
+        Delete an item from the queue or history and cancel download if active.
         """
+        found = False
         if nzo_id in self._queue:
             # Tell downloader to cancel
             self.downloader.delete_download(nzo_id)
             del self._queue[nzo_id]
             logger.info(f"Deleted queue item: {nzo_id}")
+            found = True
+            
+        if nzo_id in self._history:
+            # Also ensure cancelled in engine if it was just moved
+            self.downloader.delete_download(nzo_id)
+            del self._history[nzo_id]
+            logger.info(f"Deleted history item: {nzo_id}")
+            found = True
+            
+        if found:
             self._save_queue()
             return True
         return False
@@ -629,13 +655,31 @@ class SABnzbdEmulator:
             True if completed, False if not found
         """
         if nzo_id in self._queue:
-            item = self._queue[nzo_id] # Don't pop, keep in queue as requested by user
+            item = self._queue[nzo_id]
+            
+            # Last sync from engine to capture final size
+            try:
+                engine = getattr(self.downloader, 'engine', None)
+                if engine:
+                    task = engine.get_task(nzo_id)
+                    if task and task.progress:
+                        if task.progress.total_bytes > 0:
+                            item.size_bytes = task.progress.total_bytes
+                            item.mb_total = item.size_bytes / (1024*1024)
+                            logger.info(f"Syncing final size for {nzo_id}: {item.size_bytes} bytes")
+                        if task.progress.downloaded_bytes > 0:
+                             item.downloaded_bytes = task.progress.downloaded_bytes
+            except: pass
+
             item.status = status
             item.completed = datetime.now().isoformat()
             
             if status == DownloadStatus.COMPLETED:
                 item.percentage = 100.0
                 item.mb_left = 0.0
+                # If downloaded_bytes is still 0, sync it to total
+                if item.downloaded_bytes == 0:
+                    item.downloaded_bytes = item.size_bytes
                 
             self._history[nzo_id] = item
             logger.info(f"Emulator: Item {nzo_id} updated to status: {status.value}")
