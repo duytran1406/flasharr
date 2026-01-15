@@ -1257,14 +1257,14 @@ if (typeof window.FshareBridge === 'undefined') {
             let displayStatus = d.status.toUpperCase();
             let canToggle = true;
 
-            if (s === 'finished' || s === 'completed' || parseFloat(d.progress) >= 100) {
+            if (s === 'failed' || s === 'error') {
+                state = 'error'; canToggle = false; displayStatus = 'FAILED';
+            } else if (s === 'finished' || s === 'completed' || parseFloat(d.progress) >= 100) {
                 state = 'completed'; displayStatus = 'COMPLETED'; canToggle = false;
             } else if (s === 'running' || s === 'downloading' || s === 'starting' || s === 'extracting') {
                 state = 'running';
             } else if (s === 'paused' || s === 'stopped') {
                 state = 'paused';
-            } else if (s === 'failed' || s === 'error') {
-                state = 'error'; canToggle = false;
             }
 
             const isRunning = state === 'running';
