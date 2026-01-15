@@ -119,37 +119,52 @@ def get_downloads() -> Dict[str, Any]:
         
         formatted = []
         
-        # Helper to convert QueueItem to compatible dict for _format_task
-        def item_to_dict(item):
-            return {
-                "id": item.nzo_id,
-                "nzo_id": item.nzo_id,
-                "filename": item.filename,
-                "url": item.fshare_url,
-                "status": item.status.value if hasattr(item.status, 'value') else str(item.status),
-                "category": item.category,
-                "progress": item.percentage,
-                "size_bytes": item.size_bytes,
-                "mb_total": item.mb_total,
-                "speed": item.speed,
-                "eta": item.eta_seconds,
-                "added": item.added
-            }
-
-        # 1. Add History Items (Completed/Failed)
-        for item in sab._history.values():
-            formatted.append(_format_task(item_to_dict(item)))
-
-        # 2. Add Active Queue Items (Running/Paused/Queued)
-        # Use a set to track IDs to avoid duplicates
-        seen_ids = {item['id'] for item in formatted}
+        # Trigger sync/get latest data
+        queue_slots = sab.get_queue() # returns List[Dict]
         
-        for item in sab._queue.values():
-            if item.nzo_id not in seen_ids:
-                formatted.append(_format_task(item_to_dict(item)))
+        for slot in queue_slots:
+            try:
+                # Map SABnzbd/Internal slot to Dashboard format
+                # We construct a dict that matches what item_to_dict used to produce
+                
+                # Normalize status
+                status = slot.get('status', 'Unknown')
+                
+                # Normalize size/progress
+                try:
+                    percentage = float(slot.get('percentage', 0))
+                except (ValueError, TypeError):
+                    percentage = 0.0
+                    
+                try:
+                    mb_total = float(slot.get('mb', 0))
+                except (ValueError, TypeError):
+                    mb_total = 0.0
+                    
+                item_dict = {
+                    "id": slot.get('nzo_id'),
+                    "nzo_id": slot.get('nzo_id'),
+                    "filename": slot.get('filename'),
+                    "url": slot.get('url', ''), # Might be present for history items
+                    "status": status,
+                    "category": slot.get('cat', slot.get('category', 'Uncategorized')),
+                    "progress": percentage,
+                    "size_bytes": slot.get('total_bytes', 0),
+                    "mb_total": mb_total,
+                    "speed": slot.get('speed_bytes', 0),
+                    "eta": slot.get('eta_seconds', 0),
+                    "added": slot.get('added', ''),
+                    "completed": slot.get('completed', '')
+                }
+                
+                formatted.append(_format_task(item_dict))
+            except Exception as e:
+                logger.error(f"Error formatting item {slot.get('nzo_id')}: {e}")
+                continue
 
-        # Sort by added time descending (newest first)
-        formatted.sort(key=lambda x: str(x.get('added', '')), reverse=True)
+        # Sort by added time logic if possible, or just trust the order
+        # History is usually at end, active at top
+
                      
         return jsonify({
             "status": "ok",
