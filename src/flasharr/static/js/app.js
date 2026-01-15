@@ -832,19 +832,32 @@ if (typeof window.FshareBridge === 'undefined') {
                 const progress = item.progress || 0;
                 const speed = item.speed || '0 B/s';
                 const size = item.size || '--';
-                // Simple progress bar
+                const status = item.status || 'Unknown';
+                // Status Color logic (simplified)
+                const s = status.toLowerCase();
+                let statusColor = 'var(--text-muted)';
+                if (s.includes('down') || s.includes('run')) statusColor = '#22c55e'; // Green
+                else if (s.includes('error') || s.includes('fail')) statusColor = '#ef4444'; // Red
+                else if (s.includes('pause')) statusColor = '#eab308'; // Amber
+
                 return `
-                <div class="minified-item" style="display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; align-items: center; padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color); font-size: 0.85rem; color: var(--text-color);">
-                    <div class="name-col" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 1rem;" title="${this.escapeHtml(item.name)}">
+                <div class="minified-item minified-list-grid">
+                    <div class="name-col" title="${this.escapeHtml(item.name)}" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                         ${this.escapeHtml(item.name)}
                     </div>
-                    <div style="text-align: right; color: var(--text-muted); font-family: 'Roboto Mono', monospace; font-size: 0.75rem;">${size}</div>
-                    <div class="progress-col" style="padding: 0 0.5rem;">
+                    
+                    <div class="status-col">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                            <span style="font-size: 0.7rem; font-weight: 600; color: ${statusColor}; text-transform: uppercase;">${status}</span>
+                            <span style="font-size: 0.7rem; color: var(--text-muted);">${progress}%</span>
+                        </div>
                         <div style="background: rgba(255,255,255,0.1); height: 4px; border-radius: 2px; overflow: hidden; width: 100%;">
-                            <div style="width: ${progress}%; background: var(--primary); height: 100%;"></div>
+                            <div style="width: ${progress}%; background: ${statusColor}; height: 100%;"></div>
                         </div>
                     </div>
-                    <div style="text-align: right; font-family: 'Roboto Mono', monospace; font-size: 0.75rem; color: var(--primary);">${speed}</div>
+
+                    <div class="size-col" style="font-family: 'Roboto Mono', monospace;">${size}</div>
+                    <div class="speed-col" style="font-family: 'Roboto Mono', monospace; color: var(--primary);">${speed}</div>
                 </div>
                 `;
             }).join('');

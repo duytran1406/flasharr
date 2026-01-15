@@ -322,3 +322,62 @@
         min-height: auto !important;
     }
 }
+    /* --- Minified Queue Card View (Mobile) --- */
+    .minified-list-header {
+        display: none !important;
+    }
+
+    .minified-list-grid.minified-item {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+        padding: 1rem;
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        margin-bottom: 0.5rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    
+    .minified-item .name-col {
+        font-weight: 700;
+        font-size: 0.95rem;
+        width: 100%;
+        margin-bottom: 0.25rem;
+    }
+
+    /* Wrap stats in a row */
+    .minified-item .status-col,
+    .minified-item .size-col,
+    .minified-item .speed-col {
+        width: 100%;
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 0.8rem;
+    }
+    
+    .minified-item .status-col {
+        order: 2;
+    }
+    
+    /* We can create a stats row wrapper via JS or just CSS grid magic */
+    /* Let's try CSS Grid for the item instead of Flex for better control */
+    .minified-list-grid.minified-item {
+        display: grid;
+        grid-template-areas: 
+            "name name"
+            "status status"
+            "size speed";
+        grid-template-columns: 1fr 1fr;
+        gap: 0.5rem;
+    }
+
+    .minified-item .name-col { grid-area: name; padding-right: 0 !important; }
+    .minified-item .status-col { grid-area: status; }
+    .minified-item .size-col   { grid-area: size; text-align: left !important; }
+    .minified-item .speed-col  { grid-area: speed; text-align: right !important; }
+
+

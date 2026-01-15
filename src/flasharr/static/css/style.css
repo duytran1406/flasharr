@@ -3755,3 +3755,33 @@ td:first-child,
   background: var(--primary);
   transition: width 0.3s ease;
 }
+/* --- Minified Queue List (Dashboard) --- */
+.minified-list-grid {
+    display: grid;
+    grid-template-columns: 2fr 1.2fr 0.8fr 0.8fr; /* Name | Status | Size | Speed */
+    gap: 0.5rem;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.85rem;
+    color: var(--text-color);
+}
+
+.minified-list-header {
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    background: rgba(0,0,0,0.1);
+    border-top: 1px solid var(--border-color);
+}
+
+.minified-item:last-child {
+    border-bottom: none;
+}
+
+.minified-item .status-col {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
