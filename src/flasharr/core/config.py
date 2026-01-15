@@ -90,6 +90,7 @@ class AppConfig:
     pyload: PyLoadConfig = field(default_factory=PyLoadConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     download: DownloadConfig = field(default_factory=DownloadConfig)
+    data_dir: str = "./data"
     
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -99,6 +100,7 @@ class AppConfig:
             pyload=PyLoadConfig.from_env(),
             server=ServerConfig.from_env(),
             download=DownloadConfig.from_env(),
+            data_dir=os.getenv("DATA_DIR", "./data"),
         )
 
 

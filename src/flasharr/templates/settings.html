@@ -609,6 +609,38 @@
             }
         };
 
+        // --- HEALTH CHECK ---
+        async function checkAccountHealth() {
+            try {
+                const response = await fetch('/api/verify-account', { method: 'POST' });
+
+                if (response.status === 401) {
+                    const data = await response.json();
+                    if (data.code === 'SESSION_EXPIRED') {
+                        showSessionExpiredModal(data.message);
+                    }
+                }
+            } catch (error) {
+                console.error("Health check failed:", error);
+            }
+        }
+
+        function showSessionExpiredModal(message) {
+            // Reuse login modal but with error state
+            const status = document.getElementById('modal-status');
+            const title = document.querySelector('.service-title');
+
+            loginModal.style.display = 'flex';
+            title.textContent = "Session Expired";
+            status.textContent = message || "Your session has expired. Please login again.";
+            status.className = 'connection-status error';
+            status.style.display = 'flex';
+        }
+
+        // Hook into finish of loadAccounts or call independently
+        // We'll call it after initial load
+        setTimeout(checkAccountHealth, 1000);
+
 
         // Load settings
         async function loadSettings() {

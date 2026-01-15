@@ -28,7 +28,14 @@ class AccountManager:
             storage_path: Path to JSON file for storing accounts
         """
         if storage_path is None:
-            storage_path = Path(__file__).parent.parent.parent.parent / "data" / "accounts.json"
+            # Use data_dir from config if available, otherwise fallback to default logic
+            try:
+                from .config import get_config
+                config = get_config()
+                storage_path = Path(config.data_dir) / "accounts.json"
+            except ImportError:
+                 # Fallback if config not ready (should rarely happen in this structure)
+                 storage_path = Path(__file__).parent.parent.parent.parent / "data" / "accounts.json"
         
         self.storage_path = Path(storage_path)
         self.storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -238,7 +245,11 @@ class AccountManager:
         quota = client.get_daily_quota()
         
         if quota is None:
-            logger.warning(f"Could not refresh account {account['email']} (No quota data)")
+            # If quota is None, it means session is likely invalid/expired and we couldn't get profile data
+            # Raise exception so API knows to report error
+            from ..core.exceptions import AuthenticationError
+            logger.warning(f"Session check failed for {account['email']} (No quota data)")
+            raise AuthenticationError("Session expired or invalid")
         else:
             logger.info("Account info refreshed successfully.")
             # Since get_daily_quota doesn't parse everything, we might want to manually populate

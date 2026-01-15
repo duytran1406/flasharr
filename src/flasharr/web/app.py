@@ -64,6 +64,23 @@ def create_app(config_override: dict = None) -> Flask:
     from .sabnzbd_routes import sabnzbd_bp
     from .settings_api import settings_bp
     
+    # Initialize Core Services (Critical for Gunicorn/Prod)
+    try:
+        from ..core.account_manager import AccountManager
+        from ..factory import create_indexer_service
+        
+        # Attach services to app instance so they are accessible via current_app
+        app.account_manager = AccountManager()
+        app.indexer = create_indexer_service() 
+        # Note: sabnzbd service is usually async/background, might need special handling if used here
+        # For now, verify-account only needs account_manager
+        
+        logger.info(f"Core services initialized: AccountManager, Indexer")
+    except Exception as e:
+        logger.error(f"Failed to initialize core services: {e}")
+    
+    # Register blueprints
+    
     # Inject version into all templates
     @app.context_processor
     def inject_version():

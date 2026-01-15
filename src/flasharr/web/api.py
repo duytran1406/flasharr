@@ -519,6 +519,15 @@ def verify_account():
             "account": account
         })
     except Exception as e:
+        # Check if it looks like an auth error even if not detailed type
+        err_msg = str(e).lower()
+        if "session expired" in err_msg or "login failed" in err_msg:
+             return jsonify({
+                 "status": "error",
+                 "code": "SESSION_EXPIRED",
+                 "message": "Your Fshare session has expired. Please log in again."
+             }), 401
+             
         logger.error(f"Account verification failed: {e}")
         return jsonify({"status": "error", "message": f"Verification failed: {str(e)}"}), 500
 
