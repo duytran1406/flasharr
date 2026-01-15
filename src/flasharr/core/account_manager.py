@@ -125,6 +125,15 @@ class AccountManager:
                 self.primary_email = email
             logger.info(f"Added new account: {email}")
         
+        # DEBUG: Log account contents before saving to diagnose missing cookies
+        # Mask password for logs
+        debug_acc = account.copy()
+        if 'password' in debug_acc: debug_acc['password'] = '***'
+        if 'cookies' in debug_acc: 
+            logger.info(f"Checking cookies for save: {list(debug_acc['cookies'].keys()) if debug_acc['cookies'] else 'EMPTY'}")
+        else:
+            logger.error("CRITICAL: 'cookies' key MISSING in account dict before save!")
+            
         self._save()
         logger.info(f"Added account: {email}")
         
