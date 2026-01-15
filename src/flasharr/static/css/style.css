@@ -2264,15 +2264,15 @@ td:first-child,
 }
 
 .result-card {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 12px;
-  padding: 1.25rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
   transition: all 0.2s ease;
   height: 100%;
+  overflow: hidden;
+  position: relative;
 }
 
 .result-card:hover {
@@ -2290,31 +2290,102 @@ td:first-child,
 }
 
 .result-title {
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: 1.1rem;
+  font-weight: 700;
   line-height: 1.4;
-  color: var(--text-color);
   margin: 0;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  word-break: break-word;
+  height: 3rem;
+  color: var(--text-color);
+}
+
+.result-subtitle {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 0.25rem;
+}
+
+.card-v2-header-bg {
+  height: 6px;
+  background: linear-gradient(90deg, var(--primary), rgb(var(--accent-500)));
+  width: 100%;
+}
+
+.card-v2-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.result-card .badge {
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.result-card .badge-quality {
+  background: rgba(var(--accent-500), 0.15);
+  color: rgb(var(--accent-500));
+  border: 1px solid rgba(var(--accent-500), 0.3);
+}
+
+.result-card .badge-tag {
+  background: rgba(var(--primary-rgb), 0.15);
+  color: var(--primary);
+  border: 1px solid rgba(var(--primary-rgb), 0.3);
+}
+
+.card-v2-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.v2-stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.v2-stat-label {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.v2-stat-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: white;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* Range slider */
-/* Range slider */
 .form-range {
   -webkit-appearance: none;
+  appearance: none;
   width: 100%;
   height: 6px;
   background: rgba(255, 255, 255, 0.15);
-  /* Increased visibility */
   border-radius: 3px;
   outline: none;
   margin: 10px 0;
-  /* Add margin for handle space */
 }
 
 .form-range::-webkit-slider-thumb {
@@ -2791,23 +2862,63 @@ td:first-child,
   /* Ensure hidden cols are visible in Grid if needed */
 }
 
-/* List View Overrides */
-.search-results-list {
+/* List View Overrides for Card V2 */
+.search-results-list .result-card {
+  padding: 12px 24px;
+  flex-direction: row;
+  align-items: center;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border-color);
+  background: transparent;
+  min-height: 72px;
+}
+
+.search-results-list .card-v2-header-bg {
+  display: none;
+}
+
+.search-results-list .card-v2-stats {
   display: flex;
-  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  flex: 0 0 auto;
   gap: 0;
 }
 
-.search-results-list .result-card {
-  padding: 16px 24px;
-  gap: 0;
-  min-height: 64px;
-  background: transparent;
-  border: none;
-  border-bottom: 1px solid var(--border-color);
-  border-radius: 0;
+.search-results-list .v2-stat-item {
   flex-direction: row;
   align-items: center;
+  gap: 1rem;
+}
+
+.search-results-list .v2-stat-label {
+  display: none;
+  /* Labels not needed in list view row */
+}
+
+/* Actions in List View */
+.search-results-list .card-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0;
+  background: transparent;
+  flex: 0 0 120px;
+  justify-content: flex-end;
+}
+
+.search-results-list .btn-download {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0;
+  /* Hide text */
+}
+
+.search-results-list .btn-download .material-icons {
+  font-size: 18px;
 }
 
 .search-results-list .result-card:hover {

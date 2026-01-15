@@ -494,7 +494,7 @@
 
         function createResultCard(result) {
             const card = document.createElement('div');
-            card.className = 'result-card'; // CSS handles list/grid transformation based on container class
+            card.className = 'result-card';
 
             const qualityBadge = result.quality || '1080P';
             const hasVietsub = result.vietsub || false;
@@ -507,53 +507,51 @@
             const episode = result.episode ? String(result.episode).padStart(2, '0') : '--';
             const seriesBadge = isSeries ? `S${season}E${episode}` : '';
 
+            const sizeFormatted = window.bridge ? window.bridge.formatSize(result.size) : (result.size || 'N/A');
+
             card.innerHTML = `
-            <div class="card-main-content">
-                <!-- Col Name -->
+            <div class="card-v2-header-bg" ${isSeries ? 'style="background: linear-gradient(90deg, #8b5cf6, #ec4899);"' : ''}></div>
+            <div class="card-body card-content">
                 <div class="col-name header-content">
                     <h3 class="result-title" title="${escapeHtml(result.name)}">${escapeHtml(result.name)}</h3>
                     <div class="result-subtitle" title="${escapeHtml(originalFilename)}">${escapeHtml(originalFilename)}</div>
                 </div>
 
-                <!-- Col Quality -->
-                <div class="col-quality mobile-hide">
-                    <span class="quality-badge quality-${qualityBadge.toLowerCase()}">${qualityBadge}</span>
+                <div class="card-v2-badges">
+                    <span class="badge badge-quality">${qualityBadge}</span>
+                    ${isSeries ? `<span class="badge badge-tag" style="background: rgba(234, 179, 8, 0.15); color: #facc15; border-color: rgba(234, 179, 8, 0.3);">${seriesBadge}</span>` : ''}
+                    ${hasVietsub ? '<span class="badge badge-tag">Vietsub</span>' : ''}
+                    ${hasVietdub ? '<span class="badge badge-tag">Vietdub</span>' : ''}
                 </div>
 
-                <!-- Col Tags -->
-                <div class="col-tags mobile-hide">
-                     ${hasVietsub ? '<span class="tag tag-vietsub" title="Vietsub">VS</span>' : ''}
-                     ${hasVietdub ? '<span class="tag tag-vietdub" title="Vietdub">VD</span>' : ''}
-                </div>
-
-                <!-- Col Size -->
-                <div class="col-size meta-text">
-                    <span class="meta-value">${window.bridge ? window.bridge.formatSize(result.size) : (result.size || 'N/A')}</span>
-                </div>
-                
-                <!-- Col S/E -->
-                 <div class="col-season meta-text">
-                    <span class="meta-value">${isSeries ? seriesBadge : '--'}</span>
-                </div>
-
-                <!-- Col Score -->
-                <div class="col-score meta-text">
-                     <span class="material-icons" style="font-size: 14px; vertical-align: middle; color: gold;">star</span>
-                     <span class="meta-value">${score}</span>
+                <div class="card-v2-stats">
+                    <div class="col-size v2-stat-item">
+                        <span class="v2-stat-label">Size</span>
+                        <span class="v2-stat-value">${sizeFormatted}</span>
+                    </div>
+                    <div class="col-score v2-stat-item">
+                        <span class="v2-stat-label">Relevance</span>
+                        <span class="v2-stat-value" style="color: gold;">
+                            <span class="material-icons" style="font-size: 14px;">star</span> 
+                            ${score}
+                        </span>
+                    </div>
+                    <!-- Hidden elements for list view alignment if needed -->
+                    <div class="col-quality" style="display:none"></div>
+                    <div class="col-tags" style="display:none"></div>
+                    <div class="col-season" style="display:none"></div>
                 </div>
             </div>
 
-            <!-- Col Action -->
             <div class="col-action card-actions">
-                <button class="action-btn download-btn" data-url="${escapeHtml(result.url)}" data-name="${escapeHtml(result.name)}">
-                    <span class="material-icons">download</span>
+                <button class="btn-download download-btn" data-url="${escapeHtml(result.url)}" data-name="${escapeHtml(result.name)}">
+                    <span class="material-icons">download</span> Download
                 </button>
-                <button class="action-btn copy-btn" data-url="${escapeHtml(result.url)}" title="Copy Link">
+                <button class="btn-icon copy-btn" data-url="${escapeHtml(result.url)}" title="Copy Link">
                     <span class="material-icons">content_copy</span>
                 </button>
             </div>
             
-            <!-- Loading Overlay -->
             <div class="card-overlay">
                 <div class="spinner"></div>
                 <span>Adding...</span>
