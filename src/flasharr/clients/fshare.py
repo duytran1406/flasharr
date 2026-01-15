@@ -135,7 +135,9 @@ class FshareClient:
         
     def get_cookies(self) -> Dict[str, str]:
         """Get current session cookies."""
-        return self.session.cookies.get_dict()
+        if not self.session.cookies:
+            return {}
+        return requests.utils.dict_from_cookiejar(self.session.cookies)
         
     def set_cookies(self, cookies: Dict[str, str]):
         """Set session cookies."""
