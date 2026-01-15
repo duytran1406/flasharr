@@ -303,6 +303,7 @@ class FshareClient:
                 expiry_str = valid_until_match.group(1).strip()
                 # Clean up string from tags if any
                 expiry_str = re.sub(r'<[^>]+>', '', expiry_str).strip()
+                logger.info(f"DEBUG: Found expiry string: {expiry_str}")
                 
                 # Handle "Lifetime" / "Vĩnh viễn"
                 if re.search(r'Vĩnh viễn|Lifetime|Forever', expiry_str, re.IGNORECASE):
@@ -313,6 +314,7 @@ class FshareClient:
                         try:
                             expiry_time = time.mktime(time.strptime(expiry_str, fmt))
                             self._premium_expiry = int(expiry_time)
+                            logger.info(f"DEBUG: Parsed expiry time: {self._premium_expiry} (from {fmt})")
                             break
                         except ValueError:
                             continue
@@ -322,6 +324,7 @@ class FshareClient:
              self._premium_expiry = -1
              self._is_premium = True
              self._account_type = "VIP (Lifetime)"
+             logger.info("DEBUG: Detected Lifetime VIP from global HTML search")
 
         # TRAFFIC
         # Vietnamese: Dung lượng tải | Tải trong ngày, English: Daily download | Traffic left
@@ -336,6 +339,7 @@ class FshareClient:
                 raw_traffic = traffic_match.group(1).strip()
                 raw_traffic = re.sub(r'<[^>]+>', '', raw_traffic).strip()
                 self._traffic_left = re.sub(r'\s+', ' ', raw_traffic)
+                logger.info(f"DEBUG: Parsed traffic left: {self._traffic_left} (pattern: {pattern})")
                 if self._traffic_left and len(self._traffic_left) < 50: # Sanity check for too large matches
                     break
                 else:
@@ -670,9 +674,13 @@ class FshareClient:
                 return None
 
             if response.status_code != 200:
+                logger.error(f"Profile check failed with status {response.status_code}")
                 return None
                 
             html = response.text
+            # DEBUG: Log profile HTML snippet for debugging
+            logger.info(f"DEBUG: Profile HTML snippet (first 500 chars): {html[:500]}")
+            
             # Use same fallback logic as _parse_profile
             traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?<\w+[^>]*>(.*?)</\w+>', html, re.IGNORECASE | re.DOTALL)
             if not traffic_match:
@@ -682,10 +690,15 @@ class FshareClient:
             
             if traffic_match:
                 raw_traffic = traffic_match.group(1).strip()
+                logger.info(f"DEBUG: Found traffic match: {raw_traffic}")
                 raw_traffic = re.sub(r'<[^>]+>', '', raw_traffic).strip()
                 self._traffic_left = re.sub(r'\s+', ' ', raw_traffic)
+                
+                # Also try to parse full profile to ensure all fields are up to date
+                self._parse_profile(html)
                 return self._traffic_left
             
+            logger.warning("DEBUG: No traffic pattern matched in get_daily_quota")
             # Fallback: full parse might find it via other patterns
             self._parse_profile(html)
             return self._traffic_left
