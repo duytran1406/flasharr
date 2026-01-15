@@ -843,7 +843,7 @@ if (typeof window.FshareBridge === 'undefined') {
                 else if (s.includes('pause')) statusColor = '#eab308'; // Amber
 
                 return `
-                <div class="minified-item minified-list-grid">
+                <div class="minified-item minified-list-grid" oncontextmenu="bridge.showContextMenu(event, '${item.fid}')">
                     <div class="name-col" title="${this.escapeHtml(item.name)}" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                         ${this.escapeHtml(item.name)}
                     </div>
