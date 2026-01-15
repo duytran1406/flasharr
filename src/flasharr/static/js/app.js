@@ -1453,33 +1453,17 @@ if (typeof window.FshareBridge === 'undefined') {
         // --- Debug / Mock Data ---
         addDebugItems() {
             const mocks = [
-                {
-                    fid: 'mock-1', name: 'Avengers.Endgame.2019.2160p.UHD.BluRay.x265-HDR.mkv',
-                    status: 'downloading', progress: 45.2, size: '22.5 GB', speed: '14.2 MB/s', eta: '1h 20m', category: 'Movies', added: new Date().toISOString()
-                },
-                {
-                    fid: 'mock-2', name: 'Ubuntu-22.04.3-live-server-amd64.iso',
-                    status: 'completed', progress: 100, size: '2.1 GB', speed: '0 B/s', eta: '-', category: 'ISO', added: new Date(Date.now() - 3600000).toISOString()
-                },
-                {
-                    fid: 'mock-3', name: 'Holiday_Photos_2023.zip',
-                    status: 'paused', progress: 12.5, size: '450 MB', speed: '0 B/s', eta: '-', category: 'Other', added: new Date(Date.now() - 7200000).toISOString()
-                },
-                {
-                    fid: 'mock-4', name: 'Failed_Download_Attempt.rar',
-                    status: 'error', progress: 0, size: '1.2 GB', speed: '-', eta: '-', category: 'Compressed', error_message: 'File not found on server', added: new Date(Date.now() - 86400000).toISOString()
-                }
+                { id: 'd1', name: 'Ubuntu_24.04_LTS_Desktop_amd64.iso', size: '4.2 GB', progress: 45, status: 'Downloading', speed: '15.5 MB/s', eta: '12m 30s', category: 'ISO' },
+                { id: 'd2', name: 'Big_Buck_Bunny_4K.mp4', size: '850 MB', progress: 100, status: 'Completed', speed: '0 B/s', eta: '--', category: 'Video' },
+                { id: 'd3', name: 'Broken_Archive.rar', size: '1.2 GB', progress: 12, status: 'Error', speed: '0 B/s', eta: '--', category: 'Archive' },
+                { id: 'd4', name: 'Project_Backup_2025.zip', size: '250 MB', progress: 0, status: 'Paused', speed: '0 B/s', eta: '--', category: 'Backup' }
             ];
 
-            // Append to Dashboard List
+            // 1. Dashboard List
             const dashContainer = document.getElementById('dash-minified-queue');
             if (dashContainer) {
-                // Clean empty placeholder if exists
                 if (dashContainer.querySelector('.empty-placeholder')) dashContainer.innerHTML = '';
-
-                // Use dashboard rendering logic but append
                 const html = mocks.map(d => {
-                    // Mimic renderMinifiedQueue logic (or reuse it if refactored, but inline for safety here)
                     const status = d.status || 'Unknown';
                     const s = status.toLowerCase();
                     let statusColor = 'var(--text-muted)';
@@ -1507,14 +1491,61 @@ if (typeof window.FshareBridge === 'undefined') {
                 dashContainer.insertAdjacentHTML('beforeend', html);
             }
 
-            // Append to Full Downloads List
+            // 2. Full Downloads List (Downloads Tab)
             const fullContainer = document.getElementById('downloads-full-list');
             if (fullContainer) {
-                // Remove empty placeholder row if it's the only child
+                // Clear placeholder if it exists (check strictly for placeholder row)
                 const firstRow = fullContainer.querySelector('tr');
-                if (firstRow && firstRow.innerText.includes('No downloads')) fullContainer.innerHTML = '';
+                if (firstRow && (firstRow.innerText.includes('No downloads') || firstRow.innerText.includes('Loading'))) {
+                    fullContainer.innerHTML = '';
+                }
 
-                const html = mocks.map(d => this.createFullDownloadRow(d)).join('');
+                // Append Mock Rows
+                const html = mocks.map(d => {
+                    // Re-use logic or duplicate row generation for safety
+                    const status = d.status;
+                    const s = status.toLowerCase();
+                    let statusClass = 'chip-default';
+                    let rowClass = '';
+                    if (s.includes('down')) { statusClass = 'chip-running'; rowClass = 'row-running'; }
+                    else if (s.includes('complete')) { statusClass = 'chip-completed'; rowClass = 'row-completed'; }
+                    else if (s.includes('error')) { statusClass = 'chip-error'; rowClass = 'row-error'; }
+                    else if (s.includes('pause')) { statusClass = 'chip-paused'; rowClass = 'row-paused'; }
+
+                    // Calculate progress bar color
+                    let barClass = '';
+                    if (s.includes('complete')) barClass = 'completed';
+                    else if (s.includes('error')) barClass = 'error';
+
+                    return `
+                    <tr class="main-row ${rowClass}">
+                        <td class="checkbox-cell">
+                            <input type="checkbox" class="mui-checkbox download-checkbox" value="${d.id}">
+                        </td>
+                        <td class="cell-name" data-label="NAME">
+                            <div class="download-name" title="${d.name}">
+                                <span class="material-icons file-icon">description</span> ${d.name}
+                            </div>
+                        </td>
+                        <td class="cell-size" data-label="SIZE">${d.size}</td>
+                        <td class="cell-progress" data-label="PROGRESS">
+                            <div class="progress-wrapper">
+                                <div class="linear-progress">
+                                    <div class="progress-bar ${barClass}" style="width: ${d.progress}%;"></div>
+                                </div>
+                                <span class="progress-text">${d.progress}%</span>
+                            </div>
+                        </td>
+                        <td class="cell-status" data-label="STATUS">
+                            <span class="status-chip ${statusClass}">${status.toUpperCase()}</span>
+                        </td>
+                        <td class="cell-speed" data-label="SPEED">${d.speed}</td>
+                        <td class="cell-eta" data-label="ETA">${d.eta}</td>
+                        <td class="cell-category" data-label="CATEGORY">${d.category}</td>
+                        <td class="cell-date" data-label="ADDED">Just Now</td>
+                    </tr>
+                    `;
+                }).join('');
                 fullContainer.insertAdjacentHTML('beforeend', html);
             }
 
