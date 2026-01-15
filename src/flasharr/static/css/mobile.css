@@ -60,7 +60,7 @@
 
     /* --- Bottom Navigation --- */
     .bottom-nav {
-        display: flex;
+        display: flex !important;
         justify-content: space-between;
         align-items: center;
         position: fixed;
@@ -528,8 +528,51 @@
         text-align: left !important;
     }
 
+    /* --- Minified Queue Card View (Mobile) --- */
+    .minified-list-header {
+        display: none !important;
+    }
+
+    .minified-list-grid.minified-item {
+        display: grid;
+        grid-template-areas:
+            "name name"
+            "status status"
+            "size speed";
+        grid-template-columns: 1fr 1fr;
+        gap: 0.5rem;
+        padding: 1rem;
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        margin-bottom: 0.5rem;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+
+    .minified-item .name-col {
+        grid-area: name;
+        font-weight: 700;
+        font-size: 0.95rem;
+        width: 100%;
+        margin-bottom: 0.25rem;
+        padding-right: 0 !important;
+    }
+
+    .minified-item .status-col {
+        grid-area: status;
+        width: 100%;
+    }
+
+    .minified-item .size-col {
+        grid-area: size;
+        text-align: left !important;
+        font-size: 0.8rem;
+    }
+
     .minified-item .speed-col {
         grid-area: speed;
         text-align: right !important;
+        font-size: 0.8rem;
+        color: var(--primary);
     }
 }
