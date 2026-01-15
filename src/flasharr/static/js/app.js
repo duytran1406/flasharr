@@ -330,7 +330,8 @@ if (typeof window.FshareBridge === 'undefined') {
                             a: data.account.available,
                             premium: data.account.premium,
                             type: data.account.account_type,
-                            traffic: data.account.traffic_left
+                            traffic: data.account.traffic_left,
+                            expire_date: data.account.expiry // Pass expiry from API
                         });
                         this.setText('fshare-daily-quota', data.account.traffic_left || '-- / --');
 
@@ -555,7 +556,8 @@ if (typeof window.FshareBridge === 'undefined') {
             this.stats.fshare_downloader.primary_account = {
                 valid: status.a,
                 premium: isPremium,
-                type: status.type
+                type: status.type,
+                expire_date: status.expire_date || status.expiry // Store expiry
             };
 
             this.updateDashboard();

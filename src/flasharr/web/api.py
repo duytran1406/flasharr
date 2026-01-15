@@ -526,6 +526,17 @@ def verify_account():
                 "account": account
             }), 401
 
+        # Add formatted expiry for UI consistency (matching /api/stats)
+        if account.get('validuntil'):
+             if account.get('validuntil') == -1:
+                 account['expiry'] = "Lifetime"
+             else:
+                 try:
+                     dt = datetime.fromtimestamp(int(account.get('validuntil')))
+                     account['expiry'] = dt.strftime('%d-%m-%Y')
+                 except:
+                     account['expiry'] = "Unknown"
+
         return jsonify({
             "status": "ok", 
             "message": "Account verified successfully",
