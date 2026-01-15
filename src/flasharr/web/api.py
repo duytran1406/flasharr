@@ -498,7 +498,11 @@ def verify_account():
 
         primary = current_app.account_manager.get_primary()
         if not primary:
-             return jsonify({"status": "error", "message": "No account configured"}), 404
+             return jsonify({
+                 "status": "error",
+                 "code": "NO_ACCOUNT", 
+                 "message": "No account login. Please login to continue."
+             }), 401
 
         # Force refresh which calls login() -> check profile -> updates daily quota
         account = current_app.account_manager.refresh_account(primary['email'])

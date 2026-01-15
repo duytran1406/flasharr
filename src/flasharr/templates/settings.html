@@ -616,7 +616,7 @@
 
                 if (response.status === 401) {
                     const data = await response.json();
-                    if (data.code === 'SESSION_EXPIRED') {
+                    if (data.code === 'SESSION_EXPIRED' || data.code === 'NO_ACCOUNT') {
                         showSessionExpiredModal(data.message);
                     }
                 }
