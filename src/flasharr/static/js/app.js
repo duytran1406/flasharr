@@ -1861,18 +1861,27 @@ if (typeof window.FshareBridge === 'undefined') {
 
             menu.style.display = 'block';
 
-            // Position menu
-            let x = e.clientX;
-            let y = e.clientY;
+            // Position menu using Page coordinates (relative to document, handles scroll)
+            let x = e.pageX;
+            let y = e.pageY;
 
-            // Boundary checks
+            // Boundary checks (Viewport relative)
             const winW = window.innerWidth;
             const winH = window.innerHeight;
+            const scrollX = window.scrollX || window.pageXOffset;
+            const scrollY = window.scrollY || window.pageYOffset;
             const menuW = menu.offsetWidth;
             const menuH = menu.offsetHeight;
 
-            if (x + menuW > winW) x = winW - menuW - 10;
-            if (y + menuH > winH) y = winH - menuH - 10;
+            // Check Right Edge: x - scrollX is viewport x
+            if ((x - scrollX) + menuW > winW) {
+                x = winW + scrollX - menuW - 10;
+            }
+
+            // Check Bottom Edge: y - scrollY is viewport y
+            if ((y - scrollY) + menuH > winH) {
+                y = winH + scrollY - menuH - 10;
+            }
 
             menu.style.left = x + 'px';
             menu.style.top = y + 'px';
