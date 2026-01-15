@@ -105,7 +105,7 @@ if [ "$MODE" == "WORKER" ]; then
     docker rm -f flasharr || true
     
     echo "🔨 Rebuilding..."
-    docker compose build --no-cache
+    docker compose build
 
     echo "🚀 Starting..."
     docker compose up -d
