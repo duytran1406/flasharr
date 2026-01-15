@@ -640,10 +640,10 @@
             padding: 1rem 1.5rem;
             background: ${type === 'success' ? 'rgba(34, 197, 94, 0.9)' : 'rgba(239, 68, 68, 0.9)'};
             color: white;
-            border - radius: 8px;
-            z - index: 10000;
-            font - weight: 500;
-            box - shadow: 0 10px 30px - 5px rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            z-index: 10000;
+            font-weight: 500;
+            box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.5);
             `;
             notification.textContent = message;
             document.body.appendChild(notification);
@@ -662,7 +662,8 @@
         // Initial state from bridge
         if (allResults.length > 0) {
             // Apply view mode
-            const viewBtn = document.querySelector(`.view - btn[data - view="${currentView}"]`);
+            // Apply view mode
+            const viewBtn = document.querySelector(`.view-btn[data-view="${currentView}"]`);
             if (viewBtn) viewBtn.click();
 
             if (searchInput.value) {
