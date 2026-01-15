@@ -78,13 +78,13 @@
                 <tbody id="downloads-full-list">
                     <!-- Dummy Row 1: Active Download -->
                     <tr class="main-row row-running">
-                        <td class="cell-name">
+                        <td class="cell-name" data-label="NAME">
                             <div class="download-name" title="Ubuntu_24.04_LTS_Desktop_amd64.iso">
                                 <span class="material-icons file-icon">iso</span> Ubuntu_24.04_LTS_Desktop_amd64.iso
                             </div>
                         </td>
-                        <td class="cell-size">4.2 GB</td>
-                        <td class="cell-progress">
+                        <td class="cell-size" data-label="SIZE">4.2 GB</td>
+                        <td class="cell-progress" data-label="PROGRESS">
                             <div class="progress-wrapper">
                                 <div class="linear-progress">
                                     <div class="progress-bar" style="width: 45%;"></div>
@@ -92,24 +92,24 @@
                                 <span class="progress-text">45%</span>
                             </div>
                         </td>
-                        <td class="cell-status">
+                        <td class="cell-status" data-label="STATUS">
                             <span class="status-chip chip-running">DOWNLOADING</span>
                         </td>
-                        <td class="cell-speed">15.5 MB/s</td>
-                        <td class="cell-eta">12m 30s</td>
-                        <td class="cell-category">ISO</td>
-                        <td class="cell-date">Just now</td>
+                        <td class="cell-speed" data-label="SPEED">15.5 MB/s</td>
+                        <td class="cell-eta" data-label="ETA">12m 30s</td>
+                        <td class="cell-category" data-label="CATEGORY">ISO</td>
+                        <td class="cell-date" data-label="ADDED">Just now</td>
                     </tr>
 
                     <!-- Dummy Row 2: Completed -->
                     <tr class="main-row row-completed">
-                        <td class="cell-name">
+                        <td class="cell-name" data-label="NAME">
                             <div class="download-name" title="Big_Buck_Bunny_4K.mp4">
                                 <span class="material-icons file-icon">movie</span> Big_Buck_Bunny_4K.mp4
                             </div>
                         </td>
-                        <td class="cell-size">850 MB</td>
-                        <td class="cell-progress">
+                        <td class="cell-size" data-label="SIZE">850 MB</td>
+                        <td class="cell-progress" data-label="PROGRESS">
                             <div class="progress-wrapper">
                                 <div class="linear-progress">
                                     <div class="progress-bar completed" style="width: 100%;"></div>
@@ -117,24 +117,24 @@
                                 <span class="progress-text">100%</span>
                             </div>
                         </td>
-                        <td class="cell-status">
+                        <td class="cell-status" data-label="STATUS">
                             <span class="status-chip chip-completed">COMPLETED</span>
                         </td>
-                        <td class="cell-speed">0 B/s</td>
-                        <td class="cell-eta">--</td>
-                        <td class="cell-category">Video</td>
-                        <td class="cell-date">2h ago</td>
+                        <td class="cell-speed" data-label="SPEED">0 B/s</td>
+                        <td class="cell-eta" data-label="ETA">--</td>
+                        <td class="cell-category" data-label="CATEGORY">Video</td>
+                        <td class="cell-date" data-label="ADDED">2h ago</td>
                     </tr>
 
                     <!-- Dummy Row 3: Error -->
                     <tr class="main-row row-error">
-                        <td class="cell-name">
+                        <td class="cell-name" data-label="NAME">
                             <div class="download-name" title="Broken_Archive.rar">
                                 <span class="material-icons file-icon">folder_zip</span> Broken_Archive.rar
                             </div>
                         </td>
-                        <td class="cell-size">1.2 GB</td>
-                        <td class="cell-progress">
+                        <td class="cell-size" data-label="SIZE">1.2 GB</td>
+                        <td class="cell-progress" data-label="PROGRESS">
                             <div class="progress-wrapper">
                                 <div class="linear-progress">
                                     <div class="progress-bar error" style="width: 12%;"></div>
@@ -142,13 +142,13 @@
                                 <span class="progress-text">12%</span>
                             </div>
                         </td>
-                        <td class="cell-status">
+                        <td class="cell-status" data-label="STATUS">
                             <span class="status-chip chip-error">ERROR</span>
                         </td>
-                        <td class="cell-speed">0 B/s</td>
-                        <td class="cell-eta">--</td>
-                        <td class="cell-category">Archive</td>
-                        <td class="cell-date">1d ago</td>
+                        <td class="cell-speed" data-label="SPEED">0 B/s</td>
+                        <td class="cell-eta" data-label="ETA">--</td>
+                        <td class="cell-category" data-label="CATEGORY">Archive</td>
+                        <td class="cell-date" data-label="ADDED">1d ago</td>
                     </tr>
                 </tbody>
                 <tfoot id="downloads-footer"

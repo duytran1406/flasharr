@@ -424,14 +424,34 @@
                 const premiumClass = acc.premium ? 'premium' : 'expired';
                 const premiumText = acc.premium ? (acc.account_type || 'VIP') : 'Free';
 
-                // Format traffic
+                // Format traffic and progress bar
                 let trafficHtml = '<span class="status-badge">N/A</span>';
                 if (acc.traffic_left) {
-                    trafficHtml = `
-                        <div class="traffic-info">
-                            <span class="traffic-value">${acc.traffic_left}</span>
-                        </div>
-                    `;
+                    // Try to parse "Used / Total" format
+                    const parts = acc.traffic_left.split('/');
+                    if (parts.length === 2) {
+                        const used = parseFloat(parts[0]);
+                        const total = parseFloat(parts[1]);
+                        const percent = Math.min(100, Math.max(0, (used / total) * 100));
+
+                        trafficHtml = `
+                            <div class="traffic-info">
+                                <div class="traffic-meta">
+                                    <span>${acc.traffic_left}</span>
+                                    <span>${Math.round(percent)}%</span>
+                                </div>
+                                <div class="traffic-progress-container">
+                                    <div class="traffic-progress-fill" style="width: ${percent}%"></div>
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        trafficHtml = `
+                            <div class="traffic-info">
+                                <span class="traffic-value">${acc.traffic_left}</span>
+                            </div>
+                        `;
+                    }
                 }
 
                 let validUntil = 'N/A';
@@ -439,7 +459,7 @@
                     if (acc.validuntil === -1) {
                         validUntil = 'Lifetime';
                     } else if (typeof acc.validuntil === 'number') {
-                        validUntil = new Date(acc.validuntil * 1000).toLocaleDateString();
+                        validUntil = new Date(acc.validuntil * 1000).toLocaleDateString('en-GB');
                     } else {
                         validUntil = acc.validuntil;
                     }
@@ -447,7 +467,7 @@
 
                 html += `
                     <tr class="${isPrimary ? 'primary-row' : ''}">
-                        <td>
+                        <td data-label="ACCOUNT">
                             <div class="account-cell">
                                 <div class="account-email-info">
                                     <span class="email-text">${acc.email}</span>
@@ -458,13 +478,13 @@
                                 </div>
                             </div>
                         </td>
-                        <td>
+                        <td data-label="STATUS">
                             <span class="status-badge ${acc.premium ? 'success' : ''}">${premiumText}</span>
                         </td>
-                        <td>
+                        <td data-label="DAILY TRAFFIC">
                             ${trafficHtml}
                         </td>
-                        <td>
+                        <td data-label="ACTIONS">
                             <div class="account-actions">
                                 <button onclick="refreshAccount('${acc.email}')" title="Refresh Account" class="action-btn-refresh">
                                     <span class="material-icons">refresh</span>
