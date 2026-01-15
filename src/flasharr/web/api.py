@@ -380,6 +380,15 @@ def download_from_search():
 def list_accounts():
     """List Fshare accounts."""
     try:
+        # TEST: Verify write permissions on load
+        try:
+            test_file = current_app.account_manager.storage_path.parent / "write_test.txt"
+            with open(test_file, "w") as f:
+                f.write(f"Write test successful at {datetime.now()}")
+            logger.info(f"✅ Write permission confirmed: {test_file}")
+        except Exception as e:
+            logger.error(f"❌ Write permission FAILED: {e}")
+
         accounts = current_app.account_manager.list_accounts()
         primary = current_app.account_manager.get_primary()
         return jsonify({
