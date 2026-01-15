@@ -161,6 +161,10 @@ class SABnzbdEmulator:
         self.account_manager = account_manager
         self.queue_manager = queue_manager
         
+        # Track last logged status to prevent spam from engine callback loops
+        self._last_status_log = {} # {nzo_id: status}
+
+        
         # No internal state anymore - rely on Engine + DB
         
         # If queue manager provided, ensure engine is synced if needed
@@ -626,8 +630,13 @@ class SABnzbdEmulator:
         This method is kept for Hook consistency (factory callback).
         """
         # Engine already updated DB state to COMPLETED/FAILED.
-        # We can just log it.
-        logger.info(f"Emulator: Item {nzo_id} completed with status: {status.value}")
+        # We can just log it, but prevent spam if called repeatedly
+        
+        last_status = self._last_status_log.get(nzo_id)
+        if last_status != status:
+            logger.info(f"Emulator: Item {nzo_id} completed with status: {status.value}")
+            self._last_status_log[nzo_id] = status
+            
         return True
     
     def _extract_url_from_nzb(self, nzb_data: bytes) -> Optional[str]:

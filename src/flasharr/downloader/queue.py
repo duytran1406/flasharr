@@ -116,7 +116,7 @@ class DownloadQueue:
         try:
             with self._get_connection() as conn:
                 conn.execute("""
-                    INSERT INTO downloads (
+                    INSERT OR REPLACE INTO downloads (
                         id, url, filename, destination, state,
                         downloaded_bytes, total_bytes, category, package_name,
                         wait_until, retry_count, plugin_name

@@ -326,7 +326,8 @@ class FshareClient:
         # TRAFFIC
         # Vietnamese: Dung lượng tải | Tải trong ngày, English: Daily download | Traffic left
         traffic_patterns = [
-            r'(?:Dung lượng tải|Tải trong ngày|Daily download|Traffic left).*?<(?:span|div|a)[^>]*>(.*?)</(?:span|div|a)>',
+            r'(?:Dung lượng tải|Tải trong ngày|Daily download|Traffic left).*?<(?:span|div|a|b|strong)[^>]*>(.*?)</(?:span|div|a|b|strong)>',
+            r'(?:Dung lượng tải|Tải trong ngày|Daily download|Traffic left)[^:]*:\s*(?:<[^>]+>)*\s*([\d.]+\s*[KMGT]?B)',
             r'(?:Dung lượng tải|Tải trong ngày|Daily download|Traffic left).*?:\s*(?:</a>\s*)?(.*?)\s*(?:</p>|<|$)'
         ]
         
@@ -334,10 +335,17 @@ class FshareClient:
             traffic_match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
             if traffic_match:
                 raw_traffic = traffic_match.group(1).strip()
+                # Clean HTML tags recursively
                 raw_traffic = re.sub(r'<[^>]+>', '', raw_traffic).strip()
+                # Clean extra whitespace
                 self._traffic_left = re.sub(r'\s+', ' ', raw_traffic)
-                if self._traffic_left and len(self._traffic_left) < 50: # Sanity check for too large matches
-                    break
+                
+                # Validation: must look like a size
+                if re.match(r'^[\d.]+\s*[KMGT]?B$', self._traffic_left, re.IGNORECASE):
+                     break
+                elif len(self._traffic_left) < 50: 
+                     # Allow lenient match if it's short text
+                     break
                 else:
                     self._traffic_left = None
 
