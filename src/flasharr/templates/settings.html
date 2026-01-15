@@ -410,10 +410,10 @@
                 <table class="account-table">
                     <thead>
                         <tr>
-                            <th>Email</th>
-                            <th>Status</th>
-                            <th>Valid Until</th>
-                            <th>Actions</th>
+                            <th style="width: 40%;">Account</th>
+                            <th style="width: 15%;">Status</th>
+                            <th style="width: 25%;">Daily Traffic</th>
+                            <th style="width: 20%;">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -422,7 +422,17 @@
             accounts.forEach(acc => {
                 const isPrimary = primary && (acc.email === primary.email);
                 const premiumClass = acc.premium ? 'premium' : 'expired';
-                const premiumText = acc.premium ? 'VIP' : 'Free';
+                const premiumText = acc.premium ? (acc.account_type || 'VIP') : 'Free';
+
+                // Format traffic
+                let trafficHtml = '<span class="status-badge">N/A</span>';
+                if (acc.traffic_left) {
+                    trafficHtml = `
+                        <div class="traffic-info">
+                            <span class="traffic-value">${acc.traffic_left}</span>
+                        </div>
+                    `;
+                }
 
                 let validUntil = 'N/A';
                 if (acc.validuntil) {
@@ -436,31 +446,36 @@
                 }
 
                 html += `
-                    <tr>
+                    <tr class="${isPrimary ? 'primary-row' : ''}">
                         <td>
-                            <div class="account-email">
-                                ${acc.email}
-                                ${isPrimary ? '<span class="primary-badge">Primary</span>' : ''}
+                            <div class="account-cell">
+                                <div class="account-email-info">
+                                    <span class="email-text">${acc.email}</span>
+                                    ${isPrimary ? '<span class="badge-primary">PRIMARY</span>' : ''}
+                                </div>
+                                <div class="account-meta">
+                                    <span class="meta-item"><span class="material-icons">event</span> ${validUntil}</span>
+                                </div>
                             </div>
                         </td>
                         <td>
                             <span class="status-badge ${acc.premium ? 'success' : ''}">${premiumText}</span>
                         </td>
                         <td>
-                            <span class="valid-until ${premiumClass}">${validUntil}</span>
+                            ${trafficHtml}
                         </td>
                         <td>
                             <div class="account-actions">
-                                <button class="icon-btn" onclick="refreshAccount('${acc.email}')" title="Refresh">
+                                <button onclick="refreshAccount('${acc.email}')" title="Refresh Account" class="action-btn-refresh">
                                     <span class="material-icons">refresh</span>
                                 </button>
                                 ${!isPrimary ? `
-                                    <button class="icon-btn" onclick="setPrimaryAccount('${acc.email}')" title="Set Primary">
-                                        <span class="material-icons">star_outline</span>
+                                    <button onclick="setPrimaryAccount('${acc.email}')" title="Set as Primary" class="action-btn-star">
+                                        <span class="material-icons">star_border</span>
                                     </button>
                                 ` : ''}
-                                <button class="icon-btn" onclick="removeAccount('${acc.email}')" title="Remove" style="color: #ef4444;">
-                                    <span class="material-icons">delete</span>
+                                <button onclick="removeAccount('${acc.email}')" title="Remove Account" class="action-btn-delete">
+                                    <span class="material-icons">delete_outline</span>
                                 </button>
                             </div>
                         </td>

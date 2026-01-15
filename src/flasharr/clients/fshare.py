@@ -271,22 +271,29 @@ class FshareClient:
     def _parse_profile(self, html: str):
         """Helper to parse profile HTML."""
         # ACCOUNT_TYPE
-        account_type_match = re.search(r'Loại tài khoản.*?<span[^>]*>(.*?)</span>', html, re.IGNORECASE | re.DOTALL)
+        # Vietnamese: Loại tài khoản, English: Account type
+        account_type_match = re.search(r'(?:Loại tài khoản|Account type).*?<(?:span|div)[^>]*>(.*?)</(?:span|div)>', html, re.IGNORECASE | re.DOTALL)
         if not account_type_match:
-            account_type_match = re.search(r'Loại tài khoản.*?>\s*(.*?)\s*<', html, re.IGNORECASE | re.DOTALL)
+            account_type_match = re.search(r'(?:Loại tài khoản|Account type).*?>\s*(.*?)\s*<', html, re.IGNORECASE | re.DOTALL)
             
         if account_type_match:
             self._account_type = account_type_match.group(1).strip()
+            self._account_type = re.sub(r'<[^>]+>', '', self._account_type).strip() # Clean HTML tags
             self._is_premium = any(x in self._account_type.upper() for x in ['VIP', 'PREMIUM'])
-            logger.info(f"Account type: {self._account_type} (Premium: {self._is_premium})")
+            logger.info(f"Account type detected: {self._account_type} (Premium: {self._is_premium})")
         else:
-            self._is_premium = 'VIP' in html or 'img alt="VIP"' in html or 'level-vip' in html.lower()
+            # Fallback checks for VIP indicators
+            self._is_premium = any(x in html for x in ['VIP', 'level-vip', 'img alt="VIP"'])
+            if self._is_premium:
+                self._account_type = "VIP"
+            else:
+                self._account_type = "Free"
         
         # VALID_UNTIL
-        # Try different possible labels/tags
-        valid_until_match = re.search(r'Hạn dùng:.*?<span[^>]*>(.*?)</span>', html, re.IGNORECASE | re.DOTALL)
+        # Vietnamese: Hạn dùng, English: Expiry / Valid until
+        valid_until_match = re.search(r'(?:Hạn dùng|Expiry|Valid until).*?<(?:span|div)[^>]*>(.*?)</(?:span|div)>', html, re.IGNORECASE | re.DOTALL)
         if not valid_until_match:
-            valid_until_match = re.search(r'Hạn dùng.*?>\s*(.*?)\s*<', html, re.IGNORECASE | re.DOTALL)
+            valid_until_match = re.search(r'(?:Hạn dùng|Expiry|Valid until).*?>\s*(.*?)\s*<', html, re.IGNORECASE | re.DOTALL)
             
         if valid_until_match:
             try:
@@ -294,30 +301,43 @@ class FshareClient:
                 expiry_str = valid_until_match.group(1).strip()
                 # Clean up string from tags if any
                 expiry_str = re.sub(r'<[^>]+>', '', expiry_str).strip()
-                for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%I:%M:%S %p %d-%m-%Y']:
-                    try:
-                        expiry_time = time.mktime(time.strptime(expiry_str, fmt))
-                        self._premium_expiry = int(expiry_time)
-                        break
-                    except ValueError:
-                        continue
-            except: pass
+                
+                # Handle "Lifetime" / "Vĩnh viễn"
+                if re.search(r'Vĩnh viễn|Lifetime|Forever', expiry_str, re.IGNORECASE):
+                    self._premium_expiry = -1
+                    self._is_premium = True
+                else:
+                    for fmt in ['%d/%m/%Y', '%d-%m-%Y', '%I:%M:%S %p %d-%m-%Y', '%Y-%m-%d %H:%M:%S']:
+                        try:
+                            expiry_time = time.mktime(time.strptime(expiry_str, fmt))
+                            self._premium_expiry = int(expiry_time)
+                            break
+                        except ValueError:
+                            continue
+            except Exception as e:
+                logger.debug(f"Failed to parse expiry date string '{valid_until_match.group(1)}': {e}")
         elif re.search(r'Vĩnh viễn|Lifetime|Forever', html, re.IGNORECASE):
              self._premium_expiry = -1
              self._is_premium = True
+             self._account_type = "VIP (Lifetime)"
 
         # TRAFFIC
-        # Try both the label and a more generic search
-        traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?<\w+[^>]*>(.*?)</\w+>', html, re.IGNORECASE | re.DOTALL)
-        if not traffic_match:
-             traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?:\s*</a>\s*(.*?)\s*</p>', html, re.IGNORECASE | re.DOTALL)
-        if not traffic_match:
-             traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?:\s*(.*?)\s*(?:<|$)', html, re.IGNORECASE | re.DOTALL)
+        # Vietnamese: Dung lượng tải | Tải trong ngày, English: Daily download | Traffic left
+        traffic_patterns = [
+            r'(?:Dung lượng tải|Tải trong ngày|Daily download|Traffic left).*?<(?:span|div|a)[^>]*>(.*?)</(?:span|div|a)>',
+            r'(?:Dung lượng tải|Tải trong ngày|Daily download|Traffic left).*?:\s*(?:</a>\s*)?(.*?)\s*(?:</p>|<|$)'
+        ]
         
-        if traffic_match:
-            raw_traffic = traffic_match.group(1).strip()
-            raw_traffic = re.sub(r'<[^>]+>', '', raw_traffic).strip()
-            self._traffic_left = re.sub(r'\s+', ' ', raw_traffic)
+        for pattern in traffic_patterns:
+            traffic_match = re.search(pattern, html, re.IGNORECASE | re.DOTALL)
+            if traffic_match:
+                raw_traffic = traffic_match.group(1).strip()
+                raw_traffic = re.sub(r'<[^>]+>', '', raw_traffic).strip()
+                self._traffic_left = re.sub(r'\s+', ' ', raw_traffic)
+                if self._traffic_left and len(self._traffic_left) < 50: # Sanity check for too large matches
+                    break
+                else:
+                    self._traffic_left = None
 
     def ensure_authenticated(self, force_login: bool = True) -> bool:
         """
