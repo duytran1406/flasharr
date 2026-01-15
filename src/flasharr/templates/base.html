@@ -58,6 +58,7 @@
 
     <!-- Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ version }}&t={{ now }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile.css') }}?v={{ version }}&t={{ now }}">
     <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.png') }}">
     <style>
         /* Context Menu Styles */
@@ -212,6 +213,34 @@
             <div class="version-label">v{{ version }}</div>
         </main>
     </div>
+
+    <!-- Mobile Bottom Navigation (Hidden on Desktop) -->
+    <nav class="bottom-nav" style="display: none;">
+        <a href="/" class="bottom-nav-item {% if request.path == '/' %}active{% endif %}">
+            <span class="material-icons">dashboard</span>
+            <span class="label">Dash</span>
+        </a>
+        <a href="/downloads" class="bottom-nav-item {% if request.path == '/downloads' %}active{% endif %}">
+            <span class="material-icons">cloud_download</span>
+            <span class="label">Down</span>
+        </a>
+
+        <!-- FAB Container (Center Docked) -->
+        <div class="bottom-nav-fab-container">
+            <button class="mobile-fab" onclick="bridge.showAddModal()">
+                <span class="material-icons">add</span>
+            </button>
+        </div>
+
+        <a href="/search" class="bottom-nav-item {% if request.path == '/search' %}active{% endif %}">
+            <span class="material-icons">search</span>
+            <span class="label">Search</span>
+        </a>
+        <a href="/settings" class="bottom-nav-item {% if request.path == '/settings' %}active{% endif %}">
+            <span class="material-icons">settings</span>
+            <span class="label">Set</span>
+        </a>
+    </nav>
 
     <!-- Context Menu (Moved to end of body) -->
     <div id="context-menu" class="context-menu" style="display: none;">

@@ -1,0 +1,313 @@
+/* ==========================================================================
+   Mobile Responsive Overrides (Max Width: 768px)
+   ========================================================================== */
+@media (max-width: 768px) {
+
+    /* 1. Layout Adjustments */
+    .app-wrapper {
+        flex-direction: column;
+        padding-bottom: 70px;
+        /* Space for Bottom Nav */
+        min-height: auto;
+        /* Allow scrolling */
+    }
+
+    /* Hide Desktop Sidebar */
+    .sidebar {
+        display: none !important;
+    }
+
+    /* Full Width Content */
+    .main-content,
+    .sidebar.collapsed+.main-content {
+        margin-left: 0 !important;
+        width: 100% !important;
+        padding: 0;
+    }
+
+    /* Header Overhaul */
+    .global-status-bar {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        padding: 0 1rem;
+        height: 56px;
+        /* Standard Mobile Header */
+        justify-content: center;
+        /* Center Title */
+    }
+
+    .status-bar-left {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .status-bar-right {
+        display: none;
+        /* Hide desktop stats in header */
+    }
+
+    .section-title {
+        font-size: 1.1rem;
+        text-align: center;
+    }
+
+    /* Content Area Padding */
+    .content-area {
+        padding: 1rem;
+        /* Reduced padding */
+    }
+
+    /* 2. Bottom Navigation Bar */
+    .bottom-nav {
+        display: flex !important;
+        /* Override inline display:none */
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        height: 64px;
+        background: var(--surface-variant);
+        border-top: 1px solid var(--border-color);
+        box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.2);
+        z-index: 1000;
+        align-items: center;
+        justify-content: space-around;
+        padding: 0 0.5rem;
+        padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    .bottom-nav-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-decoration: none;
+        color: var(--text-muted);
+        font-size: 0.7rem;
+        font-weight: 500;
+        gap: 4px;
+        flex: 1;
+        height: 100%;
+        border-radius: 8px;
+        transition: all 0.2s;
+    }
+
+    .bottom-nav-item .material-icons {
+        font-size: 24px;
+        margin-bottom: 0;
+    }
+
+    .bottom-nav-item.active {
+        color: var(--primary);
+    }
+
+    .bottom-nav-item:active {
+        background: rgba(255, 255, 255, 0.05);
+    }
+
+    /* 3. Mobile FAB (Center Docked) */
+    .bottom-nav-fab-container {
+        position: relative;
+        top: -24px;
+        /* Float above nav */
+        width: 56px;
+        height: 56px;
+    }
+
+    .mobile-fab {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        background: var(--primary);
+        color: var(--on-primary);
+        border: none;
+        box-shadow: 0 4px 12px rgba(29, 233, 182, 0.3);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: transform 0.2s;
+    }
+
+    .mobile-fab:active {
+        transform: scale(0.95);
+    }
+
+    body.light-mode .mobile-fab {
+        box-shadow: 0 4px 12px rgba(211, 47, 47, 0.3);
+    }
+
+
+    /* 4. Table to Card Transformation (Critical) */
+    .download-table {
+        display: block;
+        border: none;
+    }
+
+    .download-table thead {
+        display: none;
+        /* Hide Table Headers */
+    }
+
+    .download-table tbody {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .download-table tr {
+        display: grid;
+        grid-template-areas:
+            "checkbox name name name"
+            "progress progress progress progress"
+            "status speed eta size"
+            "category added . .";
+        grid-template-columns: 30px 1fr 1fr 1fr;
+        gap: 0.5rem;
+
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 12px;
+        padding: 1rem;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        position: relative;
+        height: auto !important;
+    }
+
+    .download-table td {
+        display: block;
+        border: none;
+        padding: 0 !important;
+        height: auto !important;
+        text-align: left !important;
+    }
+
+    /* Cell Specific Mapping */
+    .mui-head-cell.checkbox-cell,
+    .download-table td.checkbox-cell {
+        grid-area: checkbox;
+        width: auto !important;
+        max-width: none !important;
+        min-width: auto !important;
+        align-self: center;
+    }
+
+    .cell-name {
+        grid-area: name;
+        font-weight: 700;
+        font-size: 0.95rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        align-self: center;
+    }
+
+    /* Adjust file icon size */
+    .cell-name .material-icons {
+        font-size: 1.1rem;
+        vertical-align: text-bottom;
+    }
+
+    .cell-progress {
+        grid-area: progress;
+        width: 100%;
+        margin-top: 0.25rem;
+        margin-bottom: 0.25rem;
+    }
+
+    /* Make progress bar thicker on mobile for visibility */
+    .linear-progress {
+        height: 6px;
+    }
+
+    .cell-status {
+        grid-area: status;
+    }
+
+    .cell-speed {
+        grid-area: speed;
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        justify-self: center;
+    }
+
+    .cell-eta {
+        grid-area: eta;
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        justify-self: center;
+    }
+
+    .cell-size {
+        grid-area: size;
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        justify-self: end;
+    }
+
+    .cell-category {
+        grid-area: category;
+        align-self: end;
+    }
+
+    .cell-date {
+        grid-area: added;
+        font-size: 0.7rem;
+        color: var(--text-muted);
+        align-self: center;
+    }
+
+    /* Hide unused cells */
+    .download-table tr td:empty {
+        display: none;
+    }
+
+    /* Toolbar Adjustments */
+    .elegant-toolbar {
+        flex-direction: column;
+        gap: 1rem;
+        padding: 0;
+        background: transparent;
+        box-shadow: none;
+        margin-bottom: 1rem;
+    }
+
+    .search-wrapper {
+        width: 100%;
+        max-width: 100%;
+        margin: 0;
+    }
+
+    .action-group {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    /* Adjust Status Chips for Mobile */
+    .status-chip {
+        font-size: 0.65rem;
+        padding: 2px 6px;
+        height: auto;
+    }
+
+    /* Footer Adjustments */
+    .downloads-container tfoot,
+    .download-table tfoot {
+        display: none !important;
+        /* Hide footer pagination, maybe implement infinite scroll or simplified pager later?
+         For now, keeping it simple. Or remake it flex column.
+      */
+    }
+
+    /* Show simplified pager outside table for mobile? 
+     Actually, let's keep the footer but styled differently if possible. 
+     Since tfoot is part of table, and we broke table display, it might be messy.
+     Let's hide standard footer and rely on user scrolling or top controls if any. 
+  */
+
+    /* Dashboard Grid - Single Column */
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+}
