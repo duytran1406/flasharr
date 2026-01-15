@@ -310,4 +310,16 @@
     .dashboard-grid {
         grid-template-columns: 1fr;
     }
+
+    /* Override inline styles for the Stats Grid (Account/Queue) */
+    .stats-grid {
+        grid-template-columns: 1fr !important;
+        gap: 1rem !important;
+    }
+
+    /* Allow card body to flow naturally */
+    .stats-card {
+        height: auto !important;
+        min-height: auto !important;
+    }
 }
