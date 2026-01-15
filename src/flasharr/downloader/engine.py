@@ -17,7 +17,9 @@ import logging
 import time
 import psutil
 from pathlib import Path
-from typing import Optional, Dict, Callable, Any, List
+from typing import Optional, Dict, Callable, Any, List, TYPE_CHECKING
+if TYPE_CHECKING:
+    from .queue import DownloadQueue
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime, timedelta
@@ -201,6 +203,7 @@ class DownloadEngine:
         segments_per_download: int = 8,
         config: Optional[DownloadConfig] = None,
         progress_callback: Optional[ProgressCallback] = None,
+        queue_manager: Optional['DownloadQueue'] = None,
     ):
         """
         Initialize the download engine.
@@ -210,11 +213,13 @@ class DownloadEngine:
             segments_per_download: Number of connections per file
             config: Download configuration
             progress_callback: Optional callback for progress updates
+            queue_manager: Optional persistence manager
         """
         self.config = config or get_config().download
         self.max_concurrent = max_concurrent
         self.segments_per_download = segments_per_download
         self.progress_callback = progress_callback
+        self.queue_manager = queue_manager
         
         self._tasks: Dict[str, DownloadTask] = {}
         self._queue: asyncio.Queue = asyncio.Queue()
@@ -249,7 +254,7 @@ class DownloadEngine:
         
         stats = {
             "active_downloads": len(active_tasks),
-            "queue_size": sum(1 for t in self._tasks.values() if t.state == DownloadState.QUEUED),
+            "queue_size": sum(1 for t in self._tasks.values() if t.state in (DownloadState.QUEUED, DownloadState.WAITING)),
             "total_tasks": len(self._tasks),
             "total_speed": total_speed
         }
@@ -258,6 +263,96 @@ class DownloadEngine:
             stats["rate_limiter"] = self._rate_limiter.get_stats()
         
         return stats
+    
+        return stats
+        
+    async def restore_from_repository(self) -> None:
+        """Restore queued/interrupted tasks from repository."""
+        if not self.queue_manager:
+            return
+            
+        logger.info("Restoring tasks from repository...")
+        
+        # 1. Get pending tasks (Queued, Paused)
+        pending = self.queue_manager.get_pending_tasks(limit=1000)
+        count = 0
+        
+        for row in pending:
+            # Reconstruct Task object
+            # Note: We need to handle type conversion carefully
+            try:
+                task_id = row['id']
+                if task_id in self._tasks:
+                    continue
+                    
+                # Create base task
+                task = DownloadTask(
+                    id=task_id,
+                    url=row['url'],
+                    filename=row['filename'],
+                    destination=Path(row['destination']),
+                    state=DownloadState(row['state']) if row['state'] in [s.value for s in DownloadState] else DownloadState.QUEUED,
+                    category=row['category'],
+                    package_name=row['package_name'],
+                )
+                
+                # Restore progress
+                task.progress.downloaded_bytes = row['downloaded_bytes'] or 0
+                task.progress.total_bytes = row['total_bytes'] or 0
+                if task.progress.total_bytes > 0:
+                     task.progress.percentage = (task.progress.downloaded_bytes / task.progress.total_bytes) * 100
+                
+                # Restore metadata
+                if row['created_at']: task.created_at = datetime.fromisoformat(row['created_at']) if isinstance(row['created_at'], str) else row['created_at']
+                if row['retry_count']: task.retry_count = row['retry_count']
+                
+                self._tasks[task.id] = task
+                
+                # Determine where to put it
+                if task.state == DownloadState.QUEUED:
+                    await self._queue.put(task.id)
+                    count += 1
+                elif task.state == DownloadState.PAUSED:
+                    task.pause() # Ensure event is cleared
+                    count += 1
+                # If it was 'Downloading' when it crashed, we should probably reset to Queued or Paused?
+                # For safety, let's set to Paused so user can verify
+                    
+            except Exception as e:
+                logger.error(f"Failed to restore task {row.get('id')}: {e}")
+                
+        # 2. Get active tasks (Crashed while Downloading)
+        # These are effectively 'pending' but marked as Downloading in DB
+        active = self.queue_manager.get_active_tasks()
+        for row in active:
+             try:
+                task_id = row['id']
+                if task_id in self._tasks:
+                    continue
+                
+                task = DownloadTask(
+                    id=task_id,
+                    url=row['url'],
+                    filename=row['filename'],
+                    destination=Path(row['destination']),
+                    state=DownloadState.PAUSED, # Reset to PAUSED for safety
+                    category=row['category']
+                )
+                 # Restore progress
+                task.progress.downloaded_bytes = row['downloaded_bytes'] or 0
+                task.progress.total_bytes = row['total_bytes'] or 0
+                if task.progress.total_bytes > 0:
+                     task.progress.percentage = (task.progress.downloaded_bytes / task.progress.total_bytes) * 100
+                
+                task.pause()
+                self._tasks[task.id] = task
+                count += 1
+                
+                logger.info(f"Restored crashed task {task.filename} as PAUSED")
+             except Exception as e:
+                 logger.error(f"Failed to restore active task: {e}")
+
+        logger.info(f"Engine: Restored {count} tasks from DB")
     
     async def start(self) -> None:
         """Start the download engine."""
@@ -378,6 +473,19 @@ class DownloadEngine:
             except Exception as e:
                 logger.error(f"Scheduler error: {e}")
                 await asyncio.sleep(5.0)
+            
+            # Periodic Persistence Sync (every second)
+            if self.queue_manager and self._running:
+                try:
+                    # Sync active tasks to DB
+                    active_tasks = [
+                        t for t in self._tasks.values() 
+                        if t.state in (DownloadState.DOWNLOADING, DownloadState.EXTRACTING, DownloadState.STARTING)
+                    ]
+                    for task in active_tasks:
+                        self.queue_manager.update_task(task)
+                except Exception as e:
+                    logger.error(f"Persistence sync error: {e}")
     
     async def add_download(
         self,
@@ -426,6 +534,10 @@ class DownloadEngine:
         except Exception as e:
             logger.error(f"Failed to create placeholder for {filename}: {e}")
             # Non-critical failure, continue
+
+        # Persist to DB
+        if self.queue_manager:
+            self.queue_manager.add_task(task)
 
         await self._queue.put(task.id)
         
@@ -660,6 +772,9 @@ class DownloadEngine:
             task.state = DownloadState.FAILED
             task.error_message = str(e)
             logger.error(f"Download failed (system): {task.filename} - {e}")
+        finally:
+             if self.queue_manager:
+                 self.queue_manager.update_task(task)
 
     async def _handle_segmented_download(self, task: DownloadTask, total_size: int) -> None:
         """Download file using multiple concurrent segments."""

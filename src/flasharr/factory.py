@@ -14,6 +14,7 @@ from .clients.fshare import FshareClient
 from .clients.timfshare import TimFshareClient
 from .downloader.engine import DownloadEngine
 from .downloader.builtin_client import BuiltinDownloadClient
+from .downloader.queue import DownloadQueue
 from .services.indexer import IndexerService
 from .services.sabnzbd import SABnzbdEmulator
 from .utils.filename_parser import FilenameParser
@@ -72,12 +73,20 @@ async def create_sabnzbd_service(account_manager: Optional['AccountManager'] = N
     
     speed_limit_bytes = int(settings.speed_limit_mbps) * 1024 * 1024 if settings.speed_limit_mbps > 0 else None
     
+    
+    # Create Download Queue (Persistence)
+    download_queue = DownloadQueue()
+    
     engine = DownloadEngine(
         max_concurrent=settings.max_concurrent_downloads,
-        config=config.download
+        config=config.download,
+        queue_manager=download_queue
     )
     if speed_limit_bytes:
         engine.set_speed_limit(speed_limit_bytes)
+    
+    # Restore state from persistence
+    await engine.restore_from_repository()
         
     await engine.start()
     
@@ -98,6 +107,7 @@ async def create_sabnzbd_service(account_manager: Optional['AccountManager'] = N
         download_client=download_client,
         parser=parser,
         account_manager=account_manager,
+        queue_manager=download_queue
     )
 
     # Set up engine callback for real-time synchronization with emulator
