@@ -58,90 +58,296 @@
         /* Reduced padding */
     }
 
-    /* 2. Bottom Navigation Bar */
+    /* --- Bottom Navigation --- */
     .bottom-nav {
-        display: flex !important;
-        /* Override inline display:none */
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
         position: fixed;
         bottom: 0;
         left: 0;
-        right: 0;
-        height: 64px;
-        background: var(--surface-variant);
-        border-top: 1px solid var(--border-color);
-        box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.2);
+        width: 100%;
+        background: rgba(15, 23, 42, 0.95);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        padding: 0.75rem 0.5rem;
+        /* Increased padding slightly for safe area */
         z-index: 1000;
-        align-items: center;
-        justify-content: space-around;
-        padding: 0 0.5rem;
-        padding-bottom: env(safe-area-inset-bottom);
+        border-top: 1px solid rgba(255, 255, 255, 0.05);
+        box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
     }
 
-    .bottom-nav-item {
+    .nav-item {
+        color: var(--text-muted);
+        text-decoration: none;
         display: flex;
         flex-direction: column;
         align-items: center;
-        justify-content: center;
-        text-decoration: none;
-        color: var(--text-muted);
+        gap: 0.25rem;
+        flex: 1;
+    }
+
+    .nav-item .material-icons {
+        font-size: 1.5rem;
+        transition: color 0.2s;
+    }
+
+    .nav-item span {
         font-size: 0.7rem;
         font-weight: 500;
-        gap: 4px;
-        flex: 1;
-        height: 100%;
-        border-radius: 8px;
-        transition: all 0.2s;
     }
 
-    .bottom-nav-item .material-icons {
-        font-size: 24px;
-        margin-bottom: 0;
-    }
-
-    .bottom-nav-item.active {
+    .nav-item.active {
         color: var(--primary);
     }
 
-    .bottom-nav-item:active {
-        background: rgba(255, 255, 255, 0.05);
-    }
-
-    /* 3. Center Logo (Docked) */
-    .bottom-nav-center-logo {
-        position: relative;
-        top: -18px;
-        /* Float slightly above */
-        width: 56px;
-        height: 56px;
-        border-radius: 50%;
-        background: var(--surface-variant);
-        border: 4px solid var(--surface-variant);
-        /* Match bg to look like cutout if needed, or just border */
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        box-shadow: 0 -4px 10px rgba(0, 0, 0, 0.2);
-        cursor: pointer;
-        z-index: 1002;
-    }
-
-    .bottom-nav-center-logo img {
-        width: 42px;
-        height: 42px;
-        border-radius: 50%;
-        object-fit: cover;
-        transition: transform 0.2s;
-    }
-
-    .bottom-nav-center-logo:active img {
+    .nav-item:active {
         transform: scale(0.95);
     }
 
+    /* Center Logo in Nav */
+    .nav-logo-container {
+        position: relative;
+        top: -15px;
+        /* Pull up to float */
+        background: var(--bg-card);
+        border-radius: 50%;
+        padding: 6px;
+        /* Inner padding */
+        border: 1px solid var(--border-color);
+        box-shadow: 0 -4px 10px rgba(0, 0, 0, 0.2);
+    }
 
-    /* 4. Table to Card Transformation (Critical) */
-    .download-table {
+    .nav-logo {
+        height: 60px;
+        /* Increased by ~20% (was likely ~48-50px effective before) */
+        width: auto;
         display: block;
+        transition: transform 0.2s;
+    }
+
+    .nav-logo:active {
+        transform: scale(0.95);
+    }
+
+    /* --- Toolbar Adjustments (Downloads Page) --- */
+    .toolbar {
+        flex-direction: column;
+        align-items: stretch !important;
+        gap: 1rem;
+        height: auto !important;
+        padding: 1rem !important;
+        overflow: hidden;
+        /* Prevent cutoff */
+    }
+
+    .toolbar-left,
+    .toolbar-right {
+        width: 100%;
+        justify-content: flex-start;
+        flex-wrap: wrap;
+    }
+
+    .toolbar-right {
+        justify-content: space-between;
+        /* Spread buttons */
+    }
+
+    /* Fix Search Bar Cutoff */
+    .search-container {
+        width: 100%;
+        margin: 0 !important;
+        max-width: 100% !important;
+    }
+
+    .elegant-search-input {
+        width: 100% !important;
+        box-sizing: border-box;
+        /* Ensure padding doesn't overflow */
+    }
+
+    /* --- Downloads Table to Card View (Full List) --- */
+    #downloads-full-list {
+        display: block;
+        /* Break table structure */
+    }
+
+    #downloads-full-list tr {
+        display: flex;
+        flex-direction: column;
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        margin-bottom: 1rem;
+        padding: 1rem;
+        position: relative;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+
+    #downloads-full-list td {
+        display: block;
+        width: 100% !important;
+        max-width: none !important;
+        padding: 0.25rem 0;
         border: none;
+        text-align: left !important;
+    }
+
+    /* Hide Checkbox on Mobile to save space (or position absolute) */
+    #downloads-full-list .checkbox-cell {
+        position: absolute;
+        top: 1rem;
+        right: 1rem;
+        width: auto !important;
+        padding: 0;
+        z-index: 5;
+    }
+
+    /* Name Styles */
+    #downloads-full-list .cell-name {
+        order: 1;
+        margin-bottom: 0.5rem;
+        padding-right: 2rem;
+        /* Space for checkbox */
+    }
+
+    #downloads-full-list .download-name {
+        font-size: 1rem !important;
+        white-space: normal !important;
+        /* Allow wrapping */
+        overflow: visible !important;
+    }
+
+    /* Status & Progress */
+    #downloads-full-list .cell-status {
+        Order: 2;
+        margin-bottom: 0.25rem;
+    }
+
+    #downloads-full-list .cell-progress {
+        order: 3;
+        margin-bottom: 0.5rem;
+        width: 100% !important;
+    }
+
+    /* Details Grid */
+    #downloads-full-list .cell-size {
+        order: 4;
+        display: inline-block !important;
+        width: auto !important;
+        font-size: 0.8rem;
+        color: var(--text-muted);
+    }
+
+    #downloads-full-list .cell-speed {
+        order: 5;
+        display: inline-block !important;
+        width: auto !important;
+        float: right;
+        font-size: 0.8rem;
+        color: var(--primary);
+        font-weight: 700;
+    }
+
+    #downloads-full-list .cell-eta {
+        order: 6;
+        clear: both;
+        font-size: 0.8rem;
+        color: var(--text-muted);
+        margin-top: 0.25rem;
+    }
+
+    /* Hide desktop-only columns if needed */
+    #downloads-full-list .cell-added,
+    #downloads-full-list .cell-category {
+        display: none !important;
+    }
+
+    /* --- Search Page Fixes --- */
+    .filter-section {
+        overflow-x: auto;
+        white-space: nowrap;
+        padding-bottom: 0.5rem;
+        -webkit-overflow-scrolling: touch;
+        margin-bottom: 1rem;
+    }
+
+    .filter-group {
+        display: inline-flex;
+        /* Keep buttons together */
+        margin-right: 1rem;
+    }
+
+    /* --- Settings Page Fixes --- */
+    .settings-tabs-header {
+        overflow-x: auto;
+        white-space: nowrap;
+        padding-bottom: 0.5rem;
+        margin-bottom: 1rem;
+        -webkit-overflow-scrolling: touch;
+        display: flex;
+        gap: 0.5rem;
+    }
+
+    .tab-btn {
+        flex: 0 0 auto;
+        /* Don't shrink */
+    }
+
+    /* Account Card Studio Layout Fix */
+    .account-cell {
+        flex-direction: column;
+        align-items: flex-start !important;
+        gap: 0.5rem;
+    }
+
+    .account-meta {
+        margin-left: 0 !important;
+    }
+
+    /* Downloads Settings Form Stacking */
+    .settings-card .form-group {
+        flex-direction: column;
+        align-items: flex-start !important;
+    }
+
+    .category-paths .category-row {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.25rem;
+    }
+
+    .category-label {
+        width: 100%;
+        margin-bottom: 0.25rem;
+    }
+
+    /* Split Concurrent/Speed Row */
+    .settings-card .form-row {
+        flex-direction: column !important;
+        gap: 1rem !important;
+    }
+
+    .settings-card .form-row .form-group {
+        width: 100% !important;
+    }
+
+    /* Theme Icons */
+    .theme-selector {
+        justify-content: space-between;
+        /* Even spacing */
+        gap: 0.5rem;
+    }
+
+    .theme-option {
+        flex: 1;
+        padding: 0.5rem !important;
+        text-align: center;
+    }
+
+    .theme-preview {
+        margin: 0 auto 0.5rem auto;
+        /* Center icon */
     }
 
     .download-table thead {
@@ -319,65 +525,11 @@
     /* Allow card body to flow naturally */
     .stats-card {
         height: auto !important;
-        min-height: auto !important;
+        text-align: left !important;
+    }
+
+    .minified-item .speed-col {
+        grid-area: speed;
+        text-align: right !important;
     }
 }
-    /* --- Minified Queue Card View (Mobile) --- */
-    .minified-list-header {
-        display: none !important;
-    }
-
-    .minified-list-grid.minified-item {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 0.5rem;
-        padding: 1rem;
-        background: var(--bg-card);
-        border: 1px solid var(--border-color);
-        border-radius: 8px;
-        margin-bottom: 0.5rem;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-    
-    .minified-item .name-col {
-        font-weight: 700;
-        font-size: 0.95rem;
-        width: 100%;
-        margin-bottom: 0.25rem;
-    }
-
-    /* Wrap stats in a row */
-    .minified-item .status-col,
-    .minified-item .size-col,
-    .minified-item .speed-col {
-        width: 100%;
-        display: flex;
-        flex-direction: row;
-        justify-content: space-between;
-        align-items: center;
-        font-size: 0.8rem;
-    }
-    
-    .minified-item .status-col {
-        order: 2;
-    }
-    
-    /* We can create a stats row wrapper via JS or just CSS grid magic */
-    /* Let's try CSS Grid for the item instead of Flex for better control */
-    .minified-list-grid.minified-item {
-        display: grid;
-        grid-template-areas: 
-            "name name"
-            "status status"
-            "size speed";
-        grid-template-columns: 1fr 1fr;
-        gap: 0.5rem;
-    }
-
-    .minified-item .name-col { grid-area: name; padding-right: 0 !important; }
-    .minified-item .status-col { grid-area: status; }
-    .minified-item .size-col   { grid-area: size; text-align: left !important; }
-    .minified-item .speed-col  { grid-area: speed; text-align: right !important; }
-
-

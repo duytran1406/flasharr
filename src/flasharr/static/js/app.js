@@ -1471,9 +1471,54 @@ if (typeof window.FshareBridge === 'undefined') {
                 }
             ];
 
-            this.downloads = [...this.downloads, ...mocks];
-            this.notifyDownloadsChanged();
-            this.showNotification('Added 4 debug items to list', 'success');
+            // Append to Dashboard List
+            const dashContainer = document.getElementById('dash-minified-queue');
+            if (dashContainer) {
+                // Clean empty placeholder if exists
+                if (dashContainer.querySelector('.empty-placeholder')) dashContainer.innerHTML = '';
+
+                // Use dashboard rendering logic but append
+                const html = mocks.map(d => {
+                    // Mimic renderMinifiedQueue logic (or reuse it if refactored, but inline for safety here)
+                    const status = d.status || 'Unknown';
+                    const s = status.toLowerCase();
+                    let statusColor = 'var(--text-muted)';
+                    if (s.includes('down') || s.includes('run')) statusColor = '#22c55e';
+                    else if (s.includes('error') || s.includes('fail')) statusColor = '#ef4444';
+                    else if (s.includes('pause')) statusColor = '#eab308';
+                    const progress = d.progress;
+
+                    return `
+                    <div class="minified-item minified-list-grid">
+                        <div class="name-col" title="${d.name}" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${d.name}</div>
+                        <div class="status-col">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                                <span style="font-size: 0.7rem; font-weight: 600; color: ${statusColor}; text-transform: uppercase;">${status}</span>
+                                <span style="font-size: 0.7rem; color: var(--text-muted);">${progress}%</span>
+                            </div>
+                            <div style="background: rgba(255,255,255,0.1); height: 4px; border-radius: 2px; overflow: hidden; width: 100%;">
+                                <div style="width: ${progress}%; background: ${statusColor}; height: 100%;"></div>
+                            </div>
+                        </div>
+                        <div class="size-col" style="font-family: 'Roboto Mono', monospace;">${d.size}</div>
+                        <div class="speed-col" style="font-family: 'Roboto Mono', monospace; color: var(--primary);">${d.speed}</div>
+                    </div>`;
+                }).join('');
+                dashContainer.insertAdjacentHTML('beforeend', html);
+            }
+
+            // Append to Full Downloads List
+            const fullContainer = document.getElementById('downloads-full-list');
+            if (fullContainer) {
+                // Remove empty placeholder row if it's the only child
+                const firstRow = fullContainer.querySelector('tr');
+                if (firstRow && firstRow.innerText.includes('No downloads')) fullContainer.innerHTML = '';
+
+                const html = mocks.map(d => this.createFullDownloadRow(d)).join('');
+                fullContainer.insertAdjacentHTML('beforeend', html);
+            }
+
+            this.showNotification('Added 4 debug items to active views', 'success');
         }
 
         // System Logs
