@@ -223,6 +223,27 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Debug Section -->
+            <div class="settings-card" style="margin-top: 1.5rem; border-color: rgba(255, 255, 255, 0.1);">
+                <div class="card-header">
+                    <h2>Debug & Testing</h2>
+                    <p class="card-description">Development tools for UI verification.</p>
+                </div>
+                <div class="card-body">
+                    <div class="form-group flex-between">
+                        <span class="toggle-text">Inject Mock Download Data</span>
+                        <button class="btn btn-secondary" onclick="window.fshareBridgeInstance.addDebugItems()">
+                            <span class="material-icons">bug_report</span>
+                            Add Mock Items
+                        </button>
+                    </div>
+                    <p class="form-hint" style="margin-top: 0.5rem;">
+                        Adds fake download entries to the list to test layout without using real quota.
+                        Refreshes automatically.
+                    </p>
+                </div>
+            </div>
         </div>
 
     </div>

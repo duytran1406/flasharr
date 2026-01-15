@@ -1450,6 +1450,32 @@ if (typeof window.FshareBridge === 'undefined') {
             } finally { btn.disabled = false; btn.textContent = "ADD TO QUEUE"; }
         }
 
+        // --- Debug / Mock Data ---
+        addDebugItems() {
+            const mocks = [
+                {
+                    fid: 'mock-1', name: 'Avengers.Endgame.2019.2160p.UHD.BluRay.x265-HDR.mkv',
+                    status: 'downloading', progress: 45.2, size: '22.5 GB', speed: '14.2 MB/s', eta: '1h 20m', category: 'Movies', added: new Date().toISOString()
+                },
+                {
+                    fid: 'mock-2', name: 'Ubuntu-22.04.3-live-server-amd64.iso',
+                    status: 'completed', progress: 100, size: '2.1 GB', speed: '0 B/s', eta: '-', category: 'ISO', added: new Date(Date.now() - 3600000).toISOString()
+                },
+                {
+                    fid: 'mock-3', name: 'Holiday_Photos_2023.zip',
+                    status: 'paused', progress: 12.5, size: '450 MB', speed: '0 B/s', eta: '-', category: 'Other', added: new Date(Date.now() - 7200000).toISOString()
+                },
+                {
+                    fid: 'mock-4', name: 'Failed_Download_Attempt.rar',
+                    status: 'error', progress: 0, size: '1.2 GB', speed: '-', eta: '-', category: 'Compressed', error_message: 'File not found on server', added: new Date(Date.now() - 86400000).toISOString()
+                }
+            ];
+
+            this.downloads = [...this.downloads, ...mocks];
+            this.notifyDownloadsChanged();
+            this.showNotification('Added 4 debug items to list', 'success');
+        }
+
         // System Logs
         async loadSystemLogs() {
             const container = document.getElementById('system-log');
