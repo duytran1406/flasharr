@@ -524,43 +524,47 @@ class SABnzbdEmulator:
     def pause_queue(self) -> bool:
         """Pause the download queue."""
         logger.info("Queue paused")
+        # Pause engine global setting? Or all tasks?
+        # Typically SABnzbd pauses the queue. Here we pause all active downloads.
+        # Ideally engine should support global pause. For now, pause all active.
+        active_items = self.downloader.get_queue()
         success = True
-        for item in list(self._queue.values()):
-            if item.status in (DownloadStatus.DOWNLOADING, DownloadStatus.QUEUED):
-                if self.downloader.pause_download(item.nzo_id):
-                    item.status = DownloadStatus.PAUSED
-                else:
-                    success = False
-        self._save_queue()
+        for item in active_items:
+             if item['status'] in ('Running', 'Downloading', 'Starting', 'Queued'):
+                 if not self.downloader.pause_download(item['id']):
+                     success = False
         return success
     
     def resume_queue(self) -> bool:
         """Resume the download queue."""
         logger.info("Queue resumed")
+        # Resume all paused items
+        # We need to get paused items from DB/Engine
+        # Engine keeps track of paused tasks.
+        # But get_queue returns them.
+        items = self.downloader.get_queue()
         success = True
-        for item in list(self._queue.values()):
-            if item.status == DownloadStatus.PAUSED:
-                if self.downloader.resume_download(item.nzo_id):
-                    item.status = DownloadStatus.DOWNLOADING
-                else:
+        for item in items:
+            if item['status'] == 'Paused':
+                if not self.downloader.resume_download(item['id']):
                     success = False
-        self._save_queue()
         return success
 
     def stop_all_downloads(self) -> bool:
         """Stop/Cancel all active downloads."""
         logger.info("Stopping all downloads")
         success = True
-        for item in list(self._queue.values()):
-            if item.status in (DownloadStatus.DOWNLOADING, DownloadStatus.PAUSED, DownloadStatus.QUEUED):
-                # Call delete_item which handles cancellation and queue removal
-                # But here maybe we just want to stop them but keep in history?
-                # Usually Stop All means Cancel All active
-                if self.delete_item(item.nzo_id):
-                     pass
-                else:
-                     success = False
-        self._save_queue()
+        
+        # Get active tasks from Engine
+        active_items = self.downloader.get_queue()
+        
+        for item in active_items:
+             # Stop/Delete active downloads
+             if self.delete_item(item['id']):
+                 pass
+             else:
+                 success = False
+                 
         return success
     
     def delete_item(self, nzo_id: str) -> bool:
@@ -597,30 +601,34 @@ class SABnzbdEmulator:
         """
         Retry a failed or missing download item.
         """
-        if nzo_id in self._queue:
-            item = self._queue[nzo_id]
-            logger.info(f"Retrying download {nzo_id} ({item.filename})")
-            
-            if not item.fshare_url:
-                logger.error("Cannot retry: No Fshare URL saved")
-                return False
-
-            # Attempt to re-add to downloader (resolves URL again)
-            try:
-                success = self.downloader.add_download(
-                    item.fshare_url,
-                    filename=item.filename,
-                    category=item.category,
-                    task_id=nzo_id
-                )
+        # Fetch item details from DB because it's likely failed
+        if self.queue_manager:
+            item_data = self.queue_manager.get_task(nzo_id)
+            if item_data:
+                logger.info(f"Retrying download {nzo_id} ({item_data.get('filename')})")
                 
-                if success:
-                    item.status = DownloadStatus.DOWNLOADING
-                    self._save_queue()
-                    return True
-            except Exception as e:
-                logger.error(f"Retry failed: {e}")
+                url = item_data.get('url')
+                if not url:
+                    logger.error("Cannot retry: No Fshare URL saved in DB")
+                    # Try to reconstruct usage? No, we needed the URL.
+                    return False
                 
+                # Re-add to downloader
+                try:
+                    success = self.downloader.add_download(
+                        url,
+                        filename=item_data.get('filename'),
+                        category=item_data.get('category'),
+                        task_id=nzo_id # REUSE ID
+                    )
+                    
+                    if success:
+                        return True
+                except Exception as e:
+                    logger.error(f"Retry failed for {nzo_id}: {e}")
+                    return False
+        
+        logger.warning(f"Retry failed: Item {nzo_id} not found in DB")         
         return False
 
     def complete_item(self, nzo_id: str, status: DownloadStatus = DownloadStatus.COMPLETED) -> bool:
