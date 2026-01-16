@@ -1508,10 +1508,29 @@ class Router {
             <!-- Trending Carousel Mount -->
             <div id="trending-mount"></div>
 
-            <!-- Trending Carousel Mount -->
-            <div id="trending-mount"></div>
+            <!-- Trending Section (Static Structure) -->
+            <div class="box-section" style="margin-bottom: 1rem; border-color: rgba(255, 215, 0, 0.3); min-height: 280px; display: flex; flex-direction: column; justify-content: center;">
+                <div class="box-label" style="color: #ffd700;">
+                    <span class="material-icons">trending_up</span>
+                    Trending This Week
+                </div>
+                <div class="carousel-container" style="margin-top: 0.5rem; flex: 1;">
+                    <button class="carousel-btn prev" onclick="window.router.carouselPrev()" id="carousel-prev" disabled>
+                        <span class="material-icons">chevron_left</span>
+                    </button>
+                    <div class="carousel-track" id="trending-carousel">
+                        <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
+                            <div class="loading-spinner"></div>
+                        </div>
+                    </div>
+                    <button class="carousel-btn next" onclick="window.router.carouselNext()" id="carousel-next" disabled>
+                        <span class="material-icons">chevron_right</span>
+                    </button>
+                </div>
+            </div>
 
-            <div style="display: grid; grid-template-columns: 6.5fr 3.5fr; gap: 1rem; height: 75vh; min-height: 400px; margin-bottom: 0;">
+            <!-- Main Dashboard Grid -->
+            <div style="display: grid; grid-template-columns: 6.5fr 3.5fr; gap: 1rem; height: calc(100vh - 420px); min-height: 350px; margin-bottom: 0;">
                 
                 <!-- Left Column: Active Mission Pulse (Queue) -->
                 <div class="box-section" style="border-color: rgba(0,243,255,0.15);">
@@ -1529,11 +1548,11 @@ class Router {
                     </div>
                 </div>
 
-                <!-- Right Column: Command Center & Netflow -->
-                <div style="display: grid; grid-template-rows: 1fr 1.5fr; gap: 0.75rem;">
+                <!-- Right Column: Command Center & Netflow (2:3 Ratio -> 1 : 1.5) -->
+                <div style="display: grid; grid-template-rows: 2fr 3fr; gap: 1rem;">
                     
                     <!-- Combined Command Unit -->
-                    <div class="box-section" style="border-color: rgba(0,243,255,0.2); gap: 1rem;">
+                    <div class="box-section" style="border-color: rgba(0,243,255,0.2); gap: 1rem; height: 100%;">
                         <div class="box-label" style="color: var(--color-primary);">
                             <span class="material-icons">shield</span>
                             Command Center
@@ -1570,7 +1589,7 @@ class Router {
                         </div>
 
                         <!-- Fuel Consumption -->
-                        <div style="margin-top: -0.25rem;">
+                        <div style="margin-top: auto;">
                             <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 0.2rem;">
                                 <span style="font-size: 0.55rem; font-weight: 700; color: #ffd700; text-transform: uppercase;">Fuel Cell</span>
                                 <div style="font-family: var(--font-mono); font-size: 0.6rem; font-weight: 800; color: var(--text-primary);">
@@ -1586,13 +1605,13 @@ class Router {
                     </div>
 
                     <!-- Netflow -->
-                    <div class="box-section" style="min-height: 0; border-color: rgba(255,255,255,0.1);">
+                    <div class="box-section" style="border-color: rgba(255,255,255,0.1); height: 100%;">
                          <div class="box-label" style="color: var(--text-primary);">
                             <span class="material-icons">insights</span>
                             Netflow
                         </div>
                         
-                        <div style="flex: 1; position: relative; padding-top: 0.5rem;">
+                        <div style="flex: 1; position: relative; padding-top: 0.5rem; min-height: 0;">
                             <canvas id="netFlowChart"></canvas>
                         </div>
                     </div>
@@ -1635,27 +1654,10 @@ class Router {
             const data = await res.json();
 
             if (data.results && data.results.length > 0) {
-                const section = `
-                    <div class="box-section" style="margin-bottom: 1rem; border-color: rgba(255, 215, 0, 0.3);">
-                        <div class="box-label" style="color: #ffd700;">
-                            <span class="material-icons">trending_up</span>
-                            Trending This Week
-                        </div>
-                        <div class="carousel-container" style="margin-top: 0.5rem;">
-                            <button class="carousel-btn prev" onclick="window.router.carouselPrev()" id="carousel-prev">
-                                <span class="material-icons">chevron_left</span>
-                            </button>
-                            <div class="carousel-track" id="trending-carousel">
-                                ${data.results.slice(0, 20).map(item => this.renderPosterCard(item, 'carousel')).join('')}
-                            </div>
-                            <button class="carousel-btn next" onclick="window.router.carouselNext()" id="carousel-next">
-                                <span class="material-icons">chevron_right</span>
-                            </button>
-                        </div>
-                    </div>
-                `;
-                const mount = document.getElementById('trending-mount');
-                if (mount) mount.innerHTML = section;
+                const track = document.getElementById('trending-carousel');
+                if (track) {
+                    track.innerHTML = data.results.slice(0, 20).map(item => this.renderPosterCard(item, 'carousel')).join('');
+                }
                 this.initCarousel();
             }
         } catch (e) {
