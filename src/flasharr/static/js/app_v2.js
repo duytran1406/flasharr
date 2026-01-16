@@ -1542,6 +1542,153 @@ class Router {
         `;
         this.fetchDashboardSync();
         this.initNetflowChart();
+        this.fetchPopularToday();
+        this.fetchTrending();
+    }
+
+    async fetchPopularToday() {
+        try {
+            const res = await fetch('/api/discovery/popular-today?type=movie&limit=6');
+            const data = await res.json();
+
+            if (data.status === 'ok' && data.results) {
+                const section = `
+                    <div class="glass-panel popular-today-section" style="padding: 2rem; margin-top: 2rem;">
+                        <div class="section-header">
+                            <span class="material-icons">local_fire_department</span>
+                            <h3 class="glow-text" style="font-size: 1.2rem; font-weight: 800;">Popular Today</h3>
+                        </div>
+                        <div class="discover-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));">
+                            ${data.results.map(item => this.renderPosterCard(item)).join('')}
+                        </div>
+                    </div>
+                `;
+                this.container.insertAdjacentHTML('beforeend', section);
+            }
+        } catch (e) {
+            console.error('Failed to fetch Popular Today:', e);
+        }
+    }
+
+    async fetchTrending() {
+        try {
+            const res = await fetch('/api/tmdb/trending/movie/week');
+            const data = await res.json();
+
+            if (data.results && data.results.length > 0) {
+                const section = `
+                    <div class="glass-panel trending-section" style="padding: 2rem; margin-top: 2rem;">
+                        <div class="section-header">
+                            <span class="material-icons">trending_up</span>
+                            <h3 class="glow-text" style="font-size: 1.2rem; font-weight: 800;">Trending This Week</h3>
+                        </div>
+                        <div class="carousel-container">
+                            <button class="carousel-btn prev" onclick="window.router.carouselPrev()" id="carousel-prev">
+                                <span class="material-icons">chevron_left</span>
+                            </button>
+                            <div class="carousel-track" id="trending-carousel">
+                                ${data.results.slice(0, 20).map(item => this.renderPosterCard(item, 'carousel')).join('')}
+                            </div>
+                            <button class="carousel-btn next" onclick="window.router.carouselNext()" id="carousel-next">
+                                <span class="material-icons">chevron_right</span>
+                            </button>
+                        </div>
+                    </div>
+                `;
+                this.container.insertAdjacentHTML('beforeend', section);
+                this.initCarousel();
+            }
+        } catch (e) {
+            console.error('Failed to fetch Trending:', e);
+        }
+    }
+
+    renderPosterCard(item, variant = 'normal') {
+        const title = item.title || item.name;
+        const posterUrl = item.poster_url || '';
+        const score = item.score || item.vote_average || 0;
+        const year = (item.release_date || '').split('-')[0];
+        const mediaType = item.media_type || 'movie';
+        const id = item.id;
+
+        const fshareAvailable = item.fshare_available;
+        const fshareCount = item.fshare_count || 0;
+
+        const cardWidth = variant === 'carousel' ? 'min-width: 200px; width: 200px;' : '';
+
+        return `
+            <div class="poster-card" style="${cardWidth}" onclick="window.router.navigate('media/${mediaType}/${id}')">
+                <div class="poster-image" style="${posterUrl ? `background-image: url('${posterUrl}')` : ''}"></div>
+                ${fshareAvailable !== undefined ? `
+                    <div class="fshare-badge ${fshareAvailable ? '' : 'unavailable'}">
+                        ${fshareAvailable ? `✓ ${fshareCount}` : 'N/A'}
+                    </div>
+                ` : ''}
+                <div class="poster-overlay">
+                    <div class="poster-title">${title}</div>
+                    <div class="poster-meta">
+                        <span class="material-icons" style="font-size: 12px;">star</span>
+                        ${score.toFixed(1)} • ${year}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    initCarousel() {
+        this.carouselIndex = 0;
+        const track = document.getElementById('trending-carousel');
+        if (!track) return;
+
+        this.carouselMax = track.children.length;
+        this.updateCarouselButtons();
+    }
+
+    carouselNext() {
+        const track = document.getElementById('trending-carousel');
+        if (!track) return;
+
+        const cardWidth = 200 + 24; // card width + gap
+        const visibleCards = Math.floor(track.parentElement.offsetWidth / cardWidth);
+
+        if (this.carouselIndex < this.carouselMax - visibleCards) {
+            this.carouselIndex++;
+            this.updateCarousel();
+        }
+    }
+
+    carouselPrev() {
+        if (this.carouselIndex > 0) {
+            this.carouselIndex--;
+            this.updateCarousel();
+        }
+    }
+
+    updateCarousel() {
+        const track = document.getElementById('trending-carousel');
+        if (!track) return;
+
+        const cardWidth = 200 + 24; // card width + gap
+        const offset = this.carouselIndex * -cardWidth;
+        track.style.transform = `translateX(${offset}px)`;
+
+        this.updateCarouselButtons();
+    }
+
+    updateCarouselButtons() {
+        const prevBtn = document.getElementById('carousel-prev');
+        const nextBtn = document.getElementById('carousel-next');
+
+        if (prevBtn) prevBtn.disabled = this.carouselIndex === 0;
+
+        if (nextBtn) {
+            const track = document.getElementById('trending-carousel');
+            if (track) {
+                const cardWidth = 200 + 24;
+                const visibleCards = Math.floor(track.parentElement.offsetWidth / cardWidth);
+                nextBtn.disabled = this.carouselIndex >= this.carouselMax - visibleCards;
+            }
+        }
     }
 
     async fetchDashboardSync() {

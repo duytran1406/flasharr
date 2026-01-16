@@ -1550,3 +1550,102 @@ input[type=range]::-webkit-slider-thumb:hover {
     font-weight: 700;
     font-family: var(--font-mono);
 }
+
+/* Placeholder poster */
+.poster-image:not([style*="background-image"]) {
+    background-image: url('/static/images/placeholder-poster.svg');
+    background-size: cover;
+    background-position: center;
+}
+
+/* Carousel Styles */
+.carousel-container {
+    position: relative;
+    overflow: hidden;
+    padding: 0 3rem;
+}
+
+.carousel-track {
+    display: flex;
+    gap: 1.5rem;
+    transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.carousel-btn {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 10;
+    background: var(--bg-glass);
+    backdrop-filter: blur(10px);
+    border: 1px solid var(--border-glass);
+    border-radius: 50%;
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: var(--text-primary);
+}
+
+.carousel-btn:hover:not(:disabled) {
+    background: var(--color-primary);
+    color: #000;
+    box-shadow: 0 0 20px rgba(0, 243, 255, 0.3);
+    border-color: var(--color-primary);
+}
+
+.carousel-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+.carousel-btn.prev {
+    left: 0;
+}
+
+.carousel-btn.next {
+    right: 0;
+}
+
+/* Popular Today Section */
+.popular-today-section,
+.trending-section {
+    margin-top: 2rem;
+}
+
+.section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+.section-header .material-icons {
+    color: var(--color-primary);
+    font-size: 28px;
+}
+
+/* Fshare availability badge */
+.fshare-badge {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    background: rgba(0, 255, 163, 0.9);
+    color: #000;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 0.65rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    z-index: 5;
+    box-shadow: 0 2px 8px rgba(0, 255, 163, 0.3);
+}
+
+.fshare-badge.unavailable {
+    background: rgba(100, 116, 139, 0.7);
+    color: #fff;
+}

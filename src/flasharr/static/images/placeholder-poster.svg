@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 342 513" width="342" height="513">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a1628;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#020408;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="342" height="513" fill="url(#bg)"/>
+  
+  <!-- Grid pattern -->
+  <g opacity="0.03">
+    <line x1="0" y1="0" x2="342" y2="0" stroke="#00f3ff" stroke-width="1"/>
+    <line x1="0" y1="171" x2="342" y2="171" stroke="#00f3ff" stroke-width="1"/>
+    <line x1="0" y1="342" x2="342" y2="342" stroke="#00f3ff" stroke-width="1"/>
+    <line x1="0" y1="513" x2="342" y2="513" stroke="#00f3ff" stroke-width="1"/>
+    <line x1="0" y1="0" x2="0" y2="513" stroke="#00f3ff" stroke-width="1"/>
+    <line x1="114" y1="0" x2="114" y2="513" stroke="#00f3ff" stroke-width="1"/>
+    <line x1="228" y1="0" x2="228" y2="513" stroke="#00f3ff" stroke-width="1"/>
+    <line x1="342" y1="0" x2="342" y2="513" stroke="#00f3ff" stroke-width="1"/>
+  </g>
+  
+  <!-- Film reel icon -->
+  <g transform="translate(171, 256.5)">
+    <!-- Outer circle -->
+    <circle cx="0" cy="0" r="50" fill="none" stroke="#00f3ff" stroke-width="3" opacity="0.3"/>
+    
+    <!-- Inner circles (film holes) -->
+    <circle cx="-25" cy="-25" r="8" fill="#00f3ff" opacity="0.2"/>
+    <circle cx="25" cy="-25" r="8" fill="#00f3ff" opacity="0.2"/>
+    <circle cx="-25" cy="25" r="8" fill="#00f3ff" opacity="0.2"/>
+    <circle cx="25" cy="25" r="8" fill="#00f3ff" opacity="0.2"/>
+    
+    <!-- Center circle -->
+    <circle cx="0" cy="0" r="15" fill="none" stroke="#00f3ff" stroke-width="2" opacity="0.4"/>
+  </g>
+  
+  <!-- Text -->
+  <text x="171" y="350" font-family="'Inter', sans-serif" font-size="14" fill="#00f3ff" opacity="0.3" text-anchor="middle" font-weight="600">NO POSTER</text>
+  <text x="171" y="370" font-family="'Inter', sans-serif" font-size="12" fill="#64748b" opacity="0.5" text-anchor="middle">AVAILABLE</text>
+</svg>
