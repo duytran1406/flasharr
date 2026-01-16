@@ -37,6 +37,16 @@ def settings_page():
     """Render the settings page."""
     return render_template("settings.html")
 
+@main_bp.route("/discover")
+def discover_page():
+    """Render the new TMDB discovery page."""
+    return render_template("discover.html")
+
+@main_bp.route("/media/<media_type>/<tmdb_id>")
+def media_detail_page(media_type, tmdb_id):
+    """Render media detail page."""
+    return render_template("media_detail.html", media_type=media_type, tmdb_id=tmdb_id)
+
 
 @main_bp.route("/design-preview")
 def design_preview():

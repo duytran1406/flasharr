@@ -90,23 +90,36 @@ class QueueItem:
 class DownloadClientProtocol(Protocol):
     """Protocol for download clients (PyLoad, native, etc.)."""
     
-    def add_download(
+    async def add_download(
         self,
         url: str,
         filename: Optional[str] = None,
         package_name: Optional[str] = None,
         category: str = "Uncategorized",
+        task_id: Optional[str] = None,
         skip_resolve: bool = False,
     ) -> bool:
         """Add a download to the client."""
         ...
     
-    def get_queue(self) -> List[Dict]:
+    async def get_queue(self) -> List[Dict]:
         """Get current download queue."""
         ...
     
-    def get_status(self) -> Dict:
+    async def get_status(self) -> Dict:
         """Get client status."""
+        ...
+        
+    async def delete_download(self, task_id: str) -> bool:
+        ...
+        
+    async def pause_download(self, task_id: str) -> bool:
+        ...
+        
+    async def resume_download(self, task_id: str) -> bool:
+        ...
+        
+    async def get_counts(self) -> Dict[str, int]:
         ...
 
 
@@ -207,7 +220,7 @@ class SABnzbdEmulator:
         else:
             logger.error(f"Failed to re-add download {item.nzo_id} to engine")
 
-    def add_file(
+    async def add_file(
         self,
         nzb_data: bytes,
         filename: str = "download.nzb",
@@ -238,7 +251,7 @@ class SABnzbdEmulator:
                 logger.error(f"NZB contains GUID {guid} but no URL - cannot resolve")
                 return None
             
-            return self.add_url(fshare_url, category=category)
+            return await self.add_url(fshare_url, category=category)
             
         except ET.ParseError as e:
             logger.error(f"Failed to parse NZB: {e}")
@@ -247,7 +260,7 @@ class SABnzbdEmulator:
             logger.error(f"Error adding file: {e}", exc_info=True)
             return None
     
-    def add_url(
+    async def add_url(
         self,
         url: str,
         filename: Optional[str] = None,
@@ -267,8 +280,8 @@ class SABnzbdEmulator:
         try:
             logger.info(f"Adding URL: {url}")
             
-            # Get file info from Fshare
-            file_info = self.fshare.get_file_info(url)
+            # Get file info from Fshare (Sync API, wrap in thread)
+            file_info = await asyncio.to_thread(self.fshare.get_file_info, url)
             if not file_info:
                 logger.error("Failed to get file info from Fshare")
                 return None
@@ -278,9 +291,9 @@ class SABnzbdEmulator:
             parsed = self.parser.parse(original_name)
             normalized_filename = filename or parsed.normalized_filename
             
-            # Get direct download link
+            # Get direct download link (Sync API, wrap in thread)
             fcode = file_info.fcode
-            download_url = self.fshare.get_download_link(fcode)
+            download_url = await asyncio.to_thread(self.fshare.get_download_link, fcode)
             if not download_url:
                 logger.error("Failed to get download link from Fshare")
                 return None
@@ -293,7 +306,7 @@ class SABnzbdEmulator:
             
             # Send to download client
             # Pass skip_resolve=True because we just resolved it manually above
-            success = self.downloader.add_download(
+            success = await self.downloader.add_download(
                 download_url,
                 filename=normalized_filename,
                 package_name=parsed.title,
@@ -342,26 +355,26 @@ class SABnzbdEmulator:
                                      logger.warning(f"Emulator: Item {nzo_id} MISSING from active_ids but DOWNLOADING in engine! engine_tasks count: {len(self.downloader.engine.tasks)}")
                      except: pass
 
-    def get_queue(self) -> List[Dict[str, Any]]:
+    async def get_queue(self) -> List[Dict[str, Any]]:
         """Get current download queue in SABnzbd format."""
         
         # 1. Get active tasks from Engine (Memory)
-        engine_queue = self.downloader.get_queue()
+        engine_queue = await self.downloader.get_queue()
         slots = []
         
         for item in engine_queue:
             # Map engine dict to SABnzbd slot
-            # Engine item: {'id', 'filename', 'status', 'progress', 'size_bytes', 'downloaded_bytes', 'speed', 'eta', 'category'}
+            # Engine item: {'id', 'filename', 'status', 'progress', 'size_bytes', 'downloaded_bytes', 'speed', 'eta', 'category', 'created_at', ...}
             
             status_map = {
                 'Queued': 'Queued',
-                'Starting': 'Running',
-                'Downloading': 'Running',
-                'Extracting': 'Running',
+                'Starting': 'Downloading',
+                'Downloading': 'Downloading',
+                'Extracting': 'Downloading',
                 'Paused': 'Paused',
                 'Completed': 'Completed',
                 'Failed': 'Failed',
-                'Video': 'Running' # Fallback
+                'Video': 'Downloading' 
             }
             
             status_val = status_map.get(item['status'], item['status'])
@@ -380,17 +393,26 @@ class SABnzbdEmulator:
                 size_bytes=item['size_bytes'] or 0,
                 downloaded_bytes=item['downloaded_bytes'] or 0,
                 eta_seconds=item['eta'] or 0,
-                percentage=item['progress'] or 0.0
+                percentage=item['progress'] or 0.0,
+                added=datetime.fromtimestamp(item['created_at']).isoformat() if item.get('created_at') else datetime.now().isoformat()
             )
 
             # Manually override status string for slot
             slot = q_item.to_queue_slot()
             slot['status'] = status_val
+            
+            # Add URL field (missing in sabnzbd slot usually but useful for us)
+            slot['url'] = item.get('url', '')
+            
+            # Add "added" timestamp to slot (needed for UI)
+            slot['added'] = item.get('added', q_item.added)
+
             slots.append(slot)
 
         # 2. Get history from DB (Completed/Failed)
         if self.queue_manager:
-             history_items = self.queue_manager.get_history(limit=50)
+             # Offload DB call to thread
+             history_items = await asyncio.to_thread(self.queue_manager.get_history, limit=50)
              for row in history_items:
                  # Check if already in slots (active engine tasks might linger as completed for a moment)
                  if any(s['nzo_id'] == row['id'] for s in slots):
@@ -415,24 +437,32 @@ class SABnzbdEmulator:
                     "total_bytes": row['total_bytes'] or 0,
                     "downloaded": row['downloaded_bytes'] or 0,
                     "eta_seconds": 0,
+                    # Extended metadata for UI
+                    "url": row['url'],
+                    "added": row['created_at'] if 'created_at' in row.keys() else "",
+                    "storage": str(row['destination']),
+                    "download_time": 60, # Dummy
+                    "path": str(row['destination']),
+                    "script": "",
+                    "action_line": "",
                 }
                  slots.append(slot)
                  
         return slots
 
-    def get_counts(self) -> Dict[str, int]:
+    async def get_counts(self) -> Dict[str, int]:
         """Get quick counts for dashboard."""
         
         # Count active/queued from engine
-        engine_queue = self.downloader.get_queue()
+        engine_queue = await self.downloader.get_queue()
         active = sum(1 for item in engine_queue if item['status'] in ('Running', 'Downloading', 'Starting', 'Extracting'))
         queued = sum(1 for item in engine_queue if item['status'] in ('Queued', 'Paused'))
         
         # Count history from DB
         history = 0
         if self.queue_manager:
-            # We need a proper count query, but for now this is approximation or uses get_statistics
-            stats = self.queue_manager.get_statistics()
+            # Offload DB
+            stats = await asyncio.to_thread(self.queue_manager.get_statistics)
             history = stats.get('completed', 0) + stats.get('failed', 0)
 
         return {
@@ -442,13 +472,13 @@ class SABnzbdEmulator:
             "total": active + queued + history
         }
         
-    def _calculate_total_size(self):
-        # Simplified stats
-        slots = self.get_queue()
+    async def _calculate_total_size(self):
+        # Simplified stats - call async get_queue
+        slots = await self.get_queue()
         total_size = sum(float(s['mb']) for s in slots)
         
         # Calculate speed
-        status = self.downloader.get_status()
+        status = await self.downloader.get_status()
         total_speed = status.get('total_speed', 0)
         formatted_speed = "0 B/s"
         if total_speed > 1024 * 1024:
@@ -469,29 +499,30 @@ class SABnzbdEmulator:
             }
         }
 
-    def get_status(self) -> Dict[str, Any]:
+    async def get_status(self) -> Dict[str, Any]:
         """Get emulator status including downloader engine status."""
-        status = self.downloader.get_status()
+        status = await self.downloader.get_status()
         
-        total_size = sum(item.mb_total for item in self._queue.values() if item.status != DownloadStatus.COMPLETED)
-        total_left = sum(item.mb_left for item in self._queue.values() if item.status != DownloadStatus.COMPLETED)
+        # We need to approximate total sizes without full recursion
+        # Could use get_counts logic or store state
+        # For now, simplistic return
         
         return {
             "active": status.get('active', 0),
             "speed": status.get('total_speed', 0),
             "queued": status.get('queued', 0),
-            "total_size": total_size,
-            "total_left": total_left,
+            "total_size": 0, # Expensive to calc
+            "total_left": 0,
             "connected": status.get('running', False)
         }
     
-    def get_history(self, limit: int = 50) -> Dict[str, Any]:
+    async def get_history(self, limit: int = 50) -> Dict[str, Any]:
         """
         Get download history in SABnzbd format.
         """
         slots = []
         if self.queue_manager:
-            items = self.queue_manager.get_history(limit=limit)
+            items = await asyncio.to_thread(self.queue_manager.get_history, limit=limit)
             for row in items:
                 slots.append({
                     "nzo_id": row['id'],
@@ -521,101 +552,91 @@ class SABnzbdEmulator:
         """Get emulated SABnzbd version."""
         return self.VERSION
     
-    def pause_queue(self) -> bool:
+    async def pause_queue(self) -> bool:
         """Pause the download queue."""
         logger.info("Queue paused")
         # Pause engine global setting? Or all tasks?
         # Typically SABnzbd pauses the queue. Here we pause all active downloads.
         # Ideally engine should support global pause. For now, pause all active.
-        active_items = self.downloader.get_queue()
+        active_items = await self.downloader.get_queue()
         success = True
         for item in active_items:
              if item['status'] in ('Running', 'Downloading', 'Starting', 'Queued'):
-                 if not self.downloader.pause_download(item['id']):
+                 if not await self.downloader.pause_download(item['id']):
                      success = False
         return success
     
-    def resume_queue(self) -> bool:
+    async def resume_queue(self) -> bool:
         """Resume the download queue."""
         logger.info("Queue resumed")
         # Resume all paused items
-        # We need to get paused items from DB/Engine
-        # Engine keeps track of paused tasks.
-        # But get_queue returns them.
-        items = self.downloader.get_queue()
+        items = await self.downloader.get_queue()
         success = True
         for item in items:
             if item['status'] == 'Paused':
-                if not self.downloader.resume_download(item['id']):
+                if not await self.downloader.resume_download(item['id']):
                     success = False
         return success
 
-    def stop_all_downloads(self) -> bool:
+    async def stop_all_downloads(self) -> bool:
         """Stop/Cancel all active downloads."""
         logger.info("Stopping all downloads")
         success = True
         
         # Get active tasks from Engine
-        active_items = self.downloader.get_queue()
+        active_items = await self.downloader.get_queue()
         
         for item in active_items:
              # Stop/Delete active downloads
-             if self.delete_item(item['id']):
+             if await self.delete_item(item['id']):
                  pass
              else:
                  success = False
                  
         return success
     
-    def delete_item(self, nzo_id: str) -> bool:
+    async def delete_item(self, nzo_id: str) -> bool:
         """
         Delete an item from the queue or history and cancel download if active.
         """
         # Cancel in engine (this also deletes file)
-        self.downloader.delete_download(nzo_id)
+        await self.downloader.delete_download(nzo_id)
         
         # Also remove from DB History if present
         if self.queue_manager:
-            self.queue_manager.delete_task(nzo_id)
+            await asyncio.to_thread(self.queue_manager.delete_task, nzo_id)
             
         return True
 
-    def toggle_item(self, nzo_id: str) -> bool:
+    async def toggle_item(self, nzo_id: str) -> bool:
         """
         Toggle pause/resume for an item.
         """
-        # Pass directly to downloader
-        status = self.downloader.get_status() # Not efficient but works
         # Better: get task status
-        # Assuming downloader keys task actions
-        # We try both resume and pause, engine handles invalid state gracefully
-        
-        if self.downloader.resume_download(nzo_id):
+        if await self.downloader.resume_download(nzo_id):
             return True
-        if self.downloader.pause_download(nzo_id):
+        if await self.downloader.pause_download(nzo_id):
             return True
-            
         return False
     
-    def retry_item(self, nzo_id: str) -> bool:
+    async def retry_item(self, nzo_id: str) -> bool:
         """
         Retry a failed or missing download item.
         """
         # Fetch item details from DB because it's likely failed
         if self.queue_manager:
-            item_data = self.queue_manager.get_task(nzo_id)
+            item_data = await asyncio.to_thread(self.queue_manager.get_task, nzo_id)
             if item_data:
                 logger.info(f"Retrying download {nzo_id} ({item_data.get('filename')})")
                 
                 url = item_data.get('url')
                 if not url:
                     logger.error("Cannot retry: No Fshare URL saved in DB")
-                    # Try to reconstruct usage? No, we needed the URL.
                     return False
                 
                 # Re-add to downloader
                 try:
-                    success = self.downloader.add_download(
+                    success = await self.downloader.add_download(
                         url,
                         filename=item_data.get('filename'),
                         category=item_data.get('category'),

@@ -82,7 +82,7 @@ class BuiltinDownloadClient:
 
 
     
-    def add_download(
+    async def add_download(
         self,
         url: str,
         filename: Optional[str] = None,
@@ -109,8 +109,9 @@ class BuiltinDownloadClient:
             if not skip_resolve and self.fshare_handler.is_fshare_url(url):
                 logger.info(f"Resolving Fshare URL: {url}")
                 
-                # Resolve to direct download link
-                resolved = self.fshare_handler.resolve_url(url)
+                # Resolve to direct download link (Offload to thread to avoid blocking loop)
+                resolved = await asyncio.to_thread(self.fshare_handler.resolve_url, url)
+                
                 if not resolved:
                     logger.error(f"Failed to resolve Fshare URL: {url}")
                     return False
@@ -122,56 +123,18 @@ class BuiltinDownloadClient:
                 # Already a direct URL
                 download_url = url
             
-            # Add to download engine using thread-safe method
-            # This works from any thread, including Flask request threads
+            # Add to download engine
             logger.info(f"✅ Download URL: {download_url}")
             
             try:
-                # Get the engine's event loop
-                loop = None
-                
-                # Try to get from engine first
-                if hasattr(self.engine, '_loop') and self.engine._loop:
-                    loop = self.engine._loop
-                    logger.debug("Using engine's event loop")
-                
-                # Try to get from Flask app
-                if not loop:
-                    try:
-                        from flask import current_app
-                        if hasattr(current_app, 'async_loop'):
-                            loop = current_app.async_loop
-                            logger.debug("Using Flask app's event loop")
-                    except:
-                        pass
-                
-                # Fallback: try to get the running loop
-                if not loop:
-                    try:
-                        loop = asyncio.get_running_loop()
-                        logger.debug("Using running event loop")
-                    except RuntimeError:
-                        pass
-                
-                if not loop:
-                    logger.error("No event loop available for download engine")
-                    return False
-                
-                # Schedule the coroutine in the engine's event loop
-                future = asyncio.run_coroutine_threadsafe(
-                    self.engine.add_download(
-                        download_url,
-                        filename or "download",
-                        destination=self.download_dir,
-                        task_id=task_id,
-                        category=category,
-                        package_name=package_name,
-                    ),
-                    loop
+                await self.engine.add_download(
+                    download_url,
+                    filename or "download",
+                    destination=self.download_dir,
+                    task_id=task_id,
+                    category=category,
+                    package_name=package_name,
                 )
-                
-                # Wait for the result with a timeout
-                future.result(timeout=5.0)
                 logger.info(f"✅ Download added: {filename}")
                 return True
                 
@@ -185,32 +148,34 @@ class BuiltinDownloadClient:
             logger.error(f"Error adding download: {e}", exc_info=True)
             return False
     
-    def get_queue(self) -> List[Dict[str, Any]]:
+
+    async def get_queue(self) -> List[Dict[str, Any]]:
         """
         Get current download queue.
-        
-        Returns:
-            List of queue items
         """
         queue = []
-        
-        for task_id, task in self.engine.tasks.items():
-            # Include completed/failed items in the queue list for the UI
-            queue.append({
-                "id": task_id,
-                "filename": task.filename,
-                "status": task.state.value,
-                "progress": task.progress.percentage,
-                "size_bytes": task.progress.total_bytes,
-                "downloaded_bytes": task.progress.downloaded_bytes,
-                "speed": task.progress.speed_bytes_per_sec,
-                "eta": task.progress.eta_seconds,
-                "category": task.category,
-            })
-        
+        try:
+            # Iterate over a copy of tasks to be thread-safe(ish)
+            # engine.tasks is a plain dict, so this is fast and non-blocking
+            for task_id, task in self.engine.tasks.copy().items():
+                 queue.append({
+                    "id": task_id,
+                    "filename": task.filename,
+                    "status": task.state.value,
+                    "progress": task.progress.percentage if task.progress else 0,
+                    "size_bytes": task.progress.total_bytes if task.progress else 0,
+                    "downloaded_bytes": task.progress.downloaded_bytes if task.progress else 0,
+                    "speed": task.progress.speed_bytes_per_sec if task.progress else 0,
+                    "eta": task.progress.eta_seconds if task.progress else 0,
+                    "category": task.category,
+                    "created_at": task.created_at.timestamp() if hasattr(task, 'created_at') and task.created_at else None,
+                    "added": task.created_at.timestamp() if hasattr(task, 'created_at') and task.created_at else None,
+                })
+        except Exception as e:
+            logger.warning(f"get_queue error: {e}")
         return queue
     
-    def get_status(self) -> Dict[str, Any]:
+    async def get_status(self) -> Dict[str, Any]:
         """
         Get client status.
         
@@ -240,14 +205,25 @@ class BuiltinDownloadClient:
             "total_speed": total_speed,
             "running": self.engine._running,
         }
-    def delete_download(self, task_id: str) -> bool:
+
+    async def delete_download(self, task_id: str) -> bool:
         """Delete/Cancel a download."""
         return self.engine.cancel_task(task_id)
 
-    def pause_download(self, task_id: str) -> bool:
+    async def pause_download(self, task_id: str) -> bool:
         """Pause a download."""
         return self.engine.pause_task(task_id)
 
-    def resume_download(self, task_id: str) -> bool:
+    async def get_counts(self) -> Dict[str, int]:
+        """Get counts for UI stats."""
+        s = await self.get_status()
+        return {
+            "active": s["active"],
+            "queued": s["queued"],
+            "completed": s["completed"],
+            "total": s["active"] + s["queued"] + s["paused"] + s["failed"]
+        }
+
+    async def resume_download(self, task_id: str) -> bool:
         """Resume a download."""
         return self.engine.resume_task(task_id)

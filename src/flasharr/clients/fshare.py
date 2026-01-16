@@ -172,7 +172,17 @@ class FshareClient:
             return datetime.now() < self._token_expires
         
         # Fallback: check session cookies
-        if self.session.cookies.get('_identity-app') or self.session.cookies.get('session_id'):
+        # Use iteration to avoid CookieConflictError if multiple matching cookies exist
+        has_identity = False
+        has_session = False
+        
+        for cookie in self.session.cookies:
+            if cookie.name == '_identity-app':
+                has_identity = True
+            elif cookie.name == 'session_id':
+                has_session = True
+                
+        if has_identity or has_session:
             return True
             
         return False
@@ -326,6 +336,7 @@ class FshareClient:
         # TRAFFIC
         # Vietnamese: Dung lượng tải | Tải trong ngày, English: Daily download | Traffic left
         traffic_patterns = [
+            r'(?:Dung lượng tải|Tải trong ngày|Daily download|Traffic left).*?</a>\s*(.*?)\s*</p>',
             r'(?:Dung lượng tải|Tải trong ngày|Daily download|Traffic left).*?<(?:span|div|a|b|strong)[^>]*>(.*?)</(?:span|div|a|b|strong)>',
             r'(?:Dung lượng tải|Tải trong ngày|Daily download|Traffic left)[^:]*:\s*(?:<[^>]+>)*\s*([\d.]+\s*[KMGT]?B)',
             r'(?:Dung lượng tải|Tải trong ngày|Daily download|Traffic left).*?:\s*(?:</a>\s*)?(.*?)\s*(?:</p>|<|$)'
@@ -684,7 +695,11 @@ class FshareClient:
             html = response.text
             
             # Use same fallback logic as _parse_profile
-            traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?<\w+[^>]*>(.*?)</\w+>', html, re.IGNORECASE | re.DOTALL)
+            # Match: <a ...>Dung lượng tải trong ngày: </a>  xx GB / xx GB </p>
+            traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?</a>\s*(.*?)\s*</p>', html, re.IGNORECASE | re.DOTALL)
+            
+            if not traffic_match:
+                 traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?<\w+[^>]*>(.*?)</\w+>', html, re.IGNORECASE | re.DOTALL)
             if not traffic_match:
                 traffic_match = re.search(r'(?:Dung lượng tải|Tải trong ngày).*?:\s*</a>\s*(.*?)\s*</p>', html, re.IGNORECASE | re.DOTALL)
             if not traffic_match:
@@ -697,10 +712,19 @@ class FshareClient:
                 
                 # Also try to parse full profile to ensure all fields are up to date
                 self._parse_profile(html)
+                
+                if self._account_type:
+                    return self._traffic_left or "Unlimited"
+                    
                 return self._traffic_left
             
             # Fallback: full parse might find it via other patterns
             self._parse_profile(html)
+            
+            # If we successfully parsed account type, the session is valid, even if traffic is None (VIP)
+            if self._account_type:
+                return self._traffic_left or "Unlimited"
+                
             return self._traffic_left
             
         except Exception as e:

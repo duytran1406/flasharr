@@ -39,8 +39,14 @@ def create_app(config_override: dict = None) -> Flask:
     # Development/Package fallback
     else:
         pkg_base = Path(__file__).parent
-        template_folder = str(pkg_base / "templates")
-        static_folder = str(pkg_base / "static")
+        # If running from src/flasharr/web, templates are up one level in src/flasharr/templates
+        if (pkg_base.parent / "templates").exists():
+            template_folder = str(pkg_base.parent / "templates")
+            static_folder = str(pkg_base.parent / "static")
+        else:
+            # Fallback to local (if web/templates existed)
+            template_folder = str(pkg_base / "templates")
+            static_folder = str(pkg_base / "static")
     
     app = Flask(
         __name__,
@@ -63,6 +69,9 @@ def create_app(config_override: dict = None) -> Flask:
     from .indexer_routes import indexer_bp
     from .sabnzbd_routes import sabnzbd_bp
     from .settings_api import settings_bp
+    from .integration_routes import integration_bp
+    from .tmdb_routes import tmdb_bp
+    from .discovery_routes import discovery_bp
     
     # Initialize Core Services (Critical for Gunicorn/Prod)
     try:
@@ -92,11 +101,15 @@ def create_app(config_override: dict = None) -> Flask:
             pass
         return dict(version=version, now=int(time.time()))
 
+    # Register Blueprints (actual registration)
     app.register_blueprint(main_bp)
     app.register_blueprint(api_bp, url_prefix="/api")
     app.register_blueprint(settings_bp, url_prefix="/api/settings")
     app.register_blueprint(indexer_bp, url_prefix="/indexer")
     app.register_blueprint(sabnzbd_bp, url_prefix="/sabnzbd")
+    app.register_blueprint(integration_bp, url_prefix="/api")
+    app.register_blueprint(tmdb_bp, url_prefix="/api/tmdb")
+    app.register_blueprint(discovery_bp, url_prefix="/api/discovery")
     
     # Setup logging
     if not app.debug:

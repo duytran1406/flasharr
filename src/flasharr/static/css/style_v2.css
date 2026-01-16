@@ -421,6 +421,12 @@ body.sidebar-collapsed .sidebar-collapse-btn {
     position: relative;
 }
 
+/* Discover Mode Overrides */
+.view-container[data-view="discover"] {
+    overflow: hidden;
+    padding: 0;
+}
+
 /* Loaders */
 .loading-spinner {
     width: 40px;
@@ -584,8 +590,8 @@ select.glass-panel {
     gap: 2rem;
     max-width: 1600px;
     margin: 0 auto;
-    padding: 2.5rem;
-    height: calc(100vh - 80px);
+    padding: 1.5rem 2.5rem;
+    height: calc(100vh - var(--header-height));
     overflow: hidden;
 }
 
@@ -694,6 +700,7 @@ input[type=range] {
     height: 6px;
     margin: 1.5rem 0;
     -webkit-appearance: none;
+    appearance: none;
 }
 
 input[type=range]::-webkit-slider-runnable-track {

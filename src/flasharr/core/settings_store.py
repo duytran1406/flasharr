@@ -37,7 +37,13 @@ class AppSettings:
     sabnzbd_api_key: str = ""
     base_url: str = "http://localhost:8484"
     enable_indexer: bool = True
+    enable_indexer: bool = True
     enable_sabnzbd: bool = True
+    tmdb_api_key: str = ""
+    
+    # Arr Integrations
+    sonarr: Dict[str, str] = None
+    radarr: Dict[str, str] = None
     
     # Appearance
     theme: str = "dark"  # dark, light, system
@@ -53,6 +59,18 @@ class AppSettings:
                 "radarr": "movies",
                 "sonarr": "tv",
                 "lidarr": "music",
+            }
+        
+        if self.sonarr is None:
+            self.sonarr = {
+                "url": "http://localhost:8989",
+                "api_key": ""
+            }
+            
+        if self.radarr is None:
+            self.radarr = {
+                "url": "http://localhost:7878",
+                "api_key": ""
             }
     
     def to_dict(self) -> Dict[str, Any]:

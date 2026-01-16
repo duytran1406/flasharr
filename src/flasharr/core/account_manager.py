@@ -13,6 +13,7 @@ from datetime import datetime
 from ..clients.fshare import FshareClient
 from ..clients.fshare import FshareClient
 from .config import FshareConfig
+from ..core.exceptions import AuthenticationError
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class AccountManager:
         self.accounts: List[Dict] = []
         self.primary_email: Optional[str] = None
         self._client_cache: Dict[str, FshareClient] = {} # Cache client instances by email
+        self._last_quota_sync: float = 0
         
         self._load()
     
@@ -251,28 +253,35 @@ class AccountManager:
         
         # 3. Try to fetch profile/quota (validates session)
         # If this returns data, session is valid. If None, we need to login.
-        quota = client.get_daily_quota()
-        
-        if quota is None:
-            # If quota is None, it means session is likely invalid/expired and we couldn't get profile data
-            # Raise exception so API knows to report error
-            from ..core.exceptions import AuthenticationError
-            logger.warning(f"Session check failed for {account['email']} (No quota data)")
-            raise AuthenticationError("Session expired or invalid")
-        else:
-            logger.info("Account info refreshed successfully.")
-            # Since get_daily_quota doesn't parse everything, we might want to manually populate
-            # some fields if they are missing from the simple quota check, 
-            # OR logic relies on get_daily_quota updating internal state of client which it does for traffic.
-            # But we should ensure premium status is also updated. 
-            # In the current implementation, if we skip login(), we rely on whatever state 
-            # client has. Client.get_daily_quota only updates traffic_left.
-            # However, login() does full profile parsing. 
-            # To be safe and get full update without login, we might need a distinct parse method,
-            # but since get_daily_quota loads the profile page, we can assume it's "authenticated enough".
-            # For now, we trust the session. Ideally we'd parse the full profile here too if we didn't login.
-            # Let's rely on the fact that if get_daily_quota succeeded, the client is reusable.
-            pass
+        # 3. Try to fetch profile/quota (validates session)
+        # We attempt to populate data. If it fails due to auth, we try to login.
+        try:
+            # client.get_daily_quota() returns None if parsing fails or auth fails in a way it detects
+            # Only trigger login if we are sure it's an Auth failure, or if we want to be robust.
+            # User request: "The login function should just called if the cookies is expired"
+            
+            quota = client.get_daily_quota()
+            
+            if quota is None:
+                 # Session likely invalid
+                 logger.warning(f"Session check failed for {account['email']}, attempting auto-login")
+                 if not client.login():
+                     raise AuthenticationError("Auto-login failed")
+                 logger.info(f"Auto-login successful for {account['email']}")
+            else:
+                 logger.info("Session valid, updating account info")
+                 
+        except Exception as e:
+            # If get_daily_quota raised an exception or we failed login above
+            logger.warning(f"Refresh failed initially: {e}. Attempting full login recovery.")
+            # Last ditch effort: Force login
+            try:
+                if client.login():
+                    logger.info(f"Recovery login successful for {account['email']}")
+                else:
+                    raise AuthenticationError("Recovery login failed")
+            except Exception as login_err:
+                raise AuthenticationError(f"Session expired and login failed: {login_err}")
 
         # Update info from client state
         # Note: If we reused session, client might not have all 'premium' fields populated 
@@ -310,7 +319,45 @@ class AccountManager:
         logger.info(f"Refreshed account: {email}")
         
         return self._sanitize_account(account)
-    
+
+    def refresh_primary_quota(self, force: bool = False) -> Optional[Dict]:
+        """
+        Lightweight quota refresh for the primary account.
+        Uses a 5-minute cooldown (TTL) unless forced.
+        """
+        if not self.primary_email:
+            return None
+            
+        now = datetime.now().timestamp()
+        # 300 seconds = 5 minutes
+        if not force and (now - self._last_quota_sync < 300):
+            return self.get_primary()
+            
+        logger.info(f"Triggering proactive quota refresh for {self.primary_email}")
+        try:
+            client = self.get_primary_client()
+            if not client:
+                return None
+                
+            # get_daily_quota handles session validation and profile parsing
+            quota = client.get_daily_quota()
+            
+            # Update the stored account info
+            account = next((a for a in self.accounts if a['email'] == self.primary_email), None)
+            if account:
+                account['traffic_left'] = client.traffic_left
+                account['premium'] = client.is_premium
+                account['validuntil'] = client.premium_expiry
+                account['account_type'] = client.account_type
+                account['last_refresh'] = int(now)
+                self._last_quota_sync = now
+                self._save()
+                return self._sanitize_account(account)
+        except Exception as e:
+            logger.error(f"Proactive quota refresh failed: {e}")
+            
+        return self.get_primary()
+
     def _sanitize_account(self, account: Optional[Dict]) -> Optional[Dict]:
         """Remove sensitive data from account dict."""
         if not account:
@@ -319,9 +366,10 @@ class AccountManager:
         return {
             'email': account['email'],
             'premium': account.get('premium', False),
-            'validuntil': account.get('validuntil'),
+            'expiry': account.get('validuntil'),
             'traffic_left': account.get('traffic_left'),
             'account_type': account.get('account_type'),
             'is_primary': account.get('is_primary', False),
             'last_refresh': account.get('last_refresh')
         }
+

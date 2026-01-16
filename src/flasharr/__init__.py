@@ -24,8 +24,8 @@ def create_sabnzbd_service():
     return _create()
 
 def create_app():
-    """Import and create Flask application."""
-    from .app import create_app as _create
+    """Import and create AIOHTTP application."""
+    from .app import init_app as _create
     return _create()
 
 def run_app():

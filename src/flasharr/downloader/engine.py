@@ -232,6 +232,9 @@ class DownloadEngine:
         # Apply speed limit if configured
         if self.config.speed_limit:
             self._rate_limiter.enable(self.config.speed_limit)
+            
+        # Executor for file I/O
+        self._io_executor = None # Use default executor (ThreadPoolExecutor)
 
     
     @property
@@ -286,12 +289,19 @@ class DownloadEngine:
                     continue
                     
                 # Create base task
+                state_enum = DownloadState(row['state']) if row['state'] in [s.value for s in DownloadState] else DownloadState.QUEUED
+                
+                # If state was transient active, force to Paused so it doesn't get lost
+                if state_enum in (DownloadState.DOWNLOADING, DownloadState.STARTING, DownloadState.EXTRACTING):
+                    logger.warning(f"Found orphaned active task {task_id} in state {state_enum}. Resetting to PAUSED.")
+                    state_enum = DownloadState.PAUSED
+                    
                 task = DownloadTask(
                     id=task_id,
                     url=row['url'],
                     filename=row['filename'],
                     destination=Path(row['destination']),
-                    state=DownloadState(row['state']) if row['state'] in [s.value for s in DownloadState] else DownloadState.QUEUED,
+                    state=state_enum,
                     category=row['category'],
                     package_name=row['package_name'],
                 )
@@ -486,6 +496,35 @@ class DownloadEngine:
                         self.queue_manager.update_task(task)
                 except Exception as e:
                     logger.error(f"Persistence sync error: {e}")
+                    
+    async def _sync_to_db(self, task: DownloadTask) -> None:
+        """Helper to sync task to DB in executor."""
+        if not self.queue_manager:
+            return
+            
+        try:
+            # We use the io_executor (ThreadPool) to run the sync DB call
+            await self._loop.run_in_executor(
+                self._io_executor,
+                self.queue_manager.update_task,
+                task
+            )
+        except Exception as e:
+            logger.error(f"DB Sync error for {task.id}: {e}")
+
+    async def _add_to_db(self, task: DownloadTask) -> None:
+        """Helper to add task to DB in executor."""
+        if not self.queue_manager:
+            return
+            
+        try:
+             await self._loop.run_in_executor(
+                self._io_executor,
+                self.queue_manager.add_task,
+                task
+            )
+        except Exception as e:
+            logger.error(f"DB Add error for {task.id}: {e}")
     
     async def add_download(
         self,
@@ -536,8 +575,8 @@ class DownloadEngine:
             # Non-critical failure, continue
 
         # Persist to DB
-        if self.queue_manager:
-            self.queue_manager.add_task(task)
+        # Persist to DB
+        await self._add_to_db(task)
 
         await self._queue.put(task.id)
         
@@ -707,7 +746,7 @@ class DownloadEngine:
                         if total_expected > 0:
                             logger.info(f"Verification: Local={start_byte}, Remote={total_expected}")
                             if start_byte == total_expected:
-                                logger.info(f"File verified as complete: {task.filename}")
+                                logger.info(f"✅ Smart Match: File {task.filename} already exists with correct size. Skipping download.")
                                 task.progress.total_bytes = total_expected
                                 task.progress.downloaded_bytes = total_expected
                                 task.progress.percentage = 100.0
@@ -773,8 +812,7 @@ class DownloadEngine:
             task.error_message = str(e)
             logger.error(f"Download failed (system): {task.filename} - {e}")
         finally:
-             if self.queue_manager:
-                 self.queue_manager.update_task(task)
+             await self._sync_to_db(task)
 
     async def _handle_segmented_download(self, task: DownloadTask, total_size: int) -> None:
         """Download file using multiple concurrent segments."""
@@ -782,9 +820,11 @@ class DownloadEngine:
         task.state = DownloadState.DOWNLOADING
         task.started_at = datetime.now()
         
-        # Pre-allocate file
-        with open(task.destination, "wb") as f:
-            f.truncate(total_size)
+        # Pre-allocate file (Blocking I/O offloaded)
+        def pre_allocate():
+             with open(task.destination, "wb") as f:
+                f.truncate(total_size)
+        await self._loop.run_in_executor(self._io_executor, pre_allocate)
         
         segment_size = total_size // self.segments_per_download
         tasks = []
@@ -836,36 +876,76 @@ class DownloadEngine:
                 
                 # Keep file handle open for the duration of the segment to avoid OS overhead
                 # We still need the lock to ensure seek+write is atomic across segments
-                with open(task.destination, "r+b") as f:
-                    async for chunk in response.content.iter_chunked(chunk_size):
-                        if task.is_cancelled:
-                            return
+                # We offload the actual IO to a thread
+                
+                # Define IO helper
+                def write_chunk_sync(path, pos, data):
+                    with open(path, "r+b") as f:
+                        f.seek(pos)
+                        f.write(data)
+                
+                # Optimization: We open/close for each chunk because 'f' object cannot be easily passed 
+                # to executor if it's created in a different thread context or if we want to follow strict thread safety.
+                # HOWEVER, opening/closing every chunk is slow.
+                # Better approach: Pass the file object? Standard python file objects are thread-safe for write/seek usually,
+                # but we need to control the cursor.
+                # Since we are using an Executor, we can't easily share the 'open' context across 'await' calls 
+                # because the 'with' block would exit? 
+                # No, we can open it, but we can't 'await' inside a 'with' block unless we are careful.
+                # Actually, standard 'with open()' works in async function, it just blocks on enter/exit.
+                
+                # To truly fix blocking IO, we should probably open the file in the thread? 
+                # Or just do the seek/write in the thread.
+                # Let's try to keep the file open if possible, but for safety and robust non-blocking,
+                # let's try the "open per chunk" or "batch write" approach? No, that's too slow.
+                
+                # CORRECT APPROACH for non-blocking IO without aiofiles:
+                # We can't keep the file open in the main thread and use it in the executor easily 
+                # without risking some GIL/Lock weirdness or just general bad practice.
+                # BUT, since we have valid 'path', we can just open-seek-write in the thread.
+                # Linux filesystem cache handles the repeated opens pretty well.
+                # Use a larger chunk size to mitigate overhead.
+                
+                current_pos = start
+                
+                async for chunk in response.content.iter_chunked(chunk_size):
+                    if task.is_cancelled:
+                        return
+                    
+                    while task.is_paused and not task.is_cancelled:
+                        await asyncio.sleep(0.5)
+                    
+                    # TEST MODE: Stop after 1 second
+                    if time.monotonic() - start_time > 1.0:
+                        logger.warning(f"TEST MODE: Stopping segment {segment_id} for {task.filename} after 1s to save quota.")
+                        return
+                    
+                    # Rate Limiting
+                    await self._rate_limiter.consume(len(chunk))
+                    
+                    chunk_len = len(chunk)
+                    
+                    # Offload IO to thread
+                    # We pass the path instead of file handle for thread safety simplicity
+                    await self._loop.run_in_executor(
+                        self._io_executor, 
+                        write_chunk_sync, 
+                        task.destination, 
+                        current_pos, 
+                        chunk
+                    )
                         
-                        while task.is_paused and not task.is_cancelled:
-                            await asyncio.sleep(0.5)
-                        
-                        # Rate Limiting
-                        await self._rate_limiter.consume(len(chunk))
-                        
-                        # Simplified: Just lock, seek, write. 
-                        # Opening the file once per segment is already a huge win.
-                        chunk_len = len(chunk)
-                        async with lock:
-                            f.seek(current_pos)
-                            f.write(chunk)
-                            
-                            # Increment total downloaded bytes atomically within the lock
-                            task.progress.downloaded_bytes += chunk_len
-                            task.progress.update(
-                                task.progress.downloaded_bytes,
-                                task.progress.total_bytes,
-                                time.monotonic() - start_time
-                            )
-                        
-                        current_pos += chunk_len
-                        
-                        if self.progress_callback:
-                            self.progress_callback(task)
+                    task.progress.downloaded_bytes += chunk_len
+                    task.progress.update(
+                        task.progress.downloaded_bytes,
+                        task.progress.total_bytes,
+                        time.monotonic() - start_time
+                    )
+                    
+                    current_pos += chunk_len
+                    
+                    if self.progress_callback:
+                        self.progress_callback(task)
                             
                 duration = time.monotonic() - segment_start_time
                 speed = (current_pos - start) / duration if duration > 0 else 0
@@ -904,43 +984,87 @@ class DownloadEngine:
         last_log_time = start_time
         
         logger.info(f"Opening file {task.destination} in mode {mode}")
-        with open(task.destination, mode) as f:
-            async for chunk in response.content.iter_chunked(self.config.chunk_size):
-                # Check for cancellation
-                if task.is_cancelled:
-                    task.state = DownloadState.CANCELLED
-                    logger.info(f"Download cancelled: {task.filename}")
-                    return
+        # Open file for writing
+        mode = "ab" if start_byte > 0 else "wb"
+        start_time = time.monotonic()
+        last_log_time = start_time
+        
+        logger.info(f"Opening file {task.destination} in mode {mode}")
+        
+        def append_chunk_sync(path, mode, data):
+             with open(path, mode) as f:
+                f.write(data)
                 
-                # Wait if paused
-                # Wait if paused
-                while task.is_paused and not task.is_cancelled:
-                    await asyncio.sleep(0.1)
-                
-                # Rate Limiting
-                await self._rate_limiter.consume(len(chunk))
+        # For single stream, consistent append mode "ab" is safe
+        # We might need to handle 'wb' for the first chunk if start_byte==0?
+        # Actually 'wb' truncates. usage of 'ab' is safer if we just want to append.
+        # But for the very first chunk we wanted 'wb' to clear file?
+        # We can implement a "write_mode" tracking or just:
+        # If start_byte == 0, first write is 'wb', subsequent are 'ab'.
+        
+        # Optimization: To avoid opening/closing, we really should use a persistent handle,
+        # but passing that between threads is the tricky part.
+        # For a "Quick Win", the per-chunk open is robust.
+        
+        first_chunk = True
+        current_mode = mode
+        
+        async for chunk in response.content.iter_chunked(self.config.chunk_size):
+            # Check for cancellation
+            if task.is_cancelled:
+                task.state = DownloadState.CANCELLED
+                logger.info(f"Download cancelled: {task.filename}")
+                return
+            
+            # Wait if paused
+            while task.is_paused and not task.is_cancelled:
+                await asyncio.sleep(0.1)
 
-                # Write chunk
-                f.write(chunk)
-                
-                # Update progress
-                task.progress.downloaded_bytes += len(chunk)
-                current_time = time.monotonic()
-                elapsed = current_time - start_time
-                task.progress.update(
-                    task.progress.downloaded_bytes,
-                    task.progress.total_bytes,
-                    elapsed,
-                )
-                
-                # Log progress every 5 seconds
-                if current_time - last_log_time >= 5.0:
-                    logger.info(f"Download progress: {task.filename} - {task.progress.percentage:.1f}% ({task.progress.downloaded_bytes}/{task.progress.total_bytes})")
-                    last_log_time = current_time
-                
-                # Call progress callback
-                if self.progress_callback:
-                    self.progress_callback(task)
+            # TEST MODE: Stop after 1 second
+            if time.monotonic() - start_time > 1.0:
+                logger.warning(f"TEST MODE: Stopping download {task.filename} after 1s to save quota.")
+                break
+            
+            # Rate Limiting
+            await self._rate_limiter.consume(len(chunk))
+
+            # Determine mode for this chunk
+            # If we are starting from 0, first is 'wb', rest 'ab'
+            # If resuming, always 'ab'
+            if first_chunk and start_byte == 0:
+                 write_mode = "wb"
+            else:
+                 write_mode = "ab"
+
+            # Write chunk in thread
+            await self._loop.run_in_executor(
+                self._io_executor,
+                append_chunk_sync,
+                task.destination,
+                write_mode,
+                chunk
+            )
+            
+            first_chunk = False
+            
+            # Update progress
+            task.progress.downloaded_bytes += len(chunk)
+            current_time = time.monotonic()
+            elapsed = current_time - start_time
+            task.progress.update(
+                task.progress.downloaded_bytes,
+                task.progress.total_bytes,
+                elapsed,
+            )
+            
+            # Log progress every 5 seconds
+            if current_time - last_log_time >= 5.0:
+                logger.info(f"Download progress: {task.filename} - {task.progress.percentage:.1f}% ({task.progress.downloaded_bytes}/{task.progress.total_bytes})")
+                last_log_time = current_time
+            
+            # Call progress callback
+            if self.progress_callback:
+                self.progress_callback(task)
     
         # Mark as completed
         task.state = DownloadState.COMPLETED

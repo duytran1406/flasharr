@@ -70,7 +70,9 @@ class Router {
 
             loading: false,
             hasMore: true,
-            showFilters: false // Hidden by default
+            showFilters: false, // Hidden by default
+            tmdbPage: 1, // TMDb's own pagination
+            buffer: [] // Local buffer for partial pages
         };
     }
 
@@ -166,6 +168,9 @@ class Router {
             window.history.pushState({ view }, '', view === 'dashboard' ? '/' : `/${view}`);
             this.omniSearchQuery = ''; // Clear on manual navigation
         }
+
+        // Set view attribute for CSS targeting
+        this.container.setAttribute('data-view', view);
 
         // Render Dynamic Header
         this.renderDynamicHeader(view);
@@ -659,6 +664,8 @@ class Router {
     async loadDiscover(type = 'movie') {
         this.discoverState.type = type;
         this.discoverState.page = 1;
+        this.discoverState.tmdbPage = 1;
+        this.discoverState.buffer = [];
         this.discoverState.hasMore = true;
 
         this.container.innerHTML = `
@@ -694,11 +701,12 @@ class Router {
                         </div>
                     </div>
 
-                    <!-- Scrollable Grid Container -->
+                     <!-- Scrollable Grid Container -->
                     <div id="discover-scroll-container" style="overflow-y: auto; flex: 1; padding-right: 10px; padding-bottom: 2rem;">
                          <div id="discover-grid" class="discover-grid"></div>
+                         <div id="discover-sentinel" style="height: 20px; width: 100%;"></div>
                          <div id="discover-loading-more" style="display: none; justify-content: center; padding: 2rem;">
-                             <div class="loading-spinner"></div>
+                             <div class="loading-spinner" style="width: 30px; height: 30px;"></div>
                          </div>
                     </div>
                 </main>
@@ -794,6 +802,8 @@ class Router {
 
     resetAndFetch() {
         this.discoverState.page = 1;
+        this.discoverState.tmdbPage = 1;
+        this.discoverState.buffer = []; // Corrected reference
         this.discoverState.hasMore = true;
         this.fetchDiscoverData(true);
     }
@@ -841,7 +851,7 @@ class Router {
         this.discoverState.page = 1;
         this.discoverState.hasMore = true;
         // Reset sort to Popular Today if needed or keep existing
-        this.loadDiscover(); // Re-render logic with new tabs state
+        this.loadDiscover(type); // Re-render logic with new tabs state
     }
 
     setDiscoverSort(sort) {
@@ -857,17 +867,23 @@ class Router {
     }
 
     setupInfiniteScroll() {
-        const container = document.getElementById('discover-scroll-container') || document.getElementById('view-container');
-        if (!container) return;
+        const sentinel = document.getElementById('discover-sentinel');
+        if (!sentinel) return;
 
-        container.onscroll = () => {
-            if (this.discoverState.loading || !this.discoverState.hasMore) return;
+        if (this.discoverObserver) this.discoverObserver.disconnect();
 
-            const threshold = 300;
-            if (container.scrollHeight - container.scrollTop - container.clientHeight < threshold) {
+        this.discoverObserver = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting && !this.discoverState.loading && this.discoverState.hasMore) {
+                console.log("👀 Sentinel Intersected: Pulling next data fragment...");
                 this.fetchDiscoverData(false);
             }
-        };
+        }, {
+            root: document.getElementById('discover-scroll-container'),
+            rootMargin: '400px', // Pre-fetch before user reaches the bottom
+            threshold: 0.1
+        });
+
+        this.discoverObserver.observe(sentinel);
     }
 
     async fetchDiscoverData(reset = false) {
@@ -876,44 +892,72 @@ class Router {
 
         if (reset) {
             document.getElementById('discover-grid').innerHTML = '<div class="loading-spinner"></div>';
+            this.discoverState.page = 1;
+            this.discoverState.tmdbPage = 1;
+            this.discoverState.buffer = [];
+            this.discoverState.hasMore = true;
         } else {
-            document.getElementById('discover-loading-more').style.display = 'block';
+            const loader = document.getElementById('discover-loading-more');
+            if (loader) loader.style.display = 'block';
         }
 
+        const itemsPerPage = 18;
         const s = this.discoverState;
-        // Build query params
-        const params = new URLSearchParams({
-            page: s.page,
-            sort_by: s.sort,
-            genre: s.genre || '',
-            year: s.year || '',
-            date_from: s.dateFrom,
-            date_to: s.dateTo,
-            language: s.language,
-            certification: s.certification,
-            runtime_min: s.runtimeMin,
-            runtime_max: s.runtimeMax,
-            score_min: s.scoreMin,
-            score_max: s.scoreMax,
-            vote_count_min: s.voteCountMin
-        });
 
         try {
-            let endpoint = `/api/tmdb/discover/${s.type}?${params.toString()}`;
-            if (s.sort === 'popular_today') {
-                endpoint = '/api/discovery/popular-today';
+            // Fill buffer up to 18 items if we have more results from TMDB
+            while (s.buffer.length < itemsPerPage && s.hasMore) {
+                const params = new URLSearchParams({
+                    page: s.tmdbPage,
+                    sort_by: s.sort,
+                    genre: s.genre || '',
+                    year: s.year || '',
+                    date_from: s.dateFrom,
+                    date_to: s.dateTo,
+                    language: s.language,
+                    certification: s.certification,
+                    runtime_min: s.runtimeMin,
+                    runtime_max: s.runtimeMax,
+                    score_min: s.scoreMin,
+                    score_max: s.scoreMax,
+                    vote_count_min: s.voteCountMin
+                });
+
+                let endpoint = `/api/tmdb/discover/${s.type}?${params.toString()}`;
+                if (s.sort === 'popular_today') {
+                    endpoint = `/api/discovery/popular-today?page=${s.tmdbPage}`;
+                }
+
+                const res = await fetch(endpoint);
+                const data = await res.json();
+
+                if (data.results && data.results.length > 0) {
+                    s.buffer.push(...data.results);
+                    s.tmdbPage++;
+                    // TMDb returns 20 items per page usually
+                    if (data.results.length < 20) {
+                        // If we got less than full page, no more items on TMDB
+                        // But we might still have some in buffer
+                    }
+                } else {
+                    s.hasMore = false;
+                }
             }
 
-            const res = await fetch(endpoint);
-            const data = await res.json();
+            // Slice 18 items from buffer
+            const chunk = s.buffer.splice(0, itemsPerPage);
+            if (chunk.length > 0) {
+                this.renderDiscoverGrid(chunk, s.type, !reset);
+                s.page++;
+            }
 
-            if (data.results) {
-                if (data.results.length < 18) this.discoverState.hasMore = false;
-                this.renderDiscoverGrid(data.results, s.type, !reset);
-                this.discoverState.page++;
+            // If buffer and API are both empty, we're done
+            if (s.buffer.length === 0 && !s.hasMore) {
+                s.hasMore = false;
             } else {
-                this.discoverState.hasMore = false;
+                s.hasMore = true; // Still have items in buffer or API
             }
+
         } catch (e) {
             console.error("Discover Telemetry Error", e);
         } finally {
@@ -1458,10 +1502,8 @@ class Router {
 
     loadDashboard() {
         this.container.innerHTML = `
-            <!-- Trending Carousel -->
-            <div id="dashboard-carousel" class="dashboard-carousel" style="display: flex; gap: 1rem; overflow-x: auto; padding-bottom: 2rem; scroll-behavior: smooth; margin-bottom: 2rem;">
-               <div class="loading-spinner" style="width: 30px; height: 30px; margin: 2rem auto;"></div>
-            </div>
+            <!-- Trending Carousel Mount -->
+            <div id="trending-mount"></div>
 
             <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; margin-bottom: 2rem;">
                 <!-- Captain Info Terminal -->
@@ -1577,7 +1619,7 @@ class Router {
 
             if (data.results && data.results.length > 0) {
                 const section = `
-                    <div class="glass-panel trending-section" style="padding: 2rem; margin-top: 2rem;">
+                    <div class="glass-panel trending-section" style="padding: 2rem; margin-bottom: 2rem;">
                         <div class="section-header">
                             <span class="material-icons">trending_up</span>
                             <h3 class="glow-text" style="font-size: 1.2rem; font-weight: 800;">Trending This Week</h3>
@@ -1595,7 +1637,8 @@ class Router {
                         </div>
                     </div>
                 `;
-                this.container.insertAdjacentHTML('beforeend', section);
+                const mount = document.getElementById('trending-mount');
+                if (mount) mount.innerHTML = section;
                 this.initCarousel();
             }
         } catch (e) {

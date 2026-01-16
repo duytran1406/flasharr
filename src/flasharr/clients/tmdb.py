@@ -88,15 +88,16 @@ class TMDBClient:
         params = {k: v for k, v in filters.items() if v}
         return self._get("discover/tv", params=params)
     
-    def get_trending(self, media_type: str = "all", time_window: str = "day") -> Dict:
+    def get_trending(self, media_type: str = "all", time_window: str = "day", page: int = 1) -> Dict:
         """
         Get trending items.
         
         Args:
             media_type: 'all', 'movie', 'tv', 'person'
             time_window: 'day' or 'week'
+            page: page number
         """
-        return self._get(f"trending/{media_type}/{time_window}")
+        return self._get(f"trending/{media_type}/{time_window}", params={"page": page})
     
     def get_popular_movies(self, page: int = 1) -> Dict:
         """Get popular movies."""

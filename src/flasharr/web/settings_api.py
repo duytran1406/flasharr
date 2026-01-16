@@ -83,6 +83,13 @@ def update_settings():
                 engine.set_speed_limit(limit_bytes)
         except Exception as e:
             logger.error(f"Failed to update active engine settings: {e}")
+            
+        # Reload integration service
+        try:
+            from ..services.integration_service import get_integration_service
+            get_integration_service().reload_config()
+        except Exception as e:
+            logger.error(f"Failed to reload integration service: {e}")
         
         logger.info("Settings updated successfully")
         return jsonify({

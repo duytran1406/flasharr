@@ -74,8 +74,11 @@ class AccountEvent:
     """Minimal account status."""
     e: str                      # email
     a: bool                     # available
-    c: int                      # current downloads
+    p: bool = False             # premium/VIP
+    x: Optional[str] = None     # expiry/validuntil
+    t: Optional[str] = None     # traffic_left (e.g. "50 GB / 100 GB")
     q: bool = False             # quota exceeded
+
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -259,13 +262,18 @@ def create_engine_stats_event(
 def create_account_event(
     email: str,
     available: bool,
-    current_downloads: int,
+    premium: bool = False,
+    expiry: Optional[str] = None,
+    traffic_left: Optional[str] = None,
     quota_exceeded: bool = False
 ) -> AccountEvent:
     """Helper to create account event."""
     return AccountEvent(
         e=email,
         a=available,
-        c=current_downloads,
+        p=premium,
+        x=expiry,
+        t=traffic_left,
         q=quota_exceeded
     )
+

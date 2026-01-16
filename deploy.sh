@@ -45,7 +45,7 @@ if [ "$MODE" == "MASTER" ]; then
 
     # 2. Commit & Push
     echo "💾 Committing changes..."
-    if [[ -n $(git status -s) ]]; then
+    if [[ -n $(git status -s) ]] && [ "$SKIP_GIT" != "true" ]; then
         git add .
         git commit -m "Release v$NEW_VER"
         

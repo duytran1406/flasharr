@@ -192,23 +192,9 @@
                 /* Ensure image is circle */
                 transition: transform 0.2s;
             }
-
-            <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile-v2.css') }}?v={{ version }}&t={{ now }}"><link rel="shortcut icon" href="{{ url_for('static', filename='favicon.png') }}"> {
-                % block head_extra %
-            }
-
-                {
-                % endblock %
-            }
-
-            </head>
         }
 
-            {
-            % endblock %
-        }
-
-        </head>.menu-item.delete:hover {
+        .menu-item.delete:hover {
             background: rgba(248, 113, 113, 0.15);
         }
 
@@ -223,6 +209,11 @@
             margin: 4px 0;
         }
     </style>
+
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile-v2.css') }}?v={{ version }}&t={{ now }}">
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.png') }}">
+
+    {% block head_extra %}{% endblock %}
 </head>
 
 <body>
@@ -246,6 +237,13 @@
                     <span class="nav-text">Dashboard</span>
                 </a>
 
+                <!-- Discover (New) -->
+                <a href="/discover" class="nav-item {% if request.path == '/discover' %}active{% endif %}"
+                    title="Discover">
+                    <span class="nav-icon material-icons">movie_filter</span>
+                    <span class="nav-text">Discover</span>
+                </a>
+
                 <!-- Downloads (File Manager) -->
                 <a href="/downloads" class="nav-item {% if request.path == '/downloads' %}active{% endif %}"
                     title="Downloads">
@@ -253,9 +251,9 @@
                     <span class="nav-text">Downloads</span>
                 </a>
 
-                <a href="/search" class="nav-item {% if request.path == '/search' %}active{% endif %}" title="Search">
-                    <span class="nav-icon material-icons">search</span>
-                    <span class="nav-text">Search</span>
+                <a href="/search" class="nav-item {% if request.path == '/search' %}active{% endif %}" title="Explore">
+                    <span class="nav-icon material-icons">explore</span>
+                    <span class="nav-text">Explore</span>
                 </a>
 
                 <a href="/settings" class="nav-item {% if request.path == '/settings' %}active{% endif %}"
@@ -271,6 +269,10 @@
                     <span class="material-icons">dark_mode</span>
                     <span class="nav-text">Dark Mode</span>
                 </button>
+                <div
+                    style="text-align: center; margin-top: 1rem; color: var(--text-muted); font-size: 0.75rem; opacity: 0.6;">
+                    v{{ version }}
+                </div>
             </div>
         </aside>
 
@@ -318,6 +320,10 @@
         <a href="/" class="bottom-nav-item {% if request.path == '/' %}active{% endif %}">
             <span class="material-icons">dashboard</span>
             <span class="label">Dash</span>
+        </a>
+        <a href="/discover" class="bottom-nav-item {% if request.path == '/discover' %}active{% endif %}">
+            <span class="material-icons">movie</span>
+            <span class="label">New</span>
         </a>
         <a href="/downloads" class="bottom-nav-item {% if request.path == '/downloads' %}active{% endif %}">
             <span class="material-icons">cloud_download</span>

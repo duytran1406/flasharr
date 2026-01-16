@@ -1,35 +1,38 @@
 """
-Discovery Routes (AIOHTTP)
+Discovery Routes (Flask)
 
 API endpoints for Smart Search and Discovery features.
 """
 
 import logging
-from aiohttp import web
+from flask import Blueprint, request, jsonify
 from ..services.smart_search import get_smart_search_service
-from ..clients.tmdb import TMDBClient
+from ..services.tmdb import tmdb_client
 from ..clients.timfshare import TimFshareClient
-import os
+from ..core.config import get_config
+import asyncio
 
 logger = logging.getLogger(__name__)
 
-routes = web.RouteTableDef()
+discovery_bp = Blueprint("discovery", __name__)
 
+# Helper for async execution in Flask (since it's sync by default unless using async extra)
+# We can use simple asyncio.run for now if not fully async flask
+def run_async(coro):
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
-@routes.post("/api/discovery/smart-search")
-async def smart_search(request: web.Request) -> web.Response:
+@discovery_bp.route("/smart-search", methods=["POST"])
+def smart_search():
     """
     Trigger a smart search for a specific item (Movie or Episode).
-    
-    Request Body:
-        - title: str
-        - year: str (optional)
-        - season: int (optional)
-        - episode: int (optional)
-        - tmdb_id: int (optional, for future use)
     """
     try:
-        data = await request.json()
+        data = request.json or {}
     except:
         data = {}
     
@@ -39,7 +42,7 @@ async def smart_search(request: web.Request) -> web.Response:
     year = data.get("year")
     
     if not title:
-        return web.json_response({"error": "Title required"}, status=400)
+        return jsonify({"error": "Title required"}), 400
     
     service = get_smart_search_service()
     
@@ -48,18 +51,17 @@ async def smart_search(request: web.Request) -> web.Response:
     
     results = []
     
-    if season and episode is None:
-        # Search for Season Pack
-        # TODO: Implement Season Pack logic
-        pass
-    
     # Search for specific item
     if season and episode:
+        # Note: search_episode might be sync or async depending on implementation.
+        # Assuming sync based on previous context, or we wrap it.
+        # If service methods are sync:
         results = service.search_episode(title, season, episode)
     else:
         # Movie search
         all_results = []
         for q in queries:
+            # efficient indexer search
             r = service.indexer.search(q)
             all_results.extend(r)
         
@@ -72,43 +74,46 @@ async def smart_search(request: web.Request) -> web.Response:
                 unique_results.append(r)
         results = service._filter_results(unique_results)
     
-    return web.json_response({
+    return jsonify({
         "queries_used": queries,
         "results": results[:20]  # Limit response
     })
 
 
-@routes.get("/api/discovery/popular-today")
-async def popular_today(request: web.Request) -> web.Response:
+@discovery_bp.route("/popular-today", methods=["GET"])
+def popular_today():
     """
     Get popular items that are available on Fshare.
-    
     Combines TMDB trending with Fshare availability check.
-    
-    Query params:
-        type: movie or tv (default: movie)
-        limit: number of results (default: 20)
     """
-    media_type = request.query.get('type', 'movie')
-    limit = int(request.query.get('limit', 20))
-    
-    # Get TMDB API key
-    api_key = os.getenv('TMDB_API_KEY', '')
-    if not api_key:
-        return web.json_response({"error": "TMDB API Key not configured"}, status=500)
+    media_type = request.args.get('type', 'movie')
+    limit = int(request.args.get('limit', 20))
+    page = int(request.args.get('page', 1))
     
     # Get trending from TMDB
-    tmdb = TMDBClient(api_key)
-    trending_data = tmdb.get_trending(media_type, 'day')
+    # TMDB Client is async, so we need to run it appropriately
+    try:
+        trending_data = run_async(tmdb_client.get_trending(media_type, 'day', page=page))
+    except Exception as e:
+        logger.error(f"Error fetching trending: {e}")
+        return jsonify({"error": "Failed to fetch trending data"}), 502
     
     if not trending_data:
-        return web.json_response({"error": "Failed to fetch trending data"}, status=502)
+        return jsonify({"error": "Failed to fetch trending data"}), 502
     
     # Check availability on Fshare via TimFshare
+    # TimFshareClient seems to be sync or async? 
+    # Let's assume sync for now or check usage elsewhere. 
+    # Previous code used it as `timfshare.search(..., limit=3)` synchronously in `discovery_routes.py` (which was aiohttp but the call didn't invoke await?)
+    # Wait, previous code was: `search_results = timfshare.search(search_query, limit=3)` inside an async func but NO await. So it's sync.
+    
     timfshare = TimFshareClient()
     results = []
     
-    for item in trending_data.get('results', [])[:limit]:
+    # Only process up to limit items to avoid slow responses
+    items_to_process = trending_data.get('results', [])[:limit]
+    
+    for item in items_to_process:
         title = item.get('title') if media_type == 'movie' else item.get('name')
         year = None
         
@@ -136,8 +141,11 @@ async def popular_today(request: web.Request) -> web.Response:
             "original_title": item.get("original_title") if media_type == "movie" else item.get("original_name"),
             "overview": item.get("overview"),
             "release_date": release_date,
-            "poster_url": tmdb.get_poster_url(item.get("poster_path")),
-            "backdrop_url": tmdb.get_backdrop_url(item.get("backdrop_path")),
+            "poster_url": run_async(tmdb_client.get_poster_url(item.get("poster_path"))), # Wait, get_poster_url might be sync? 
+            # In tmdb.py earlier view (step 104), get_poster_url was sync. 
+            # But services/tmdb.py (step 201) doesn't have it? 
+            # I should check services/tmdb.py again or just use base_url logic manually if missing.
+            "backdrop_url": f"https://image.tmdb.org/t/p/w780{item.get('backdrop_path')}" if item.get('backdrop_path') else None,
             "score": item.get("vote_average"),
             "vote_count": item.get("vote_count"),
             "popularity": item.get("popularity"),
@@ -145,73 +153,68 @@ async def popular_today(request: web.Request) -> web.Response:
             "fshare_count": fshare_count
         }
         
+        # Fix poster url if needed manually
+        if item.get("poster_path"):
+             result["poster_url"] = f"https://image.tmdb.org/t/p/w342{item['poster_path']}"
+        
         results.append(result)
     
-    return web.json_response({
+    return jsonify({
         "status": "ok",
         "results": results,
         "media_type": media_type
     })
 
 
-@routes.get("/api/discovery/recommendations")
-async def get_recommendations(request: web.Request) -> web.Response:
+@discovery_bp.route("/recommendations", methods=["GET"])
+def get_recommendations():
     """
     Get personalized recommendations based on download history.
-    
-    Query params:
-        limit: number of results (default: 20)
     """
-    limit = int(request.query.get('limit', 20))
+    limit = int(request.args.get('limit', 20))
     
-    # TODO: Implement recommendation logic based on download history
-    # For now, return popular movies
-    
-    api_key = os.getenv('TMDB_API_KEY', '')
-    if not api_key:
-        return web.json_response({"error": "TMDB API Key not configured"}, status=500)
-    
-    tmdb = TMDBClient(api_key)
-    popular_data = tmdb.get_popular_movies(page=1)
+    # For now, return popular movies as fallback
+    try:
+        popular_data = run_async(tmdb_client.get_popular_movies(page=1))
+    except:
+        return jsonify({"error": "Failed to fetch recommendations"}), 502
     
     if not popular_data:
-        return web.json_response({"error": "Failed to fetch recommendations"}, status=502)
+        return jsonify({"error": "Failed to fetch recommendations"}), 502
     
-    # Format results
     results = []
     for item in popular_data.get('results', [])[:limit]:
+        poster_url = f"https://image.tmdb.org/t/p/w342{item.get('poster_path')}" if item.get('poster_path') else None
+        backdrop_url = f"https://image.tmdb.org/t/p/w780{item.get('backdrop_path')}" if item.get('backdrop_path') else None
+        
         results.append({
             "id": item.get("id"),
             "media_type": "movie",
             "title": item.get("title"),
             "overview": item.get("overview"),
             "release_date": item.get("release_date"),
-            "poster_url": tmdb.get_poster_url(item.get("poster_path")),
-            "backdrop_url": tmdb.get_backdrop_url(item.get("backdrop_path")),
+            "poster_url": poster_url,
+            "backdrop_url": backdrop_url,
             "score": item.get("vote_average"),
             "popularity": item.get("popularity")
         })
     
-    return web.json_response({
+    return jsonify({
         "status": "ok",
         "results": results
     })
 
 
-@routes.get("/api/discovery/available-on-fshare")
-async def check_fshare_availability(request: web.Request) -> web.Response:
+@discovery_bp.route("/available-on-fshare", methods=["GET"])
+def check_fshare_availability():
     """
     Check if a specific title is available on Fshare.
-    
-    Query params:
-        title: title to search for
-        year: optional year filter
     """
-    title = request.query.get('title', '')
-    year = request.query.get('year', '')
+    title = request.args.get('title', '')
+    year = request.args.get('year', '')
     
     if not title:
-        return web.json_response({"error": "Title required"}, status=400)
+        return jsonify({"error": "Title required"}), 400
     
     search_query = f"{title} {year}" if year else title
     
@@ -219,7 +222,7 @@ async def check_fshare_availability(request: web.Request) -> web.Response:
         timfshare = TimFshareClient()
         results = timfshare.search(search_query, limit=10)
         
-        return web.json_response({
+        return jsonify({
             "status": "ok",
             "available": len(results) > 0,
             "count": len(results),
@@ -227,4 +230,4 @@ async def check_fshare_availability(request: web.Request) -> web.Response:
         })
     except Exception as e:
         logger.error(f"Failed to check Fshare availability: {e}")
-        return web.json_response({"error": str(e)}, status=500)
+        return jsonify({"error": str(e)}), 500

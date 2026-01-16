@@ -47,6 +47,7 @@ class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8484
     debug: bool = False
+    api_key: Optional[str] = None
     
     @classmethod
     def from_env(cls) -> "ServerConfig":
@@ -54,6 +55,47 @@ class ServerConfig:
             host=os.getenv("SERVER_HOST", "0.0.0.0"),
             port=int(os.getenv("INDEXER_PORT", "8484")),
             debug=os.getenv("DEBUG", "false").lower() == "true",
+            api_key=os.getenv("API_KEY"),
+        )
+
+
+@dataclass
+class TMDBConfig:
+    """TMDB API Configuration."""
+    api_key: str = ""
+    
+    @classmethod
+    def from_env(cls) -> "TMDBConfig":
+        return cls(
+            api_key=os.getenv("TMDB_API_KEY", ""),
+        )
+
+
+@dataclass
+class SonarrConfig:
+    """Sonarr Connection Configuration."""
+    url: str = "http://localhost:8989"
+    api_key: str = ""
+    
+    @classmethod
+    def from_env(cls) -> "SonarrConfig":
+        return cls(
+            url=os.getenv("SONARR_URL", "http://localhost:8989"),
+            api_key=os.getenv("SONARR_API_KEY", ""),
+        )
+
+
+@dataclass
+class RadarrConfig:
+    """Radarr Connection Configuration."""
+    url: str = "http://localhost:7878"
+    api_key: str = ""
+    
+    @classmethod
+    def from_env(cls) -> "RadarrConfig":
+        return cls(
+            url=os.getenv("RADARR_URL", "http://localhost:7878"),
+            api_key=os.getenv("RADARR_API_KEY", ""),
         )
 
 
@@ -62,6 +104,7 @@ class DownloadConfig:
     """Download engine configuration."""
     download_dir: str = "/downloads"
     max_concurrent: int = 3
+    worker_threads: int = 4
     chunk_size: int = 128 * 1024  # 128KB chunks for better performance
     retry_attempts: int = 3
     retry_delay: float = 5.0
@@ -76,6 +119,7 @@ class DownloadConfig:
         return cls(
             download_dir=os.getenv("DOWNLOAD_DIR", "/downloads"),
             max_concurrent=int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "3")),
+            worker_threads=int(os.getenv("WORKER_THREADS", "4")),
             chunk_size=int(os.getenv("CHUNK_SIZE", "1048576")),
             retry_attempts=int(os.getenv("RETRY_ATTEMPTS", "3")),
             retry_delay=float(os.getenv("RETRY_DELAY", "5.0")),
@@ -90,6 +134,9 @@ class AppConfig:
     pyload: PyLoadConfig = field(default_factory=PyLoadConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     download: DownloadConfig = field(default_factory=DownloadConfig)
+    tmdb: TMDBConfig = field(default_factory=TMDBConfig)
+    sonarr: SonarrConfig = field(default_factory=SonarrConfig)
+    radarr: RadarrConfig = field(default_factory=RadarrConfig)
     data_dir: str = "./data"
     
     @classmethod
@@ -100,6 +147,9 @@ class AppConfig:
             pyload=PyLoadConfig.from_env(),
             server=ServerConfig.from_env(),
             download=DownloadConfig.from_env(),
+            tmdb=TMDBConfig.from_env(),
+            sonarr=SonarrConfig.from_env(),
+            radarr=RadarrConfig.from_env(),
             data_dir=os.getenv("DATA_DIR", "./data"),
         )
 

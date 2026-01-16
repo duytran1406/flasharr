@@ -1,0 +1,920 @@
+"""
+API Routes (AIOHTTP)
+
+REST API endpoints for the web UI, ported to aiohttp.
+"""
+
+import logging
+import time
+import os
+import json
+import psutil
+from typing import Any, Dict, Optional
+from datetime import datetime
+from pathlib import Path
+
+from aiohttp import web
+from ..core.config import get_config
+from ..utils.formatters import format_size, format_speed, format_duration, format_eta
+from ..services.tmdb import tmdb_client
+from ..services.smart_search import get_smart_search_service
+
+logger = logging.getLogger(__name__)
+
+routes = web.RouteTableDef()
+
+# Helper to get parsed JSON
+async def get_json(request: web.Request) -> Dict:
+    try:
+        return await request.json()
+    except Exception:
+        return {}
+
+@routes.get("/api/stats")
+async def get_stats(request: web.Request) -> web.Response:
+    """Get system and engine stats."""
+    app = request.app
+    try:
+        # System uptime
+        uptime = int(time.time() - psutil.boot_time())
+        
+        # Get primary account info
+        if 'account_manager' in app:
+            primary = app['account_manager'].refresh_primary_quota()
+        else:
+            primary = None
+        
+        fshare_data = {
+            "valid": primary is not None,
+            "premium": primary.get('premium', False) if primary else False
+        }
+        
+        if primary:
+            fshare_data['email'] = primary.get('email')
+            fshare_data['traffic_left'] = primary.get('traffic_left')
+            fshare_data['account_type'] = primary.get('account_type')
+            # 'expiry' comes from _sanitize_account (which maps 'validuntil' -> 'expiry')
+            expiry_val = primary.get('expiry')
+            if expiry_val:
+                if expiry_val == -1:
+                    fshare_data['expiry'] = "Lifetime"
+                elif isinstance(expiry_val, int):
+                    try:
+                        dt = datetime.fromtimestamp(expiry_val)
+                        fshare_data['expiry'] = dt.strftime('%d-%m-%Y')
+                    except:
+                        fshare_data['expiry'] = "Unknown"
+                else:
+                    fshare_data['expiry'] = str(expiry_val)
+
+        # Get downloader status from SABnzbd service if available
+        sab = app.get('sabnzbd')
+        downloader = sab.downloader if sab else None
+        
+        active_cnt = 0
+        total_cnt = 0
+        total_speed = 0
+        connected = False
+
+        if sab:
+            counts = await sab.get_counts()
+            active_cnt = counts.get("active", 0)
+            queued_cnt = counts.get("queued", 0)
+            completed_cnt = counts.get("completed", 0)
+            total_cnt = counts.get("total", 0)
+            
+            # Use safe get_engine_stats if available
+            if hasattr(downloader.engine, 'get_engine_stats'):
+                 # Ensure proper loop handling for sync method if needed, but get_engine_stats is usually fast
+                 eng_stats = downloader.engine.get_engine_stats()
+                 total_speed = eng_stats.get('total_speed', 0)
+            connected = True
+        elif downloader:
+            # Fallback direct access (sync)
+            status = downloader.get_status() # Legacy sync
+            total_speed = status.get("total_speed", 0)
+            active_cnt = status.get("active", 0)
+            queued_cnt = status.get("queued", 0)
+            completed_cnt = status.get("completed", 0)
+            total_cnt = status.get("total", 0)
+            connected = True
+
+        return web.json_response({
+            "status": "ok",
+            "system": {
+                "speedtest": format_speed(total_speed),
+                "uptime": uptime
+            },
+            "fshare_downloader": {
+                "active": active_cnt,
+                "queued": queued_cnt,
+                "completed": completed_cnt,
+                "total": total_cnt,
+                "connected": connected, 
+                "speed": format_speed(total_speed),
+                "speed_bytes": total_speed,
+                "primary_account": fshare_data
+            },
+            "pyload": { # Legacy compatibility
+                "active": active_cnt,
+                "total": total_cnt,
+                "connected": connected,
+                "speed_bytes": total_speed,
+                "fshare_account": fshare_data
+            }
+        })
+    except Exception as e:
+        logger.error(f"Error getting stats: {e}")
+        return web.json_response({
+            "status": "ok", # Return ok to avoid UI crashing, but with error data
+            "system": {"speedtest": "0 B/s", "uptime": 0},
+            "pyload": {"active": 0, "connected": False, "error": str(e)}
+        })
+
+
+@routes.get("/api/downloads")
+async def get_downloads(request: web.Request) -> web.Response:
+    """Get downloads from SABnzbd Emulator (Active Queue + History)."""
+    app = request.app
+    try:
+        sab = app.get('sabnzbd')
+        if not sab:
+            return web.json_response({"status": "error", "message": "Downloader not initialized"}, status=503)
+        
+        # Trigger sync with engine to update active tasks
+        # Assuming get_queue is now thread-safe or async safe
+        # In aiohttp, we run in the main loop, so we should be careful about blocking calls.
+        # However, SABnzbdEmulator.get_queue IS mostly in-memory operations on the tasks dict.
+        
+        queue_slots = await sab.get_queue() # returns List[Dict]
+        formatted = []
+        
+        for slot in queue_slots:
+            try:
+                # Normalize status
+                status = slot.get('status', 'Unknown')
+                
+                # Normalize size/progress
+                try:
+                    percentage = float(slot.get('percentage', 0))
+                except (ValueError, TypeError):
+                    percentage = 0.0
+                    
+                try:
+                    mb_total = float(slot.get('mb', 0))
+                except (ValueError, TypeError):
+                    mb_total = 0.0
+                    
+                item_dict = {
+                    "id": slot.get('nzo_id'),
+                    "nzo_id": slot.get('nzo_id'),
+                    "filename": slot.get('filename'),
+                    "url": slot.get('url', ''),
+                    "status": status,
+                    "category": slot.get('cat', slot.get('category', 'Uncategorized')),
+                    "progress": percentage,
+                    "size_bytes": slot.get('total_bytes', 0),
+                    "mb_total": mb_total,
+                    "speed": slot.get('speed_bytes', 0),
+                    "eta": slot.get('eta_seconds', 0),
+                    "added": slot.get('added', ''),
+                    "completed": slot.get('completed', '')
+                }
+                
+                formatted.append(_format_task(item_dict))
+            except Exception as e:
+                logger.error(f"Error formatting item {slot.get('nzo_id')}: {e}")
+                continue
+                     
+        return web.json_response({
+            "status": "ok",
+            "count": len(formatted),
+            "downloads": formatted,
+        })
+    except Exception as e:
+        logger.error(f"Error getting downloads: {e}", exc_info=True)
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+def _format_task(task):
+    """Helper to format a task object for the UI."""
+    # Resolve size bytes
+    size_raw = task.get("size_bytes") or task.get("size")
+    mb_raw = task.get("mb") or task.get("mb_total")
+    
+    size_bytes = 0
+    if size_raw and not isinstance(size_raw, str):
+        size_bytes = int(size_raw)
+    elif mb_raw:
+        try:
+            size_bytes = int(float(mb_raw) * 1024 * 1024)
+        except (ValueError, TypeError):
+            size_bytes = 0
+            
+    if isinstance(size_raw, str) and not size_bytes:
+        try:
+            size_bytes = int(float(size_raw))
+        except:
+            size_bytes = 0
+    
+    # Safely handle potential None values
+    speed = task.get("speed", 0) or 0
+    eta = task.get("eta", 0) or 0
+    
+    return {
+        "id": str(task.get("id") or task.get("nzo_id", "")),
+        "filename": task.get("filename", "Unknown"),
+        "url": task.get("url") or task.get("fshare_url", ""),
+        "state": task.get("status") or task.get("state", "Queued"),
+        "category": task.get("category", "Uncategorized"),
+        "progress": task.get("progress", 0),
+        "size": {
+            "formatted_total": format_size(size_bytes), 
+            "total": size_bytes,
+            "mb": f"{size_bytes / (1024*1024):.2f}"
+        },
+        "speed": {
+            "formatted": format_speed(speed),
+            "bytes_per_sec": speed
+        },
+        "eta": {
+            "formatted": format_eta(eta),
+            "seconds": eta
+        },
+        "added": task.get("added") or task.get("created_at")
+    }
+
+
+@routes.post("/api/downloads")
+async def add_download(request: web.Request) -> web.Response:
+    """Add a new download to engine."""
+    app = request.app
+    try:
+        data = await get_json(request)
+        if not data or "url" not in data:
+            return web.json_response({"status": "error", "message": "URL required"}, status=400)
+        
+        url = data["url"]
+        name = data.get("name") or ""
+        if name:
+            # Sanitize filename
+            import re
+            name = re.sub(r'[\\/*?:"<>|]', "", name) # Remove unsafe chars
+            name = name.replace("..", "") # Prevent path traversal
+            
+        category = data.get("category", "Manual")
+        
+        sab = app.get('sabnzbd')
+        if not sab:
+            return web.json_response({"status": "error", "message": "Downloader not initialized"}, status=503)
+            
+        # Refined folder logic
+        import re
+        folder_suffix = ""
+        
+        # Detect Season patterns
+        # S01E01, S1E1, Season 1, Season 01
+        season_match = re.search(r'(?:s|season)\s*(\d{1,2})', name, re.IGNORECASE) if name else None
+        if season_match:
+             season_num = int(season_match.group(1))
+             # Extract Series Name (everything before Sxx)
+             # This is a basic heuristic
+             split_point = season_match.start()
+             series_name = name[:split_point].replace(".", " ").replace("-", " ").strip()
+             if series_name:
+                 folder_suffix = f"{series_name}/Season {season_num}"
+        
+        # If no series detected, use name as folder to ensure it's not loose
+        if not folder_suffix:
+             folder_suffix = name
+             
+        # Override filename to include path
+        # Engine supports 'package_name' or path in filename
+        # SABnzbd emulator usually takes `filename` as the job name or folder.
+        # We can pass `filename` as path relative usage.
+        
+        # Let's clean the name for folder usage
+        folder_suffix = re.sub(r'[\\:*?"<>|]', "", folder_suffix).strip()
+        
+        # Pass filename argument as the target folder/name structure to Emulator
+        # Emulator calls `downloader.add_download(..., filename=normalized_filename, package_name=parsed.title, ...)`
+        # We want to force `package_name` or `category` to handle the path?
+        # Actually `add_url` takes `filename` argument.
+        
+        # If we pass a path-like string as filename to add_url, we need to ensure Engine respects it.
+        # Engine uses `filename` as destination base if package_name is missing.
+        
+        # Best approach: Use the derived folder structure as the 'filename' passed to add_url, 
+        # but keep the original name for logging/UI if needed.
+        # Or better, we should rely on Engine's directory logic.
+        
+        # Let's pass the calculated folder path as the 'filename' to add_url
+        nzo_id = await sab.add_url(url, filename=folder_suffix, category=category)
+        
+        return web.json_response({
+            "status": "ok",
+            "success": nzo_id is not None,
+            "nzo_id": nzo_id
+        })
+    except Exception as e:
+        logger.error(f"Error adding download: {e}")
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@routes.delete("/api/downloads/{task_id}")
+async def delete_download(request: web.Request) -> web.Response:
+    """Delete a download."""
+    task_id = request.match_info['task_id']
+    sab = request.app.get('sabnzbd')
+    
+    try:
+        if not sab:
+            return web.json_response({"status": "error", "message": "Downloader not initialized"}, status=503)
+            
+        success = await sab.delete_item(task_id)
+        if not success:
+            return web.json_response({"status": "error", "message": "Item not found", "success": False}, status=404)
+            
+        return web.json_response({"status": "ok", "message": f"Deleted {task_id}", "success": True})
+    except Exception as e:
+        logger.error(f"Error deleting: {e}")
+        return web.json_response({"status": "error", "message": str(e), "success": False}, status=500)
+
+# Alias for frontend quirks
+@routes.get("/api/download/delete/{task_id}")
+@routes.delete("/api/download/delete/{task_id}")
+async def delete_download_alias(request: web.Request) -> web.Response:
+    return await delete_download(request)
+
+
+@routes.post("/api/downloads/{task_id}/pause")
+async def pause_download(request: web.Request) -> web.Response:
+    task_id = request.match_info['task_id']
+    sab = request.app.get('sabnzbd')
+    try:
+        if not sab:
+            return web.json_response({"status": "error", "message": "Downloader not initialized"}, status=503)
+            
+        success = await sab.toggle_item(task_id)
+        return web.json_response({"status": "ok", "message": "Paused/Toggled", "success": success})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+@routes.get("/api/download/pause/{task_id}")
+@routes.post("/api/download/pause/{task_id}")
+async def pause_alias(request: web.Request) -> web.Response:
+    return await pause_download(request)
+
+
+@routes.post("/api/downloads/{task_id}/resume")
+async def resume_download(request: web.Request) -> web.Response:
+    task_id = request.match_info['task_id']
+    sab = request.app.get('sabnzbd')
+    try:
+        if not sab:
+            return web.json_response({"status": "error", "message": "Downloader not initialized"}, status=503)
+            
+        success = await sab.toggle_item(task_id)
+        return web.json_response({"status": "ok", "message": "Resumed/Toggled", "success": success})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+@routes.get("/api/download/resume/{task_id}")
+@routes.post("/api/download/resume/{task_id}")
+async def resume_alias(request: web.Request) -> web.Response:
+    return await resume_download(request)
+
+# /start aliases (same as resume for paused items)
+@routes.post("/api/downloads/{task_id}/start")
+@routes.get("/api/download/start/{task_id}")
+@routes.post("/api/download/start/{task_id}")
+async def start_download(request: web.Request) -> web.Response:
+    return await resume_download(request)
+
+@routes.get("/api/download/retry/{task_id}")
+@routes.post("/api/download/retry/{task_id}")
+async def retry_download(request: web.Request) -> web.Response:
+    task_id = request.match_info['task_id']
+    sab = request.app.get('sabnzbd')
+    try:
+        if not sab:
+            return web.json_response({"status": "error", "message": "Downloader not initialized"}, status=503)
+            
+        success = await sab.retry_item(task_id)
+        return web.json_response({"status": "ok", "message": "Retried", "success": success})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@routes.get("/api/search")
+async def api_search(request: web.Request) -> web.Response:
+    """Search API."""
+    app = request.app
+    try:
+        query = request.query.get('q', '')
+        if not query:
+            return web.json_response({"results": []})
+            
+        results = app['indexer'].client.search(query, limit=50)
+        
+        formatted_results = []
+        for item in results:
+            parsed = app['indexer'].parser.parse(item.name)
+            
+            formatted_results.append({
+                "id": item.fcode,
+                "name": parsed.title or item.name,
+                "original_filename": item.name,
+                "size": item.size,
+                "url": item.url,
+                "folder": False,
+                "score": item.score,
+                "is_series": parsed.is_series,
+                "season": parsed.season,
+                "episode": parsed.episode,
+                "quality": parsed.quality,
+                "vietsub": parsed.quality_attrs.viet_sub if parsed.quality_attrs else False,
+                "vietdub": parsed.quality_attrs.viet_dub if parsed.quality_attrs else False,
+                "metadata": parsed.quality_attrs.to_dict() if parsed.quality_attrs else {}
+            })
+            
+        return web.json_response({"results": formatted_results})
+    except Exception as e:
+        logger.error(f"Search API error: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+@routes.get("/api/accounts")
+async def list_accounts(request: web.Request) -> web.Response:
+    app = request.app
+    try:
+        mgr = app['account_manager']
+        accounts = mgr.list_accounts()
+        primary = mgr.get_primary()
+        return web.json_response({
+            "status": "ok",
+            "accounts": accounts,
+            "primary": primary
+        })
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@routes.post("/api/accounts/add")
+async def add_account(request: web.Request) -> web.Response:
+    app = request.app
+    try:
+        data = await get_json(request)
+        email = data.get("email")
+        password = data.get("password")
+        if not email or not password:
+            return web.json_response({"status": "error", "message": "Email and password required"}, status=400)
+            
+        account = app['account_manager'].add_account(email, password)
+        return web.json_response({"status": "ok", "account": account})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@routes.delete("/api/accounts/{email}")
+async def remove_account(request: web.Request) -> web.Response:
+    email = request.match_info['email']
+    try:
+        request.app['account_manager'].remove_account(email)
+        return web.json_response({"status": "ok"})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@routes.post("/api/accounts/{email}/set-primary")
+async def set_primary_account(request: web.Request) -> web.Response:
+    email = request.match_info['email']
+    try:
+        request.app['account_manager'].set_primary(email)
+        return web.json_response({"status": "ok"})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@routes.post("/api/accounts/{email}/refresh")
+async def refresh_account(request: web.Request) -> web.Response:
+    email = request.match_info['email']
+    try:
+        account = request.app['account_manager'].refresh_account(email)
+        return web.json_response({"status": "ok", "account": account})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@routes.get("/api/settings")
+async def get_settings(request: web.Request) -> web.Response:
+    try:
+        config = get_config()
+        settings_file = Path("data/settings.json")
+        settings = {
+            "download_path": config.download.download_dir,
+            "max_concurrent_downloads": config.download.max_concurrent,
+            "speed_limit_mbps": 0,
+            "auto_resume": True,
+            "category_paths": {"radarr": "movies", "sonarr": "tv"},
+            "theme": "dark"
+        }
+        if settings_file.exists():
+            with open(settings_file, "r") as f:
+                settings.update(json.load(f))
+        return web.json_response({"status": "ok", "settings": settings})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+@routes.put("/api/settings")
+async def update_settings(request: web.Request) -> web.Response:
+    try:
+        data = await get_json(request)
+        settings_file = Path("data/settings.json")
+        settings = {}
+        if settings_file.exists():
+            with open(settings_file, "r") as f:
+                settings = json.load(f)
+        
+        settings.update(data)
+        
+        with open(settings_file, "w") as f:
+            json.dump(settings, f, indent=4)
+            
+        if 'max_concurrent_downloads' in data:
+            sab = request.app.get('sabnzbd')
+            if sab:
+                sab.downloader.engine.update_max_concurrent(int(data['max_concurrent_downloads']))
+                
+        if 'speed_limit_mbps' in data:
+             sab = request.app.get('sabnzbd')
+             if sab:
+                limit = int(data['speed_limit_mbps']) * 1024 * 1024 if int(data['speed_limit_mbps']) > 0 else 0
+                sab.downloader.engine.set_speed_limit(limit)
+
+        return web.json_response({"status": "ok"})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@routes.post("/api/verify-account")
+async def verify_account(request: web.Request) -> web.Response:
+    app = request.app
+    try:
+        if 'account_manager' not in app:
+             return web.json_response({"status": "error", "message": "Service unavailable"}, status=503)
+
+        mgr = app['account_manager']
+        primary = mgr.get_primary()
+        if not primary:
+             return web.json_response({
+                 "status": "error",
+                 "code": "NO_ACCOUNT", 
+                 "message": "No account login."
+             }, status=401)
+
+        # Refresh triggers internal re-login if needed
+        # We should run this off the main loop if it does heavy I/O
+        # But for now straightforward call
+        account = mgr.refresh_account(primary['email'])
+        
+        is_valid = account is not None and 'email' in account
+        
+        if not is_valid:
+            return web.json_response({
+                "status": "error", 
+                "message": "Session invalid",
+                "account": account
+            }, status=401)
+
+        if account.get('validuntil'):
+             if account.get('validuntil') == -1:
+                 account['expiry'] = "Lifetime"
+             else:
+                 try:
+                     dt = datetime.fromtimestamp(int(account.get('validuntil')))
+                     account['expiry'] = dt.strftime('%d-%m-%Y')
+                 except:
+                     account['expiry'] = "Unknown"
+
+        return web.json_response({
+            "status": "ok", 
+            "message": "Verified",
+            "account": account
+        })
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+@routes.post("/api/settings/generate-api-key")
+async def generate_api_key(request: web.Request) -> web.Response:
+    """Generate a new random API key."""
+    try:
+        import secrets
+        new_key = secrets.token_hex(16)
+        return web.json_response({"status": "ok", "key": new_key})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+
+@routes.get("/api/config")
+async def get_config_endpoint(request: web.Request) -> web.Response:
+    try:
+        config = get_config()
+        return web.json_response({
+            "status": "ok",
+            "config": {
+                "download_path": config.download.download_dir,
+                "concurrent_downloads": config.download.max_concurrent,
+                "worker_threads": config.download.worker_threads,
+            },
+        })
+    except Exception as e:
+         return web.json_response({"status": "error", "message": str(e)}, status=500)
+
+@routes.post("/api/config")
+async def post_config_endpoint(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        config = get_config()
+        
+        # Update in-memory config
+        if 'download_path' in data:
+            config.download.download_dir = data['download_path']
+        if 'concurrent_downloads' in data:
+            config.download.max_concurrent = int(data['concurrent_downloads'])
+        if 'worker_threads' in data:
+            config.download.worker_threads = int(data['worker_threads'])
+        
+        # In a real app, we'd persist this to a file here
+        # For now, we update the objects in memory
+        
+        return web.json_response({"status": "ok", "message": "Neural parameters updated"})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=400)
+
+@routes.get("/api/version")
+async def get_version(request: web.Request) -> web.Response:
+    version = "1.0.0-alpha"
+    try:
+        if os.path.exists("VERSION"):
+            with open("VERSION", "r") as f:
+                version = f.read().strip()
+    except: pass
+    return web.json_response({"status": "ok", "version": version})
+
+@routes.get("/api/logs")
+async def get_logs(request: web.Request) -> web.Response:
+    try:
+        logs = []
+        log_file = Path("data/flasharr.log")
+        if not log_file.exists():
+             alt_paths = [Path("flasharr.log"), Path("/app/data/flasharr.log")]
+             for p in alt_paths:
+                 if p.exists():
+                     log_file = p
+                     break
+        
+        if log_file.exists():
+            with open(log_file, "r") as f:
+                lines = f.readlines()[-50:]
+                for line in lines:
+                    parts = line.split(" - ")
+                    if len(parts) >= 4:
+                        logs.append({
+                            "time": parts[0],
+                            "level": parts[2].lower(),
+                            "message": " - ".join(parts[3:]).strip()
+                        })
+                    else:
+                        logs.append({
+                            "time": "NOW",
+                            "level": "info",
+                            "message": line.strip()
+                        })
+        
+        if not logs:
+             logs = [{"time": "NOW", "level": "info", "message": "System init."}]
+             
+        return web.json_response({"status": "ok", "logs": logs})
+    except Exception as e:
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
+@routes.get("/api/tmdb/discover/{media_type}")
+async def api_tmdb_discover(request: web.Request) -> web.Response:
+    media_type = request.match_info['media_type']
+    page = int(request.query.get('page', 1))
+    sort_by = request.query.get('sort_by', 'popularity.desc')
+    genre = request.query.get('genre')
+    year = request.query.get('year')
+    
+    # Advanced Filters
+    date_from = request.query.get('date_from')
+    date_to = request.query.get('date_to')
+    language = request.query.get('language')
+    certification = request.query.get('certification')
+    
+    runtime_min = request.query.get('runtime_min')
+    runtime_max = request.query.get('runtime_max')
+    
+    score_min = request.query.get('score_min')
+    score_max = request.query.get('score_max')
+    
+    vote_count_min = request.query.get('vote_count_min')
+
+    # Convert numeric params
+    g_val = int(genre) if genre and genre.isdigit() else None
+    y_val = int(year) if year and year.isdigit() else None
+    
+    rt_min = int(runtime_min) if runtime_min and runtime_min.isdigit() else None
+    rt_max = int(runtime_max) if runtime_max and runtime_max.isdigit() else None
+    
+    s_min = float(score_min) if score_min else None
+    s_max = float(score_max) if score_max else None
+    
+    vc_min = int(vote_count_min) if vote_count_min and vote_count_min.isdigit() else None
+
+    try:
+        if media_type == 'movie':
+            data = await tmdb_client.get_discover_movies(
+                page=page, sort_by=sort_by, genre=g_val, year=y_val,
+                date_from=date_from, date_to=date_to, language=language,
+                certification=certification, runtime_min=rt_min, runtime_max=rt_max,
+                score_min=s_min, score_max=s_max, vote_count_min=vc_min
+            )
+        else:
+            data = await tmdb_client.get_discover_tv(
+                page=page, sort_by=sort_by, genre=g_val, year=y_val,
+                date_from=date_from, date_to=date_to, language=language,
+                certification=certification, runtime_min=rt_min, runtime_max=rt_max,
+                score_min=s_min, score_max=s_max, vote_count_min=vc_min
+            )
+        return web.json_response(data)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+@routes.get("/api/tmdb/genres")
+async def get_tmdb_genres(request: web.Request) -> web.Response:
+    """Fetch genres for filtering."""
+    media_type = request.query.get('type', 'movie')
+    try:
+        data = await tmdb_client.get_genres(media_type)
+        return web.json_response(data)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+@routes.get("/api/tmdb/search")
+async def api_tmdb_search(request: web.Request) -> web.Response:
+    """Direct TMDB search with pagination."""
+    query = request.query.get('q', '')
+    page = int(request.query.get('page', 1))
+    if not query:
+        return web.json_response({"results": []})
+    try:
+        data = await tmdb_client.search(query, page)
+        return web.json_response(data)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+@routes.get("/api/tmdb/{media_type}/{tmdb_id}/similar")
+async def get_tmdb_similar(request: web.Request) -> web.Response:
+    media_type = request.match_info['media_type']
+    tmdb_id = int(request.match_info['tmdb_id'])
+    try:
+        if media_type == 'movie':
+            data = await tmdb_client.get_similar_movies(tmdb_id)
+        else:
+            data = await tmdb_client.get_similar_tv(tmdb_id)
+        return web.json_response(data)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+@routes.get("/api/tmdb/{media_type}/{tmdb_id}/recommendations")
+async def get_tmdb_recommendations(request: web.Request) -> web.Response:
+    media_type = request.match_info['media_type']
+    tmdb_id = int(request.match_info['tmdb_id'])
+    try:
+        if media_type == 'movie':
+            data = await tmdb_client.get_recommendations_movies(tmdb_id)
+        else:
+            data = await tmdb_client.get_recommendations_tv(tmdb_id)
+        return web.json_response(data)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+@routes.get("/api/tmdb/movie/{tmdb_id}")
+async def get_tmdb_movie_detail(request: web.Request) -> web.Response:
+    tmdb_id = request.match_info['tmdb_id']
+    try:
+        data = await tmdb_client.get_movie_details(int(tmdb_id))
+        if not data:
+            return web.json_response({"error": "Not found"}, status=404)
+        return web.json_response(data)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+@routes.get("/api/tmdb/tv/{tmdb_id}")
+async def get_tmdb_tv_detail(request: web.Request) -> web.Response:
+    tmdb_id = request.match_info['tmdb_id']
+    try:
+        data = await tmdb_client.get_tv_details(int(tmdb_id))
+        if not data:
+            return web.json_response({"error": "Not found"}, status=404)
+        return web.json_response(data)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+@routes.get("/api/tmdb/tv/{tmdb_id}/season/{season_number}")
+async def get_tmdb_season_detail(request: web.Request) -> web.Response:
+    tmdb_id = request.match_info['tmdb_id']
+    season_number = request.match_info['season_number']
+    try:
+        data = await tmdb_client.get_season_details(int(tmdb_id), int(season_number))
+        if not data:
+            return web.json_response({"error": "Not found"}, status=404)
+        return web.json_response(data)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+@routes.post("/api/discovery/smart-search")
+async def api_smart_search(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        title = data.get("title")
+        season = data.get("season")
+        episode = data.get("episode")
+        year = data.get("year")
+        
+        if not title:
+            return web.json_response({"error": "Title required"}, status=400)
+            
+        service = get_smart_search_service()
+        queries = service.generate_queries(title, season, episode, year)
+        
+        results = []
+        if season and episode:
+            # Episode search
+            results = service.search_episode(title, season, episode)
+        else:
+            # Movie or Generic search
+            all_results = []
+            for q in queries:
+                r = service.indexer.client.search(q)
+                all_results.extend([res.to_dict() for res in r])
+            
+            # Filter duplicates and format
+            seen = set()
+            unique_results = []
+            for r in all_results:
+                if r['url'] not in seen:
+                    seen.add(r['url'])
+                    # Ensure size_bytes is present for frontend
+                    r['size_bytes'] = r.get('size', 0)
+                    unique_results.append(r)
+            results = service._filter_results(unique_results)
+            
+        return web.json_response({
+            "queries_used": queries,
+            "results": results[:20]
+        })
+    except Exception as e:
+        logger.error(f"Smart search API error: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+@routes.get("/api/discovery/popular-today")
+async def api_popular_today(request: web.Request) -> web.Response:
+    """Fetch popular items from TimFshare and resolve to TMDB."""
+    try:
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.get('https://timfshare.com/api/key/data-top') as resp:
+                if resp.status != 200:
+                    return web.json_response({"results": []})
+                data = await resp.json()
+        
+        tags = data.get('dataTag', [])
+        # Get top 12 names
+        top_names = [t.get('name_tag') for t in tags[:12] if t.get('name_tag')]
+        
+        results = []
+        # resolving concurrently
+        import asyncio
+        tasks = [tmdb_client.search(name, 1) for name in top_names]
+        search_results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for res in search_results:
+            if isinstance(res, dict) and res.get('results'):
+                # Take the first best match
+                results.append(res['results'][0])
+                
+        # Filter duplicates just in case
+        seen = set()
+        unique_results = []
+        for r in results:
+            if r['id'] not in seen:
+                seen.add(r['id'])
+                unique_results.append(r)
+                
+        return web.json_response({"results": unique_results})
+    except Exception as e:
+        logger.error(f"Popular Today Error: {e}")
+        return web.json_response({"error": str(e)}, status=500)

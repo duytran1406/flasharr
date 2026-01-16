@@ -267,6 +267,8 @@ class WebSocketServer:
             try:
                 await asyncio.sleep(2)
                 await self.broadcast_engine_stats()
+                await self.broadcast_account_status()
+
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -321,7 +323,17 @@ class WebSocketServer:
         
         # Use sabnzbd for counts if available (more accurate for history/queue)
         if self.sabnzbd:
-            counts = self.sabnzbd.get_counts()
+            # Fix: get_counts() is likely async in the service
+            if asyncio.iscoroutinefunction(self.sabnzbd.get_counts):
+                counts = await self.sabnzbd.get_counts()
+            else:
+                 # Check if it returns a coroutine even if not typed as such (e.g. mocked or wrapped)
+                result = self.sabnzbd.get_counts()
+                if asyncio.iscoroutine(result):
+                    counts = await result
+                else:
+                    counts = result
+            
             active_val = counts.get("active", 0)
             total_val = counts.get("total", 0)
         else:
@@ -352,6 +364,33 @@ class WebSocketServer:
                 if client.is_subscribed(EventType.ENGINE_STATS.value):
                     logger.debug(f"Broadcasting stats to {client.client_id}: {current_stats}")
                     await client.send(WebSocketMessage(EventType.ENGINE_STATS, event))
+    
+    async def broadcast_account_status(self) -> None:
+        """Broadcast status of the primary account."""
+        if not self.clients or not self.sabnzbd:
+            return
+            
+        acc_mgr = getattr(self.sabnzbd, 'account_manager', None)
+        if not acc_mgr:
+            return
+            
+        primary = acc_mgr.get_primary()
+        if not primary:
+            return
+            
+        event = create_account_event(
+            email=primary['email'],
+            available=True,
+            premium=primary.get('premium', False),
+            expiry=primary.get('expiry'),
+            traffic_left=primary.get('traffic_left')
+        )
+
+        
+        for client in list(self.clients.values()):
+            if client.is_subscribed(EventType.ACCOUNT_STATUS.value):
+                await client.send(WebSocketMessage(EventType.ACCOUNT_STATUS, event))
+
     
     async def broadcast_task_added(self, task) -> None:
         """Broadcast new task added."""
