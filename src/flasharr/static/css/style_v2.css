@@ -1495,21 +1495,23 @@ input[type=range]::-webkit-slider-thumb:hover {
     padding: 0 1rem;
 }
 
+/* Poster Card Revamp */
 .poster-card {
     position: relative;
     aspect-ratio: 2/3;
     border-radius: 12px;
     overflow: hidden;
     cursor: pointer;
-    transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    background: rgba(255, 255, 255, 0.01);
+    transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+    border: 2px solid transparent;
+    background: #0f172a;
 }
 
 .poster-card:hover {
-    transform: scale(1.05);
-    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.7), 0 0 20px rgba(0, 243, 255, 0.2);
+    transform: translateY(-5px);
+    /* Gentle lift instead of zoom */
+    box-shadow: 0 15px 30px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 243, 255, 0.2);
     border-color: var(--color-primary);
     z-index: 10;
 }
@@ -1519,6 +1521,12 @@ input[type=range]::-webkit-slider-thumb:hover {
     height: 100%;
     background-size: cover;
     background-position: center;
+    transition: opacity 0.3s;
+}
+
+.poster-card:hover .poster-image {
+    opacity: 0.4;
+    /* Dim image to make text readable */
 }
 
 .poster-overlay {
@@ -1526,26 +1534,61 @@ input[type=range]::-webkit-slider-thumb:hover {
     bottom: 0;
     left: 0;
     width: 100%;
-    padding: 4rem 1rem 1rem;
-    background: linear-gradient(to top, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0.6) 50%, transparent);
+    height: 100%;
+    padding: 1.5rem;
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0.7) 40%, transparent);
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    transform: translateY(5px);
-    transition: transform 0.3s;
+    justify-content: flex-end;
+    opacity: 1;
+    pointer-events: none;
 }
 
-.poster-card:hover .poster-overlay {
+.poster-content {
+    transform: translateY(60px);
+    /* Initially hide description */
+    transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.poster-card:hover .poster-content {
     transform: translateY(0);
 }
 
 .poster-title {
     font-weight: 800;
-    font-size: 0.9rem;
+    font-size: 0.95rem;
     line-height: 1.2;
     color: #fff;
+    margin-bottom: 0.25rem;
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
-    letter-spacing: 0.02em;
+}
+
+.poster-meta {
+    font-size: 0.75rem;
+    color: var(--color-primary);
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+}
+
+.poster-desc {
+    font-size: 0.75rem;
+    line-height: 1.4;
+    color: #cbd5e1;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    /* Limit lines */
+    -webkit-box-orient: vertical;
+    opacity: 0;
+    transition: opacity 0.3s 0.1s;
+    /* Slight delay */
+}
+
+.poster-card:hover .poster-desc {
+    opacity: 1;
 }
 
 .poster-meta {

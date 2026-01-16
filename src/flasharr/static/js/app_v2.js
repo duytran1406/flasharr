@@ -53,7 +53,7 @@ class Router {
         this.discoverState = {
             type: 'movie',
             page: 1,
-            sort: 'popular_today', // Default sort
+            sort: 'popularity.desc', // Jellyseerr default (Standard popularity)
             genre: '', // Comma separated IDs
             year: '',
 
@@ -1505,79 +1505,87 @@ class Router {
             <!-- Trending Carousel Mount -->
             <div id="trending-mount"></div>
 
-            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; margin-bottom: 2rem;">
-                <!-- Captain Info Terminal -->
-                <div class="glass-panel" style="padding: 1.5rem; position: relative; overflow: hidden; border-left: 4px solid var(--color-primary);">
-                    <div style="display: flex; align-items: center; gap: 1.5rem;">
-                        <div style="width: 60px; height: 60px; border-radius: 50%; background: rgba(0,243,255,0.1); display: flex; align-items: center; justify-content: center; border: 1px solid var(--color-primary); box-shadow: 0 0 15px rgba(0,243,255,0.2);">
-                            <span class="material-icons" style="font-size: 28px; color: var(--color-primary);">shield</span>
-                        </div>
-                        <div style="flex: 1; overflow: hidden;">
-                            <h2 class="glow-text" style="font-size: 0.9rem; margin-bottom: 0.25rem; text-transform: uppercase; letter-spacing: 0.05em;">Command Identity</h2>
-                            <div id="captain-email" style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Syncing...</div>
-                            <div id="captain-expiry" style="font-size: 0.6rem; color: var(--text-muted); margin-top: 2px; text-transform: uppercase; letter-spacing: 0.05em;">Valid Until: Fetching...</div>
-                            <div id="captain-rank" style="margin-top: 0.4rem; display: inline-flex; align-items: center; gap: 0.4rem; padding: 2px 8px; border-radius: 4px; background: rgba(0,243,255,0.05); border: 1px solid rgba(0,243,255,0.1); font-size: 0.6rem; font-weight: 800; color: var(--color-primary);">
-                                AUTHORIZING...
-                            </div>
-                        </div>
-                    </div>
-                </div>
+            <!-- Trending Carousel Mount -->
+            <div id="trending-mount"></div>
 
-                <!-- Engine Status Summary -->
-                <div class="glass-panel" style="padding: 1.5rem; border-left: 4px solid var(--color-secondary);">
-                    <h3 class="glow-text" style="font-size: 0.8rem; margin-bottom: 1rem; opacity: 0.8; text-transform: uppercase; letter-spacing: 0.05em;">Engine Telemetry</h3>
-                    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;">
-                        <div style="background: rgba(0,255,163,0.02); padding: 0.6rem 0.85rem; border-radius: 10px; border: 1px solid rgba(0,255,163,0.05);">
-                            <div style="font-size: 0.55rem; color: var(--text-muted); text-transform: uppercase; font-weight: 800;">Active</div>
-                            <div id="stat-active" style="font-size: 1.25rem; font-weight: 800; color: var(--color-secondary); font-family: var(--font-mono);">0</div>
-                        </div>
-                        <div style="background: rgba(255,255,255,0.02); padding: 0.6rem 0.85rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05);">
-                            <div style="font-size: 0.55rem; color: var(--text-muted); text-transform: uppercase; font-weight: 800;">Queued</div>
-                            <div id="stat-queued" style="font-size: 1.25rem; font-weight: 800; color: #ffd700; font-family: var(--font-mono);">0</div>
-                        </div>
-                        <div style="background: rgba(255,255,255,0.02); padding: 0.6rem 0.85rem; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05);">
-                            <div style="font-size: 0.55rem; color: var(--text-muted); text-transform: uppercase; font-weight: 800;">Done</div>
-                            <div id="stat-completed" style="font-size: 1.25rem; font-weight: 800; color: var(--color-primary); font-family: var(--font-mono);">0</div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Fuel Cell (Quota) -->
-                <div class="glass-panel" id="fuel-cell" style="padding: 1.5rem; border-left: 4px solid #ffd700;">
-                    <h3 style="margin-bottom: 1rem; font-size: 0.8rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: #ffd700;">Fuel Consumption</h3>
-                    <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 0.5rem;">
-                        <div id="quota-text" style="font-family: var(--font-mono); font-size: 1rem; font-weight: 800; color: var(--text-primary);">0 GB / 0 GB</div>
-                        <div style="font-family: var(--font-mono); font-size: 0.8rem; font-weight: 800; color: #ffd700;"><span id="quota-percent">0</span>%</div>
-                    </div>
-                    <div class="fuel-gauge" style="height: 8px; background: rgba(0,0,0,0.3); border-radius: 4px; overflow: hidden; position: relative; border: 1px solid rgba(255,255,255,0.03);">
-                        <div id="fuel-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #ffd700, #ff8c00); box-shadow: 0 0 10px rgba(255, 215, 0, 0.3); border-radius: 4px; transition: width 1s ease;"></div>
-                    </div>
-                </div>
-            </div>
-
-            <div style="display: grid; grid-template-columns: 7fr 3fr; gap: 1.5rem; align-items: stretch;">
-                <!-- Active Mission Pulse -->
-                <div class="glass-panel" style="padding: 1.5rem;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem;">
+            <div style="display: grid; grid-template-columns: 6.5fr 3.5fr; gap: 1.5rem; height: calc(100vh - 450px); min-height: 400px; margin-bottom: 0;">
+                
+                <!-- Left Column: Active Mission Pulse (Queue) -->
+                <div class="glass-panel" style="padding: 1.5rem; overflow: hidden; display: flex; flex-direction: column;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-shrink: 0;">
                         <h3 style="font-size: 0.95rem; font-weight: 700; display: flex; align-items: center; gap: 0.6rem;">
                             <span class="material-icons" style="font-size: 20px; color: var(--color-secondary);">list_alt</span>
                             Active Mission Pulse
                         </h3>
                         <button class="nav-item" onclick="window.router.navigate('downloads')" style="padding: 4px 12px; border-radius: 6px; font-size: 0.7rem; font-weight: 800; border: 1px solid rgba(255,255,255,0.05); background: transparent; cursor: pointer;">QUEUE</button>
                     </div>
-                    <div id="minified-queue" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem;">
+                    <div id="minified-queue" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; overflow-y: auto; padding-right: 4px;">
                         <div class="loading-spinner" style="transform: scale(0.5); grid-column: 1/-1; margin: 1rem auto;"></div>
                     </div>
                 </div>
 
-                <!-- Real-time Matrix Flow -->
-                <div class="glass-panel" style="padding: 1.5rem; height: 320px; display: flex; flex-direction: column;">
-                    <h3 style="margin-bottom: 1.25rem; font-size: 0.9rem; font-weight: 700; display: flex; align-items: center; gap: 0.6rem; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.05em;">
-                        <span class="material-icons" style="font-size: 18px; color: var(--color-primary);">insights</span>
-                        Netflow
-                    </h3>
-                    <div style="flex: 1; position: relative;">
-                        <canvas id="netFlowChart"></canvas>
+                <!-- Right Column: Command Center & Netflow -->
+                <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+                    
+                    <!-- Combined Command Unit -->
+                    <div class="glass-panel" style="padding: 1.25rem; border-left: 4px solid var(--color-primary); display: flex; flex-direction: column; gap: 1.25rem;">
+                        
+                        <!-- Header: Captain Identity -->
+                        <div style="display: flex; align-items: center; gap: 1rem;">
+                            <div style="width: 48px; height: 48px; border-radius: 50%; background: rgba(0,243,255,0.1); display: flex; align-items: center; justify-content: center; border: 1px solid var(--color-primary); box-shadow: 0 0 10px rgba(0,243,255,0.2);">
+                                <span class="material-icons" style="font-size: 24px; color: var(--color-primary);">shield</span>
+                            </div>
+                            <div style="flex: 1; overflow: hidden;">
+                                <h2 class="glow-text" style="font-size: 0.85rem; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.05em;">Command Identity</h2>
+                                <div id="captain-email" style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Syncing...</div>
+                                <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px;">
+                                    <span id="captain-rank" style="font-size: 0.6rem; font-weight: 800; color: var(--color-primary);">AUTH...</span>
+                                    <span id="captain-expiry" style="font-size: 0.6rem; color: var(--text-muted);">...</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Telemetry Stats Row -->
+                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem;">
+                            <div style="background: rgba(0,255,163,0.02); padding: 0.5rem; border-radius: 8px; border: 1px solid rgba(0,255,163,0.05); text-align: center;">
+                                <div style="font-size: 0.5rem; color: var(--text-muted); text-transform: uppercase;">Active</div>
+                                <div id="stat-active" style="font-size: 1rem; font-weight: 800; color: var(--color-secondary); font-family: var(--font-mono);">0</div>
+                            </div>
+                            <div style="background: rgba(255,255,255,0.02); padding: 0.5rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); text-align: center;">
+                                <div style="font-size: 0.5rem; color: var(--text-muted); text-transform: uppercase;">Queued</div>
+                                <div id="stat-queued" style="font-size: 1rem; font-weight: 800; color: #ffd700; font-family: var(--font-mono);">0</div>
+                            </div>
+                            <div style="background: rgba(255,255,255,0.02); padding: 0.5rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); text-align: center;">
+                                <div style="font-size: 0.5rem; color: var(--text-muted); text-transform: uppercase;">Done</div>
+                                <div id="stat-completed" style="font-size: 1rem; font-weight: 800; color: var(--color-primary); font-family: var(--font-mono);">0</div>
+                            </div>
+                        </div>
+
+                        <!-- Fuel Consumption -->
+                        <div>
+                            <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 0.25rem;">
+                                <span style="font-size: 0.65rem; font-weight: 700; color: #ffd700; text-transform: uppercase;">Fuel (Quota)</span>
+                                <div style="font-family: var(--font-mono); font-size: 0.7rem; font-weight: 800; color: var(--text-primary);">
+                                    <span id="quota-percent">0</span>%
+                                </div>
+                            </div>
+                            <div class="fuel-gauge" style="height: 6px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden; position: relative; border: 1px solid rgba(255,255,255,0.03);">
+                                <div id="fuel-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #ffd700, #ff8c00); box-shadow: 0 0 8px rgba(255, 215, 0, 0.3); border-radius: 3px; transition: width 1s ease;"></div>
+                            </div>
+                            <div id="quota-text" style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-muted); text-align: right; margin-top: 2px;">0 GB / 0 GB</div>
+                        </div>
+
+                    </div>
+
+                    <!-- Netflow -->
+                    <div class="glass-panel" style="padding: 1rem; flex: 1; min-height: 180px; display: flex; flex-direction: column;">
+                        <h3 style="margin-bottom: 0.5rem; font-size: 0.8rem; font-weight: 700; display: flex; align-items: center; gap: 0.6rem; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.05em;">
+                            <span class="material-icons" style="font-size: 16px; color: var(--color-primary);">insights</span>
+                            Netflow
+                        </h3>
+                        <div style="flex: 1; position: relative;">
+                            <canvas id="netFlowChart"></canvas>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1668,10 +1676,13 @@ class Router {
                     </div>
                 ` : ''}
                 <div class="poster-overlay">
-                    <div class="poster-title">${title}</div>
-                    <div class="poster-meta">
-                        <span class="material-icons" style="font-size: 12px;">star</span>
-                        ${score.toFixed(1)} • ${year}
+                    <div class="poster-content">
+                        <div class="poster-title">${title}</div>
+                        <div class="poster-meta">
+                            <span class="material-icons" style="font-size: 12px;">star</span>
+                            ${score.toFixed(1)} • ${year}
+                        </div>
+                        <div class="poster-desc">${item.overview || 'No overview available.'}</div>
                     </div>
                 </div>
             </div>
