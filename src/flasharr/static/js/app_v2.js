@@ -1530,7 +1530,7 @@ class Router {
                 </div>
 
                 <!-- Right Column: Command Center & Netflow -->
-                <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                <div style="display: grid; grid-template-rows: 1fr 1.5fr; gap: 0.75rem;">
                     
                     <!-- Combined Command Unit -->
                     <div class="box-section" style="border-color: rgba(0,243,255,0.2); gap: 1rem;">
@@ -1586,7 +1586,7 @@ class Router {
                     </div>
 
                     <!-- Netflow -->
-                    <div class="box-section" style="flex: 1; min-height: 120px; border-color: rgba(255,255,255,0.1);">
+                    <div class="box-section" style="min-height: 0; border-color: rgba(255,255,255,0.1);">
                          <div class="box-label" style="color: var(--text-primary);">
                             <span class="material-icons">insights</span>
                             Netflow
