@@ -723,15 +723,15 @@ class Router {
                 </main>
 
                 <!-- Right Sidebar (Filters) -->
-                <div id="discover-sidebar" class="discover-sidebar custom-scrollbar" style="display: ${this.discoverState.showFilters ? 'block' : 'none'}; width: 320px; flex-shrink: 0; overflow-y: auto;">
-                    <!-- Filter content rendered dynamically -->
+                <div id="discover-sidebar" class="discover-sidebar custom-scrollbar ${this.discoverState.showFilters ? '' : 'collapsed'}">
+                    ${this.renderSidebarContent()}
                 </div>
 
            </div>
         `;
 
         this.setupInfiniteScroll();
-        await this.fetchGenres(type); // Will also trigger render of sidebar genres
+        this.fetchGenres(type); // Will populate genre-list inside sidebar
         this.fetchDiscoverData(true);
     }
 
@@ -786,7 +786,7 @@ class Router {
     updateFilter(key, value) {
         this.discoverState[key] = value;
         // Re-render sidebar to reflect state (like active pills)
-        const sidebar = document.getElementById('discovery-sidebar');
+        const sidebar = document.getElementById('discover-sidebar');
         if (sidebar) sidebar.innerHTML = this.renderSidebarContent();
 
         // Re-fetch genres to keep list populated (sidebar innerHTML wipe)
@@ -841,8 +841,9 @@ class Router {
     }
 
     toggleSidebarFilters() {
+        console.log(`[UI] Toggling Sidebar. New State: ${!this.discoverState.showFilters}`);
         this.discoverState.showFilters = !this.discoverState.showFilters;
-        const sidebar = document.getElementById('discovery-sidebar');
+        const sidebar = document.getElementById('discover-sidebar');
         const btn = document.querySelector('.filter-toggle-btn');
         if (sidebar) sidebar.classList.toggle('collapsed', !this.discoverState.showFilters);
         if (btn) btn.classList.toggle('active', this.discoverState.showFilters);
