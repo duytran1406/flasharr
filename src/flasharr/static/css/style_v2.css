@@ -1715,7 +1715,7 @@ input[type=range]::-webkit-slider-thumb:hover {
 }
 
 .box-section:hover {
-    border-color: var(--color-primary);
+    border-color: var(--color-primary) !important;
     box-shadow: 0 0 15px rgba(0, 243, 255, 0.1);
 }
 

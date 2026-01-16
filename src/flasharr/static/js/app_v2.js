@@ -1514,7 +1514,7 @@ class Router {
             <div style="display: grid; grid-template-columns: 6.5fr 3.5fr; gap: 1rem; height: 75vh; min-height: 400px; margin-bottom: 0;">
                 
                 <!-- Left Column: Active Mission Pulse (Queue) -->
-                <div class="box-section" style="overflow: hidden; border-color: rgba(0,243,255,0.15);">
+                <div class="box-section" style="border-color: rgba(0,243,255,0.15);">
                     <div class="box-label" style="color: var(--color-secondary);">
                         <span class="material-icons" style="font-size: 14px;">list_alt</span>
                         Active Mission Pulse
@@ -1636,12 +1636,12 @@ class Router {
 
             if (data.results && data.results.length > 0) {
                 const section = `
-                    <div class="glass-panel trending-section" style="padding: 2rem; margin-bottom: 2rem;">
-                        <div class="section-header">
+                    <div class="box-section" style="margin-bottom: 1rem; border-color: rgba(255, 215, 0, 0.3);">
+                        <div class="box-label" style="color: #ffd700;">
                             <span class="material-icons">trending_up</span>
-                            <h3 class="glow-text" style="font-size: 1.2rem; font-weight: 800;">Trending This Week</h3>
+                            Trending This Week
                         </div>
-                        <div class="carousel-container">
+                        <div class="carousel-container" style="margin-top: 0.5rem;">
                             <button class="carousel-btn prev" onclick="window.router.carouselPrev()" id="carousel-prev">
                                 <span class="material-icons">chevron_left</span>
                             </button>
