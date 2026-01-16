@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Flasharr</title>
+
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Manrope:wght@400;600;700&family=Roboto+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+
+    <!-- Core Styles -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style_v2.css') }}?v={{ now() }}">
+</head>
+
+<body class="theme-oceanholic">
+    <div class="app-shell">
+        <!-- Glass Sidebar -->
+        <nav class="glass-sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="brand" onclick="window.router.toggleSidebar()" style="cursor: pointer;">
+                    <img src="{{ url_for('static', filename='images/fshare.png') }}" class="brand-logo-img"
+                        style="height: 32px; width: 32px; border-radius: 8px;">
+                    <span class="brand-text">Flasharr</span>
+                </div>
+                <button class="icon-btn-tiny sidebar-collapse-btn" onclick="window.router.toggleSidebar()"
+                    style="margin-left: auto;">
+                    <span class="material-icons" id="collapse-icon">menu_open</span>
+                </button>
+            </div>
+
+
+            <div class="nav-links">
+                <a href="/" class="nav-item active" data-route="dashboard">
+                    <span class="material-icons">dashboard</span>
+                    <span class="item-text">Command Center</span>
+                </a>
+                <a href="/discover" class="nav-item" data-route="discover">
+                    <span class="material-icons">movie_filter</span>
+                    <span class="item-text">Discover</span>
+                </a>
+                <a href="/explore" class="nav-item" data-route="explore">
+                    <span class="material-icons">explore</span>
+                    <span class="item-text">Explore</span>
+                </a>
+                <a href="/downloads" class="nav-item" data-route="downloads">
+                    <span class="material-icons">cloud_download</span>
+                    <span class="item-text">Transfers</span>
+                </a>
+                <a href="/settings" class="nav-item" data-route="settings">
+                    <span class="material-icons">settings_suggest</span>
+                    <span class="item-text">System</span>
+                </a>
+            </div>
+
+            <div class="sidebar-footer">
+                <button class="nav-item theme-toggle-btn" onclick="document.body.classList.toggle('theme-arctic')"
+                    style="width: 100%; border: none; background: transparent; cursor: pointer;">
+                    <span class="material-icons">contrast</span>
+                    <span class="item-text">Inverse Optics</span>
+                </button>
+                <div
+                    style="text-align: center; margin-top: 1rem; color: var(--text-muted); font-size: 0.7rem; opacity: 0.5; font-family: var(--font-mono);">
+                    v{{ version }}
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-viewport">
+            <!-- Global Header (Glass) -->
+            <header class="glass-header">
+                <div class="header-left">
+                    <div id="header-dynamic-content" style="flex: 1; margin-right: 2rem;"></div>
+                </div>
+
+
+                <div class="header-right">
+                    <div class="connection-status" id="connection-status" style="margin-right: 1.5rem;">
+                        <span class="status-dot"></span>
+                        <span class="status-text"
+                            style="font-size: 0.75rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;">Neural
+                            Link Active</span>
+                    </div>
+
+                    <!-- Global Stats Pills -->
+                    <div class="stat-pill" title="Current Speed">
+                        <span class="material-icons">speed</span>
+                        <span class="stat-value" id="global-speed">0 B/s</span>
+                    </div>
+
+                    <div class="stat-pill" title="Active Downloads">
+                        <span class="material-icons">downloading</span>
+                        <span class="stat-value" id="global-active">0</span>
+                    </div>
+                </div>
+
+            </header>
+
+            <!-- Dynamic View Container -->
+            <div class="view-container" id="view-container">
+                <!-- Views will be injected here by Router -->
+                <div class="loading-spinner"></div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div id="modal-overlay" class="modal-overlay" onclick="event.target === this && window.router.modalHide()">
+        <div id="modal-container" class="glass-panel modal-container"></div>
+    </div>
+
+    <!-- Scripts -->
+    <!-- Load Chart.js from CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- App Logic -->
+    <script type="module" src="{{ url_for('static', filename='js/app_v2.js') }}?v={{ now() }}"></script>
+</body>
+
+</html>
