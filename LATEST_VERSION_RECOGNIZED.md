@@ -1,5 +1,5 @@
 # Latest Version Recognition
-**Version:** 0.1.168-beta
+**Version:** 0.1.170-beta
 **Date:** 2026-01-16
 **Status:** Recognized & Synced
 
@@ -17,6 +17,7 @@ The system has recognized version **0.1.168-beta** as the latest active deployme
     *   Fixed DOM ID mismatch (`discovery-sidebar` -> `discover-sidebar`).
     *   **CRITICAL FIX:** Removed inline width/style overrides that were blocking CSS sidebar collapse/expand animations.
     *   **UI FIX:** Replaced flex-gap with animated margin-left to prevent empty space when sidebar is collapsed.
+    *   **UI FIX:** Added styling for selected genre chips (.active state) to provide visual feedback.
     *   Ensured sidebar content renders immediately on view load.
     *   Toggle functionality verified.
 

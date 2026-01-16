@@ -860,11 +860,13 @@ input[type=range]::-webkit-slider-thumb:hover {
     transition: all 0.2s;
 }
 
-.genre-checkbox:checked+.genre-chip {
+.genre-checkbox:checked+.genre-chip,
+.genre-chip.active {
     background: var(--color-primary);
     color: #000;
     font-weight: 700;
     border-color: var(--color-primary);
+    box-shadow: 0 0 10px rgba(0, 243, 255, 0.2);
 }
 
 .discover-sidebar select,
