@@ -1025,8 +1025,16 @@ class Router {
 
     async executeTMDBSearch(q) {
         const grid = document.getElementById('discover-grid');
-        const header = document.querySelector('.discover-grid-container h2') || document.querySelector('h2');
-        if (header) header.innerHTML = `<span class="material-icons" style="color: var(--color-primary);">search</span> Search Results: ${q}`;
+        const header = document.getElementById('header-dynamic-content');
+
+        if (header) {
+            header.innerHTML = `
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                     <span class="material-icons" style="color: var(--color-primary);">search</span>
+                     <h2 style="font-size: 1rem; font-weight: 800; letter-spacing: 0.1em; color: var(--text-primary); margin: 0;">SEARCH: ${q}</h2>
+                </div>
+            `;
+        }
 
         if (grid) grid.innerHTML = '<div class="loading-spinner"></div>';
 

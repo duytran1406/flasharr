@@ -1,5 +1,5 @@
 # Latest Version Recognition
-**Version:** 0.1.171-beta
+**Version:** 0.1.173-beta
 **Date:** 2026-01-16
 **Status:** Recognized & Synced
 
@@ -21,6 +21,7 @@ The system has recognized version **0.1.168-beta** as the latest active deployme
     *   **UX IMPROVEMENT:** Date inputs now trigger mini-calendar on click (via `showPicker()`).
     *   **LAYOUT REFACTOR:** Moved Discovery Search Bar from Global Header to Main Body.
     *   **UI ADDITION:** Added "DISCOVERY" label to Global Header.
+    *   **UI FIX:** Resolves double icon issue when displaying search results in Global Header.
     *   Ensured sidebar content renders immediately on view load.
     *   Toggle functionality verified.
 
