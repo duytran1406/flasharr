@@ -228,10 +228,16 @@ class Router {
             placeholder = "Locate system parameter...";
             icon = "manage_search";
             mode = "locate";
-        } else if (view === 'discover') {
-            placeholder = "Search Movies & TV Series directly...";
-            icon = "movie_filter";
-            mode = "search";
+        }
+
+        if (view === 'discover') {
+            header.innerHTML = `
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                     <span class="material-icons" style="color: var(--color-primary);">rocket_launch</span>
+                     <h2 style="font-size: 1rem; font-weight: 800; letter-spacing: 0.1em; color: var(--text-primary); margin: 0;">DISCOVERY</h2>
+                </div>
+            `;
+            return;
         }
 
         header.innerHTML = `
@@ -683,10 +689,12 @@ class Router {
             <div class="discover-layout">
                 <main class="discover-main">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
-                        <h2 class="glow-text" style="font-size: 1.5rem; font-weight: 800; display: flex; align-items: center; gap: 0.75rem;">
-                            <span class="material-icons" style="color: var(--color-primary);">rocket_launch</span> 
-                            Discovery
-                        </h2>
+                        <div class="glass-panel" style="display: flex; align-items: center; padding: 0.75rem 1rem; border-radius: 16px; gap: 0.75rem; flex: 1; max-width: 500px; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);">
+                            <span class="material-icons" style="color: var(--text-muted);">search</span>
+                            <input type="text" placeholder="Search Movies & TV Series directly..." 
+                                   style="background: transparent; border: none; color: white; width: 100%; outline: none; font-size: 0.95rem; font-family: var(--font-main);"
+                                   onkeypress="if(event.key === 'Enter') window.router.executeTMDBSearch(this.value)">
+                        </div>
 
                         <div style="display: flex; align-items: center;">
                             <div class="tab-container">
