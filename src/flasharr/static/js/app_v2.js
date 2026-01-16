@@ -201,6 +201,17 @@ class Router {
         const header = document.getElementById('header-dynamic-content');
         if (!header) return;
 
+        // Custom Dashboard Header
+        if (view === 'dashboard') {
+            header.innerHTML = `
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                     <span class="material-icons" style="color: var(--color-primary);">grid_view</span>
+                     <h2 style="font-size: 1rem; font-weight: 800; letter-spacing: 0.1em; color: var(--text-primary); margin: 0;">OPERATIONAL DASHBOARD</h2>
+                </div>
+            `;
+            return;
+        }
+
         let placeholder = "Search data fragments...";
         let icon = "search";
         let mode = "global";
@@ -901,7 +912,7 @@ class Router {
             if (loader) loader.style.display = 'block';
         }
 
-        const itemsPerPage = 18;
+        const itemsPerPage = 21;
         const s = this.discoverState;
 
         try {
