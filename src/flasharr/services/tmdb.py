@@ -102,9 +102,10 @@ class TMDBClient:
             
         return await self._request('GET', '/discover/tv', params=params)
 
-    async def search(self, query: str, page: int = 1) -> Dict[str, Any]:
-        """Search for content (multi search)."""
-        return await self._request('GET', '/search/multi', params={'query': query, 'page': page})
+    async def search(self, query: str, page: int = 1, media_type: str = 'multi') -> Dict[str, Any]:
+        """Search for content (multi or specific type)."""
+        endpoint = f'/search/{media_type}' if media_type in ['movie', 'tv'] else '/search/multi'
+        return await self._request('GET', endpoint, params={'query': query, 'page': page})
 
     async def get_movie_details(self, tmdb_id: int) -> Dict[str, Any]:
         """Get movie details."""

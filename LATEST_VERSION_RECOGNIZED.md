@@ -1,5 +1,5 @@
 # Latest Version Recognition
-**Version:** 0.1.173-beta
+**Version:** 0.1.174-beta
 **Date:** 2026-01-16
 **Status:** Recognized & Synced
 
@@ -22,6 +22,7 @@ The system has recognized version **0.1.168-beta** as the latest active deployme
     *   **LAYOUT REFACTOR:** Moved Discovery Search Bar from Global Header to Main Body.
     *   **UI ADDITION:** Added "DISCOVERY" label to Global Header.
     *   **UI FIX:** Resolves double icon issue when displaying search results in Global Header.
+    *   **CRITICAL FIX:** Search now uses correct TMDB endpoint and respects active Movie/TV category.
     *   Ensured sidebar content renders immediately on view load.
     *   Toggle functionality verified.
 

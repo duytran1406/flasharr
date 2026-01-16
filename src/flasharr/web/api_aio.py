@@ -766,10 +766,11 @@ async def api_tmdb_search(request: web.Request) -> web.Response:
     """Direct TMDB search with pagination."""
     query = request.query.get('q', '')
     page = int(request.query.get('page', 1))
+    media_type = request.query.get('type', 'multi')
     if not query:
         return web.json_response({"results": []})
     try:
-        data = await tmdb_client.search(query, page)
+        data = await tmdb_client.search(query, page, media_type)
         return web.json_response(data)
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)

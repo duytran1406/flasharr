@@ -1039,10 +1039,11 @@ class Router {
         if (grid) grid.innerHTML = '<div class="loading-spinner"></div>';
 
         try {
-            const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+            const type = this.discoverState.type || 'movie';
+            const res = await fetch(`/api/tmdb/search?q=${encodeURIComponent(q)}&type=${type}`);
             const data = await res.json();
             if (data.results) {
-                this.renderDiscoverGrid(data.results, 'movie');
+                this.renderDiscoverGrid(data.results, type);
             }
         } catch (e) {
             if (grid) grid.innerHTML = '<div style="color: #FF5252; text-align: center; padding: 2rem;">Search Telemetry Fragmented</div>';
