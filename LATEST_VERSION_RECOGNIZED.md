@@ -1,5 +1,5 @@
 # Latest Version Recognition
-**Version:** 0.1.170-beta
+**Version:** 0.1.171-beta
 **Date:** 2026-01-16
 **Status:** Recognized & Synced
 
@@ -18,6 +18,7 @@ The system has recognized version **0.1.168-beta** as the latest active deployme
     *   **CRITICAL FIX:** Removed inline width/style overrides that were blocking CSS sidebar collapse/expand animations.
     *   **UI FIX:** Replaced flex-gap with animated margin-left to prevent empty space when sidebar is collapsed.
     *   **UI FIX:** Added styling for selected genre chips (.active state) to provide visual feedback.
+    *   **UX IMPROVEMENT:** Date inputs now trigger mini-calendar on click (via `showPicker()`).
     *   Ensured sidebar content renders immediately on view load.
     *   Toggle functionality verified.
 

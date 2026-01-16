@@ -689,6 +689,7 @@ select.glass-panel {
     width: 100%;
     font-family: inherit;
     transition: border-color 0.2s;
+    color-scheme: dark;
 }
 
 .filter-input-date:focus {

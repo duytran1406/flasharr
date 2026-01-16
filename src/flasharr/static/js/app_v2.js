@@ -749,8 +749,8 @@ class Router {
             <div class="filter-section">
                 <span class="filter-label">Release Date</span>
                 <div class="filter-input-group">
-                    <input type="date" class="filter-input-date" placeholder="From" value="${s.dateFrom}" onchange="window.router.updateFilter('dateFrom', this.value)">
-                    <input type="date" class="filter-input-date" placeholder="To" value="${s.dateTo}" onchange="window.router.updateFilter('dateTo', this.value)">
+                    <input type="date" class="filter-input-date" placeholder="From" value="${s.dateFrom}" onchange="window.router.updateFilter('dateFrom', this.value)" onclick="try{this.showPicker()}catch(e){}">
+                    <input type="date" class="filter-input-date" placeholder="To" value="${s.dateTo}" onchange="window.router.updateFilter('dateTo', this.value)" onclick="try{this.showPicker()}catch(e){}">
                 </div>
             </div>
 
