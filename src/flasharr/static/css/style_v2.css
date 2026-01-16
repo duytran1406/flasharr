@@ -597,8 +597,13 @@ select.glass-panel {
 
 .discover-main {
     flex: 1;
-    overflow-y: auto;
+    overflow: hidden;
+    /* Change from overflow-y: auto to hidden */
     padding-right: 1rem;
+    display: flex;
+    /* Enable flexbox */
+    flex-direction: column;
+    /* Stack header and grid vertical */
 }
 
 .discover-sidebar {
@@ -1503,7 +1508,7 @@ input[type=range]::-webkit-slider-thumb:hover {
     overflow: hidden;
     cursor: pointer;
     transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 4px 15px rgba(0, 243, 255, 0.1);
     border: 2px solid transparent;
     background: #0f172a;
 }
@@ -1511,7 +1516,7 @@ input[type=range]::-webkit-slider-thumb:hover {
 .poster-card:hover {
     transform: translateY(-5px);
     /* Gentle lift instead of zoom */
-    box-shadow: 0 15px 30px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 243, 255, 0.2);
+    box-shadow: 0 15px 40px rgba(0, 0, 0, 0.6), 0 0 30px rgba(0, 243, 255, 0.5);
     border-color: var(--color-primary);
     z-index: 10;
 }
