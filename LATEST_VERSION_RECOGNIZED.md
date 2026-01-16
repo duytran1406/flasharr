@@ -1,5 +1,5 @@
 # Latest Version Recognition
-**Version:** 0.1.175-beta
+**Version:** 0.1.176-beta
 **Date:** 2026-01-16
 **Status:** Recognized & Synced
 
@@ -24,6 +24,9 @@ The system has recognized version **0.1.168-beta** as the latest active deployme
     *   **UI FIX:** Resolves double icon issue when displaying search results in Global Header.
     *   **CRITICAL FIX:** Search now uses correct TMDB endpoint and respects active Movie/TV category.
     *   **UX IMPROVEMENT:** Global Header Dynamically reflects Tab State (Movies/TV) or Search Query live during input.
+    *   **FEATURE:** Enhanced Movie Details View ("Full Info" mode) with Revenue, Budget, Studios, External Links, and Status.
+    *   **FEATURE:** Added Collection Support: Banner in details view, and dedicated Collection View with parts grid.
+    *   **UI TWEAK:** Reduced Similar/Recommended items to 4 for cleaner layout.
     *   Ensured sidebar content renders immediately on view load.
     *   Toggle functionality verified.
 

@@ -824,6 +824,15 @@ async def get_tmdb_tv_detail(request: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
+@routes.get("/api/tmdb/collection/{id}")
+async def get_tmdb_collection(request: web.Request) -> web.Response:
+    try:
+        collection_id = int(request.match_info['id'])
+        data = await tmdb_client.get_collection_details(collection_id)
+        return web.json_response(data)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
 @routes.get("/api/tmdb/tv/{tmdb_id}/season/{season_number}")
 async def get_tmdb_season_detail(request: web.Request) -> web.Response:
     tmdb_id = request.match_info['tmdb_id']

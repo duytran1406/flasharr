@@ -179,6 +179,9 @@ class Router {
         if (view.startsWith('media/')) {
             const parts = view.split('/');
             this.loadMediaDetail(parts[1], parts[2]);
+        } else if (view.startsWith('collection/')) {
+            const parts = view.split('/');
+            this.loadCollection(parts[1]);
         } else {
             switch (view) {
                 case 'dashboard':
@@ -237,6 +240,24 @@ class Router {
                      <h2 style="font-size: 1rem; font-weight: 800; letter-spacing: 0.1em; color: var(--text-primary); margin: 0;">DISCOVERY</h2>
                 </div>
             `;
+            return;
+        }
+
+        if (view.startsWith('media')) {
+            header.innerHTML = `
+                 <div style="display: flex; align-items: center; gap: 0.75rem;">
+                      <span class="material-icons" style="color: var(--color-primary);">movie</span>
+                      <h2 style="font-size: 1rem; font-weight: 800; letter-spacing: 0.1em; color: var(--text-primary); margin: 0;">INTELLIGENCE BRIEF</h2>
+                 </div>
+             `;
+            return;
+        } else if (view.startsWith('collection')) {
+            header.innerHTML = `
+                 <div style="display: flex; align-items: center; gap: 0.75rem;">
+                      <span class="material-icons" style="color: var(--color-primary);">library_books</span>
+                      <h2 style="font-size: 1rem; font-weight: 800; letter-spacing: 0.1em; color: var(--text-primary); margin: 0;">ARCHIVE COLLECTION</h2>
+                 </div>
+             `;
             return;
         }
 
@@ -1100,78 +1121,114 @@ class Router {
                 
                 <div style="padding: 2.5rem 2rem; display: grid; grid-template-columns: minmax(0, 1fr) 350px; gap: 3rem;">
                     <div style="min-width: 0;">
-                        <h3 style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; color: var(--color-primary); margin-bottom: 1rem; font-weight: 800;">Intelligence Brief</h3>
+                        <!-- Collection Banner -->
+                        <div id="collection-banner" style="display: none; margin-bottom: 2rem; position: relative; height: 120px; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); cursor: pointer; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+                            <div id="collection-bg" style="position: absolute; inset: 0; background-size: cover; background-position: center;"></div>
+                            <div style="position: absolute; inset: 0; background: linear-gradient(to right, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.4) 100%);"></div>
+                            <div style="position: absolute; inset: 0; display: flex; justify-content: space-between; align-items: center; padding: 0 2rem;">
+                                <div>
+                                    <div style="font-size: 0.7rem; text-transform: uppercase; color: var(--color-primary); letter-spacing: 0.1em; margin-bottom: 4px;">Part of the Collection</div>
+                                    <h2 id="collection-name" style="font-size: 1.5rem; font-weight: 800; color: white; display: flex; align-items: center; gap: 0.5rem;"></h2>
+                                </div>
+                                <button class="add-btn" style="padding: 0.5rem 1.5rem;">View Collection</button>
+                            </div>
+                        </div>
+
+                        <h3 style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; color: var(--color-primary); margin-bottom: 1rem; font-weight: 800;">Overview</h3>
                         <p id="detail-overview" style="line-height: 1.8; color: var(--text-secondary); font-size: 1.1rem; margin-bottom: 3rem;"></p>
                         
                         <div id="tv-seasons-section" style="display: none;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-                                <h3 style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; color: var(--color-primary); font-weight: 800;">Mission Phases (Seasons)</h3>
+                                <h3 style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; color: var(--color-primary); font-weight: 800;">Seasons</h3>
                                 <select id="season-selector" class="glass-panel" style="padding: 0.5rem 1rem; background: rgba(255,255,255,0.05); color: #fff; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; font-size: 0.8rem;"></select>
                             </div>
                             <div id="episodes-list" style="display: flex; flex-direction: column; gap: 1rem;"></div>
                         </div>
 
-                        <!-- Similar & Recommended Sections -->
+                        <!-- Similar & Recommended -->
                         <div id="related-media-section" style="margin-top: 4rem;">
                             <div id="similar-section" style="margin-bottom: 3rem;">
                                 <h3 style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; color: var(--color-primary); margin-bottom: 1.5rem; font-weight: 800;">Similar Trajectories</h3>
-                                <div id="similar-grid" class="discover-grid"></div>
+                                <div id="similar-grid" class="discover-grid" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));"></div>
                             </div>
                             <div id="recommended-section">
                                 <h3 style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; color: var(--color-primary); margin-bottom: 1.5rem; font-weight: 800;">Neural Recommendations</h3>
-                                <div id="recommended-grid" class="discover-grid"></div>
+                                <div id="recommended-grid" class="discover-grid" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));"></div>
                             </div>
                         </div>
                     </div>
                     
                     <div style="display: flex; flex-direction: column; gap: 1.5rem;">
-                        <div id="movie-actions" class="glass-panel" style="padding: 1.5rem; display: none;">
-                            <h3 style="font-size: 0.8rem; font-weight: 800; margin-bottom: 1rem; text-transform: uppercase;">Direct Retrieval</h3>
+                         <div id="movie-actions" class="glass-panel" style="padding: 1.5rem; display: none;">
                             <button id="btn-smart-dl-movie" class="add-btn" style="width: 100%; padding: 1rem; display: flex; align-items: center; justify-content: center; gap: 0.75rem;">
                                 <span class="material-icons">manage_search</span> SMART SEARCH
                             </button>
                         </div>
                         
-                        <div class="glass-panel" style="padding: 1.5rem;">
-                            <h3 style="font-size: 0.8rem; font-weight: 800; margin-bottom: 1.5rem; text-transform: uppercase; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 0.75rem;">Registry Info</h3>
-                            <div style="display: flex; flex-direction: column; gap: 1.25rem;">
-                                <div>
-                                    <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 800; margin-bottom: 0.25rem;">Operational Status</div>
-                                    <div id="side-status" style="font-weight: 700; color: #00ff88;">-</div>
+                        <div class="glass-panel" style="padding: 0; overflow: hidden;">
+                             <div style="padding: 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <span class="material-icons" style="color: #00E676; font-size: 20px;">circle</span>
+                                    <span style="font-weight: 700; font-size: 1.1rem;">TMDB</span>
                                 </div>
-                                <div>
-                                    <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 800; margin-bottom: 0.25rem;">Network / Studio</div>
-                                    <div id="side-network" style="font-weight: 700;">-</div>
+                                <div style="font-weight: 800; font-size: 1.1rem; color: #ffd700;" id="side-score-avg-full"></div>
+                             </div>
+                             
+                             <div style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1.25rem;">
+                                <div class="info-row">
+                                    <div class="info-label">Status</div>
+                                    <div class="info-val" id="info-status"></div>
                                 </div>
-                                <div>
-                                    <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 800; margin-bottom: 0.25rem;">Content Score</div>
-                                    <div style="display: flex; align-items: center; gap: 8px;">
-                                        <div id="side-score-avg" style="font-size: 1.25rem; font-weight: 800; color: #ffd700;">0.0</div>
-                                        <div id="side-score-count" style="font-size: 0.7rem; color: var(--text-muted);">0 votes</div>
-                                    </div>
+                                
+                                <div class="info-row">
+                                    <div class="info-label">Release Date</div>
+                                    <div class="info-val" id="info-release"></div>
                                 </div>
-                                <div>
-                                    <div style="font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; font-weight: 800; margin-bottom: 0.25rem;">Temporal Offset</div>
-                                    <div id="side-runtime" style="font-weight: 700;">-</div>
+
+                                <div class="info-row" id="row-revenue">
+                                    <div class="info-label">Revenue</div>
+                                    <div class="info-val" id="info-revenue"></div>
                                 </div>
-                            </div>
+                                
+                                <div class="info-row" id="row-budget">
+                                    <div class="info-label">Budget</div>
+                                    <div class="info-val" id="info-budget"></div>
+                                </div>
+                                
+                                <div class="info-row">
+                                    <div class="info-label">Original Language</div>
+                                    <div class="info-val" id="info-lang"></div>
+                                </div>
+                                
+                                <div class="info-row">
+                                    <div class="info-label">Production</div>
+                                    <div class="info-val" id="info-studios"></div>
+                                </div>
+                             </div>
+                             
+                             <div style="background: rgba(0,0,0,0.2); padding: 1rem; display: flex; justify-content: space-around; border-top: 1px solid rgba(255,255,255,0.05);" id="external-links">
+                             </div>
                         </div>
 
                         <div id="side-keywords" style="display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0 0.5rem;"></div>
                     </div>
                 </div>
             </div>
+            <style>
+                .info-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+                .info-label { font-size: 0.85rem; color: var(--text-muted); font-weight: 500; }
+                .info-val { font-size: 0.9rem; font-weight: 600; text-align: right; color: var(--text-primary); }
+            </style>
         `;
 
-        // Initialize Placeholders
-        document.getElementById('detail-hero').style.backgroundImage = 'none'; // Or a loading gradient
+        document.getElementById('detail-hero').style.backgroundImage = 'none';
         document.getElementById('detail-poster').src = '/static/images/placeholder_poster.jpg';
 
         try {
             const res = await fetch(`/api/tmdb/${type}/${id}`);
             const data = await res.json();
 
-            // Fill basics
+            // Hero
             document.getElementById('detail-hero').style.backgroundImage = data.backdrop_path ? `url('https://image.tmdb.org/t/p/original${data.backdrop_path}')` : 'none';
             document.getElementById('detail-poster').src = data.poster_path ? `https://image.tmdb.org/t/p/w500${data.poster_path}` : '/static/images/placeholder_poster.jpg';
             document.getElementById('detail-tagline').innerText = data.tagline || '';
@@ -1179,16 +1236,16 @@ class Router {
             document.getElementById('detail-overview').innerText = data.overview;
 
             const release = (data.release_date || data.first_air_date || '');
-            document.getElementById('detail-year').innerText = release.split('-')[0];
+            document.getElementById('detail-year').innerText = release ? release.split('-')[0] : '';
             document.getElementById('detail-score').innerText = (data.vote_average || 0).toFixed(1);
 
-            // Runtime / Seasons
+            // Runtime
             let runtimeText = '';
             if (type === 'movie' && data.runtime) {
                 const hrs = Math.floor(data.runtime / 60);
                 const mins = data.runtime % 60;
                 runtimeText = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
-            } else if (type === 'tv' && data.episode_run_time && data.episode_run_time.length > 0) {
+            } else if (type === 'tv' && data.episode_run_time?.length) {
                 runtimeText = `${data.episode_run_time[0]} min/ep`;
             } else if (type === 'tv' && data.number_of_seasons) {
                 runtimeText = `${data.number_of_seasons} ${data.number_of_seasons === 1 ? 'Season' : 'Seasons'}`;
@@ -1203,15 +1260,56 @@ class Router {
 
             document.getElementById('detail-type').innerText = type;
 
+            // Collection Banner
+            if (data.belongs_to_collection) {
+                const col = data.belongs_to_collection;
+                document.getElementById('collection-banner').style.display = 'block';
+                document.getElementById('collection-name').innerHTML = `${col.name} <span class="material-icons" style="font-size: 1.2rem; color: var(--color-primary);">arrow_forward</span>`;
+                if (col.backdrop_path) {
+                    document.getElementById('collection-bg').style.backgroundImage = `url('https://image.tmdb.org/t/p/original${col.backdrop_path}')`;
+                }
+                document.getElementById('collection-banner').onclick = () => window.router.navigate(`collection/${col.id}`);
+            }
+
             // Sidebar Info
-            document.getElementById('side-status').innerText = data.status || 'Active';
-            document.getElementById('side-network').innerText = data.networks?.[0]?.name || data.production_companies?.[0]?.name || 'Unknown Registry';
-            document.getElementById('side-score-avg').innerText = (data.vote_average || 0).toFixed(1);
-            document.getElementById('side-score-count').innerText = `${data.vote_count?.toLocaleString()} samples`;
-            document.getElementById('side-runtime').innerText = runtimeText;
+            document.getElementById('side-score-avg-full').innerText = `${Math.round((data.vote_average || 0) * 10)}%`;
+            document.getElementById('info-status').innerText = data.status || '-';
+
+            const dateObj = new Date(release);
+            document.getElementById('info-release').innerText = !isNaN(dateObj) ? dateObj.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) : '-';
+
+            const formatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+            if (data.revenue && data.revenue > 0) {
+                document.getElementById('info-revenue').innerText = formatter.format(data.revenue);
+            } else {
+                document.getElementById('row-revenue').style.display = 'none';
+            }
+            if (data.budget && data.budget > 0) {
+                document.getElementById('info-budget').innerText = formatter.format(data.budget);
+            } else {
+                document.getElementById('row-budget').style.display = 'none';
+            }
+
+            document.getElementById('info-lang').innerText = (data.original_language || '').toUpperCase();
+
+            const studios = (data.production_companies || []).slice(0, 4).map(c => c.name);
+            document.getElementById('info-studios').innerText = studios.length ? studios.join('\\n') : '-';
+            document.getElementById('info-studios').style.whiteSpace = 'pre-line';
+
+            // Links
+            let linksHtml = '';
+            if (data.external_ids) {
+                const e = data.external_ids;
+                if (e.imdb_id) linksHtml += `<a href="https://www.imdb.com/title/${e.imdb_id}" target="_blank" style="color: var(--text-muted); hover:text-white; display: flex; align-items: center;"><span style="background: #F5C518; color: black; font-weight: 800; border-radius: 4px; padding: 0 4px; font-size: 0.8rem;">IMDb</span></a>`;
+                if (e.facebook_id) linksHtml += `<a href="https://facebook.com/${e.facebook_id}" target="_blank" class="material-icons" style="color: var(--text-muted);">facebook</a>`;
+                if (e.instagram_id) linksHtml += `<a href="https://instagram.com/${e.instagram_id}" target="_blank" class="material-icons" style="color: var(--text-muted);">photo_camera</a>`;
+                if (e.twitter_id) linksHtml += `<a href="https://twitter.com/${e.twitter_id}" target="_blank" class="material-icons" style="color: var(--text-muted);">alternate_email</a>`;
+            }
+            linksHtml += `<a href="https://www.themoviedb.org/${type}/${id}" target="_blank" style="display: flex; align-items: center;"><span style="color: #01b4e4; font-weight: 800; font-size: 0.8rem;">TMDB</span></a>`;
+            document.getElementById('external-links').innerHTML = linksHtml;
 
             const keywords = data.keywords?.keywords || data.keywords?.results || [];
-            document.getElementById('side-keywords').innerHTML = keywords.slice(0, 10).map(k => `
+            document.getElementById('side-keywords').innerHTML = keywords.slice(0, 15).map(k => `
                 <span class="keyword-chip" onclick="event.stopPropagation(); window.router.executeTMDBSearch('${k.name}')" style="font-size: 0.65rem; background: rgba(255,255,255,0.05); padding: 4px 8px; border-radius: 4px; color: var(--text-muted); border: 1px solid rgba(255,255,255,0.05); cursor: pointer; transition: all 0.2s;">${k.name}</span>
             `).join('');
 
@@ -1232,20 +1330,54 @@ class Router {
         }
     }
 
+    async loadCollection(id) {
+        this.container.innerHTML = '<div class="loading-spinner"></div>';
+        try {
+            const res = await fetch(`/api/tmdb/collection/${id}`);
+            const data = await res.json();
+
+            this.container.innerHTML = `
+                <div style="max-width: 1400px; margin: 0 auto; min-height: calc(100vh - 80px);">
+                    <div style="height: 400px; position: relative; border-radius: 0 0 24px 24px; overflow: hidden; margin-bottom: 2rem; border-bottom: 2px solid rgba(255,255,255,0.05);">
+                         <div style="position: absolute; inset: 0; background-image: url('https://image.tmdb.org/t/p/original${data.backdrop_path}'); background-size: cover; background-position: center;"></div>
+                         <div style="position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(15,23,42,0.1) 0%, rgba(15,23,42,1) 100%);"></div>
+                         <div style="position: absolute; bottom: 2rem; left: 2rem;">
+                              <h1 style="font-size: 3rem; font-weight: 800; margin-bottom: 0.5rem; text-shadow: 0 2px 10px rgba(0,0,0,0.5);">${data.name}</h1>
+                              <p style="max-width: 600px; color: var(--text-secondary); font-size: 1.1rem; line-height: 1.6;">${data.overview || ''}</p>
+                         </div>
+                    </div>
+                    
+                    <div style="padding: 0 2rem 2rem;">
+                        <h3 style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; color: var(--color-primary); margin-bottom: 1.5rem; font-weight: 800;">Collection Parts</h3>
+                        <div id="collection-grid" class="discover-grid" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));"></div>
+                    </div>
+                </div>
+            `;
+
+            if (data.parts) {
+                const parts = data.parts.map(p => ({ ...p, media_type: 'movie' }));
+                parts.sort((a, b) => (a.release_date || '') > (b.release_date || '') ? 1 : -1);
+                this.renderDiscoverGrid(parts, 'movie', false, document.getElementById('collection-grid'));
+            }
+        } catch (e) {
+            this.container.innerHTML = `<div style="padding: 4rem; text-align: center; color: #FF5252;">Collection Data Fragmented: ${e.message}</div>`;
+        }
+    }
+
     async loadRelatedMedia(type, id) {
         try {
             const similarRes = await fetch(`/api/tmdb/${type}/${id}/similar`);
             const similarData = await similarRes.json();
             if (similarData.results) {
                 const grid = document.getElementById('similar-grid');
-                if (grid) this.renderDiscoverGrid(similarData.results.slice(0, 6), type, false, grid);
+                if (grid) this.renderDiscoverGrid(similarData.results.slice(0, 4), type, false, grid);
             }
 
             const recoRes = await fetch(`/api/tmdb/${type}/${id}/recommendations`);
             const recoData = await recoRes.json();
             if (recoData.results) {
                 const grid = document.getElementById('recommended-grid');
-                if (grid) this.renderDiscoverGrid(recoData.results.slice(0, 6), type, false, grid);
+                if (grid) this.renderDiscoverGrid(recoData.results.slice(0, 4), type, false, grid);
             }
         } catch (e) {
             console.error("Related Media Error", e);

@@ -109,11 +109,15 @@ class TMDBClient:
 
     async def get_movie_details(self, tmdb_id: int) -> Dict[str, Any]:
         """Get movie details."""
-        return await self._request('GET', f'/movie/{tmdb_id}', params={'append_to_response': 'credits,keywords'})
+        return await self._request('GET', f'/movie/{tmdb_id}', params={'append_to_response': 'credits,keywords,external_ids,release_dates'})
 
     async def get_tv_details(self, tmdb_id: int) -> Dict[str, Any]:
         """Get TV show details."""
-        return await self._request('GET', f'/tv/{tmdb_id}', params={'append_to_response': 'credits,keywords'})
+        return await self._request('GET', f'/tv/{tmdb_id}', params={'append_to_response': 'credits,keywords,external_ids,content_ratings'})
+
+    async def get_collection_details(self, collection_id: int) -> Dict[str, Any]:
+        """Get collection details."""
+        return await self._request('GET', f'/collection/{collection_id}')
 
     async def get_similar_movies(self, tmdb_id: int) -> Dict[str, Any]:
         """Get similar movies."""
