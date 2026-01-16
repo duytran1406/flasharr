@@ -1508,79 +1508,82 @@ class Router {
             <!-- Trending Carousel Mount -->
             <div id="trending-mount"></div>
 
-            <div style="display: grid; grid-template-columns: 6.5fr 3.5fr; gap: 1.5rem; height: calc(100vh - 450px); min-height: 400px; margin-bottom: 0;">
+            <!-- Trending Carousel Mount -->
+            <div id="trending-mount"></div>
+
+            <div style="display: grid; grid-template-columns: 6.5fr 3.5fr; gap: 1rem; height: calc(100vh - 320px); min-height: 350px; margin-bottom: 0;">
                 
                 <!-- Left Column: Active Mission Pulse (Queue) -->
-                <div class="glass-panel" style="padding: 1.5rem; overflow: hidden; display: flex; flex-direction: column;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem; flex-shrink: 0;">
-                        <h3 style="font-size: 0.95rem; font-weight: 700; display: flex; align-items: center; gap: 0.6rem;">
-                            <span class="material-icons" style="font-size: 20px; color: var(--color-secondary);">list_alt</span>
+                <div class="glass-panel" style="padding: 1rem; overflow: hidden; display: flex; flex-direction: column;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-shrink: 0;">
+                        <h3 style="font-size: 0.9rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="material-icons" style="font-size: 18px; color: var(--color-secondary);">list_alt</span>
                             Active Mission Pulse
                         </h3>
-                        <button class="nav-item" onclick="window.router.navigate('downloads')" style="padding: 4px 12px; border-radius: 6px; font-size: 0.7rem; font-weight: 800; border: 1px solid rgba(255,255,255,0.05); background: transparent; cursor: pointer;">QUEUE</button>
+                        <button class="nav-item" onclick="window.router.navigate('downloads')" style="padding: 3px 10px; border-radius: 4px; font-size: 0.65rem; font-weight: 800; border: 1px solid rgba(255,255,255,0.05); background: transparent; cursor: pointer;">QUEUE</button>
                     </div>
-                    <div id="minified-queue" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; overflow-y: auto; padding-right: 4px;">
+                    <div id="minified-queue" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.75rem; overflow-y: auto; padding-right: 4px;">
                         <div class="loading-spinner" style="transform: scale(0.5); grid-column: 1/-1; margin: 1rem auto;"></div>
                     </div>
                 </div>
 
                 <!-- Right Column: Command Center & Netflow -->
-                <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+                <div style="display: flex; flex-direction: column; gap: 1rem;">
                     
                     <!-- Combined Command Unit -->
-                    <div class="glass-panel" style="padding: 1.25rem; border-left: 4px solid var(--color-primary); display: flex; flex-direction: column; gap: 1.25rem;">
+                    <div class="glass-panel" style="padding: 1rem; border-left: 4px solid var(--color-primary); display: flex; flex-direction: column; gap: 1rem;">
                         
                         <!-- Header: Captain Identity -->
-                        <div style="display: flex; align-items: center; gap: 1rem;">
-                            <div style="width: 48px; height: 48px; border-radius: 50%; background: rgba(0,243,255,0.1); display: flex; align-items: center; justify-content: center; border: 1px solid var(--color-primary); box-shadow: 0 0 10px rgba(0,243,255,0.2);">
-                                <span class="material-icons" style="font-size: 24px; color: var(--color-primary);">shield</span>
+                        <div style="display: flex; align-items: center; gap: 0.75rem;">
+                            <div style="width: 40px; height: 40px; border-radius: 50%; background: rgba(0,243,255,0.1); display: flex; align-items: center; justify-content: center; border: 1px solid var(--color-primary); box-shadow: 0 0 10px rgba(0,243,255,0.2);">
+                                <span class="material-icons" style="font-size: 20px; color: var(--color-primary);">shield</span>
                             </div>
                             <div style="flex: 1; overflow: hidden;">
-                                <h2 class="glow-text" style="font-size: 0.85rem; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.05em;">Command Identity</h2>
-                                <div id="captain-email" style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Syncing...</div>
-                                <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 4px;">
-                                    <span id="captain-rank" style="font-size: 0.6rem; font-weight: 800; color: var(--color-primary);">AUTH...</span>
-                                    <span id="captain-expiry" style="font-size: 0.6rem; color: var(--text-muted);">...</span>
+                                <h2 class="glow-text" style="font-size: 0.8rem; margin-bottom: 2px; text-transform: uppercase; letter-spacing: 0.05em;">Command Identity</h2>
+                                <div id="captain-email" style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Syncing...</div>
+                                <div style="display: flex; justify-content: space-between; align-items: baseline; margin-top: 2px;">
+                                    <span id="captain-rank" style="font-size: 0.55rem; font-weight: 800; color: var(--color-primary);">AUTH...</span>
+                                    <span id="captain-expiry" style="font-size: 0.55rem; color: var(--text-muted);">...</span>
                                 </div>
                             </div>
                         </div>
 
                         <!-- Telemetry Stats Row -->
                         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem;">
-                            <div style="background: rgba(0,255,163,0.02); padding: 0.5rem; border-radius: 8px; border: 1px solid rgba(0,255,163,0.05); text-align: center;">
-                                <div style="font-size: 0.5rem; color: var(--text-muted); text-transform: uppercase;">Active</div>
-                                <div id="stat-active" style="font-size: 1rem; font-weight: 800; color: var(--color-secondary); font-family: var(--font-mono);">0</div>
+                            <div style="background: rgba(0,255,163,0.02); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(0,255,163,0.05); text-align: center;">
+                                <div style="font-size: 0.45rem; color: var(--text-muted); text-transform: uppercase;">Active</div>
+                                <div id="stat-active" style="font-size: 0.9rem; font-weight: 800; color: var(--color-secondary); font-family: var(--font-mono);">0</div>
                             </div>
-                            <div style="background: rgba(255,255,255,0.02); padding: 0.5rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); text-align: center;">
-                                <div style="font-size: 0.5rem; color: var(--text-muted); text-transform: uppercase;">Queued</div>
-                                <div id="stat-queued" style="font-size: 1rem; font-weight: 800; color: #ffd700; font-family: var(--font-mono);">0</div>
+                            <div style="background: rgba(255,255,255,0.02); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-align: center;">
+                                <div style="font-size: 0.45rem; color: var(--text-muted); text-transform: uppercase;">Queued</div>
+                                <div id="stat-queued" style="font-size: 0.9rem; font-weight: 800; color: #ffd700; font-family: var(--font-mono);">0</div>
                             </div>
-                            <div style="background: rgba(255,255,255,0.02); padding: 0.5rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); text-align: center;">
-                                <div style="font-size: 0.5rem; color: var(--text-muted); text-transform: uppercase;">Done</div>
-                                <div id="stat-completed" style="font-size: 1rem; font-weight: 800; color: var(--color-primary); font-family: var(--font-mono);">0</div>
+                            <div style="background: rgba(255,255,255,0.02); padding: 0.4rem; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); text-align: center;">
+                                <div style="font-size: 0.45rem; color: var(--text-muted); text-transform: uppercase;">Done</div>
+                                <div id="stat-completed" style="font-size: 0.9rem; font-weight: 800; color: var(--color-primary); font-family: var(--font-mono);">0</div>
                             </div>
                         </div>
 
                         <!-- Fuel Consumption -->
                         <div>
-                            <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 0.25rem;">
-                                <span style="font-size: 0.65rem; font-weight: 700; color: #ffd700; text-transform: uppercase;">Fuel (Quota)</span>
-                                <div style="font-family: var(--font-mono); font-size: 0.7rem; font-weight: 800; color: var(--text-primary);">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 0.2rem;">
+                                <span style="font-size: 0.6rem; font-weight: 700; color: #ffd700; text-transform: uppercase;">Fuel (Quota)</span>
+                                <div style="font-family: var(--font-mono); font-size: 0.65rem; font-weight: 800; color: var(--text-primary);">
                                     <span id="quota-percent">0</span>%
                                 </div>
                             </div>
-                            <div class="fuel-gauge" style="height: 6px; background: rgba(0,0,0,0.3); border-radius: 3px; overflow: hidden; position: relative; border: 1px solid rgba(255,255,255,0.03);">
-                                <div id="fuel-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #ffd700, #ff8c00); box-shadow: 0 0 8px rgba(255, 215, 0, 0.3); border-radius: 3px; transition: width 1s ease;"></div>
+                            <div class="fuel-gauge" style="height: 5px; background: rgba(0,0,0,0.3); border-radius: 2px; overflow: hidden; position: relative; border: 1px solid rgba(255,255,255,0.03);">
+                                <div id="fuel-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #ffd700, #ff8c00); box-shadow: 0 0 6px rgba(255, 215, 0, 0.3); border-radius: 2px; transition: width 1s ease;"></div>
                             </div>
-                            <div id="quota-text" style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-muted); text-align: right; margin-top: 2px;">0 GB / 0 GB</div>
+                            <div id="quota-text" style="font-family: var(--font-mono); font-size: 0.6rem; color: var(--text-muted); text-align: right; margin-top: 1px;">0 GB / 0 GB</div>
                         </div>
 
                     </div>
 
                     <!-- Netflow -->
-                    <div class="glass-panel" style="padding: 1rem; flex: 1; min-height: 180px; display: flex; flex-direction: column;">
-                        <h3 style="margin-bottom: 0.5rem; font-size: 0.8rem; font-weight: 700; display: flex; align-items: center; gap: 0.6rem; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.05em;">
-                            <span class="material-icons" style="font-size: 16px; color: var(--color-primary);">insights</span>
+                    <div class="glass-panel" style="padding: 1rem; flex: 1; min-height: 140px; display: flex; flex-direction: column;">
+                        <h3 style="margin-bottom: 0.5rem; font-size: 0.75rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; color: var(--text-primary); text-transform: uppercase; letter-spacing: 0.05em;">
+                            <span class="material-icons" style="font-size: 14px; color: var(--color-primary);">insights</span>
                             Netflow
                         </h3>
                         <div style="flex: 1; position: relative;">
@@ -1665,7 +1668,7 @@ class Router {
         const fshareAvailable = item.fshare_available;
         const fshareCount = item.fshare_count || 0;
 
-        const cardWidth = variant === 'carousel' ? 'min-width: 200px; width: 200px;' : '';
+        const cardWidth = variant === 'carousel' ? 'min-width: 150px; width: 150px;' : '';
 
         return `
             <div class="poster-card" style="${cardWidth}" onclick="window.router.navigate('media/${mediaType}/${id}')">
@@ -1702,7 +1705,7 @@ class Router {
         const track = document.getElementById('trending-carousel');
         if (!track) return;
 
-        const cardWidth = 200 + 24; // card width + gap
+        const cardWidth = 150 + 16; // card width + gap
         const visibleCards = Math.floor(track.parentElement.offsetWidth / cardWidth);
 
         if (this.carouselIndex < this.carouselMax - visibleCards) {
@@ -1722,7 +1725,7 @@ class Router {
         const track = document.getElementById('trending-carousel');
         if (!track) return;
 
-        const cardWidth = 200 + 24; // card width + gap
+        const cardWidth = 150 + 16; // card width + gap
         const offset = this.carouselIndex * -cardWidth;
         track.style.transform = `translateX(${offset}px)`;
 
@@ -1738,7 +1741,7 @@ class Router {
         if (nextBtn) {
             const track = document.getElementById('trending-carousel');
             if (track) {
-                const cardWidth = 200 + 24;
+                const cardWidth = 150 + 16;
                 const visibleCards = Math.floor(track.parentElement.offsetWidth / cardWidth);
                 nextBtn.disabled = this.carouselIndex >= this.carouselMax - visibleCards;
             }
@@ -2061,11 +2064,11 @@ class Router {
 
     renderAccountsSection(accounts, container) {
         container.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
-                <h2 style="display: flex; align-items: center; gap: 0.75rem; font-size: 1.1rem; text-transform: uppercase; letter-spacing: 0.05em;">
-                    <span class="material-icons" style="color: var(--color-primary);">manage_accounts</span>
-                    Account Matrix
-                </h2>
+            <div class="trending-section" style="margin-bottom: 1rem;">
+                <h3 style="margin-bottom: 0.75rem; margin-left: 0.5rem; display: flex; align-items: center; gap: 8px; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary);">
+                    <span class="material-icons" style="color: #ffd700;">trending_up</span>
+                    Trending This Week
+                </h3>
                 <button class="add-btn" onclick="window.router.showConnectAccount()" style="width: auto; padding: .65rem 1.5rem; font-size: 0.75rem; border-radius: 8px;">
                     CONNECT IDENTITY
                 </button>
