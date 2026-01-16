@@ -1526,12 +1526,13 @@ input[type=range]::-webkit-slider-thumb:hover {
     height: 100%;
     background-size: cover;
     background-position: center;
-    transition: opacity 0.3s;
+    transition: transform 0.3s;
 }
 
 .poster-card:hover .poster-image {
-    opacity: 0.4;
-    /* Dim image to make text readable */
+    /* No opacity reduction for brighter look */
+    transform: scale(1.05);
+    /* Slight zoom for premium feel */
 }
 
 .poster-overlay {
@@ -1541,7 +1542,8 @@ input[type=range]::-webkit-slider-thumb:hover {
     width: 100%;
     height: 100%;
     padding: 1.5rem;
-    background: linear-gradient(to top, rgba(0, 0, 0, 0.95), rgba(0, 0, 0, 0.7) 40%, transparent);
+    /* More subtle gradient, mostly at the very bottom */
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.6) 30%, transparent 100%);
     display: flex;
     flex-direction: column;
     justify-content: flex-end;

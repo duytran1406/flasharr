@@ -892,8 +892,11 @@ class Router {
             root: document.getElementById('discover-scroll-container'),
             rootMargin: '400px', // Pre-fetch before user reaches the bottom
             threshold: 0.1
+
         });
 
+        // Use viewport as root (default) to catch when sentinel enters view
+        // regardless of container specifics, as long as it's scrollable.
         this.discoverObserver.observe(sentinel);
     }
 
@@ -912,7 +915,7 @@ class Router {
             if (loader) loader.style.display = 'block';
         }
 
-        const itemsPerPage = 21;
+        const itemsPerPage = 28;
         const s = this.discoverState;
 
         try {
