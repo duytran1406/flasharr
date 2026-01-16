@@ -1511,7 +1511,7 @@ class Router {
             <!-- Trending Carousel Mount -->
             <div id="trending-mount"></div>
 
-            <div style="display: grid; grid-template-columns: 6.5fr 3.5fr; gap: 1rem; height: 60vh; min-height: 300px; margin-bottom: 0;">
+            <div style="display: grid; grid-template-columns: 6.5fr 3.5fr; gap: 1rem; height: 75vh; min-height: 400px; margin-bottom: 0;">
                 
                 <!-- Left Column: Active Mission Pulse (Queue) -->
                 <div class="box-section" style="overflow: hidden; border-color: rgba(0,243,255,0.15);">
@@ -2070,11 +2070,11 @@ class Router {
 
     renderAccountsSection(accounts, container) {
         container.innerHTML = `
-            <div class="trending-section" style="margin-bottom: 1rem;">
-                <h3 style="margin-bottom: 0.75rem; margin-left: 0.5rem; display: flex; align-items: center; gap: 8px; font-size: 1rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary);">
-                    <span class="material-icons" style="color: #ffd700;">trending_up</span>
-                    Trending This Week
-                </h3>
+                <div class="box-section" style="margin-bottom: 1rem; border-color: rgba(255, 215, 0, 0.3);">
+                    <div class="box-label" style="color: #ffd700;">
+                        <span class="material-icons">trending_up</span>
+                        Trending This Week
+                    </div>
                 <button class="add-btn" onclick="window.router.showConnectAccount()" style="width: auto; padding: .65rem 1.5rem; font-size: 0.75rem; border-radius: 8px;">
                     CONNECT IDENTITY
                 </button>
