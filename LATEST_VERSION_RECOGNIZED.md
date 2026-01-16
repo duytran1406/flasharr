@@ -1,5 +1,5 @@
 # Latest Version Recognition
-**Version:** 0.1.174-beta
+**Version:** 0.1.175-beta
 **Date:** 2026-01-16
 **Status:** Recognized & Synced
 
@@ -23,6 +23,7 @@ The system has recognized version **0.1.168-beta** as the latest active deployme
     *   **UI ADDITION:** Added "DISCOVERY" label to Global Header.
     *   **UI FIX:** Resolves double icon issue when displaying search results in Global Header.
     *   **CRITICAL FIX:** Search now uses correct TMDB endpoint and respects active Movie/TV category.
+    *   **UX IMPROVEMENT:** Global Header Dynamically reflects Tab State (Movies/TV) or Search Query live during input.
     *   Ensured sidebar content renders immediately on view load.
     *   Toggle functionality verified.
 

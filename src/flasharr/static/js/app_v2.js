@@ -678,12 +678,41 @@ class Router {
 
     // --- DISCOVER / JELLYSEERR UI ---
 
+    updateDiscoveryHeader(text, icon, isSearch = false) {
+        const header = document.getElementById('header-dynamic-content');
+        if (!header) return;
+        const color = isSearch ? 'var(--color-primary)' : 'var(--text-primary)';
+
+        header.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                 <span class="material-icons" style="color: ${color};">${icon}</span>
+                 <h2 style="font-size: 1rem; font-weight: 800; letter-spacing: 0.1em; color: var(--text-primary); margin: 0; text-transform: uppercase;">${text}</h2>
+            </div>
+        `;
+    }
+
+    handleSearchInput(value) {
+        if (!value) {
+            const type = this.discoverState.type === 'movie' ? 'Movies' : 'TV Series';
+            const icon = this.discoverState.type === 'movie' ? 'movie' : 'tv';
+            this.updateDiscoveryHeader(type, icon);
+        } else {
+            this.updateDiscoveryHeader(`Searching: ${value}`, 'search', true);
+        }
+    }
+
     async loadDiscover(type = 'movie') {
         this.discoverState.type = type;
         this.discoverState.page = 1;
         this.discoverState.tmdbPage = 1;
         this.discoverState.buffer = [];
         this.discoverState.hasMore = true;
+
+        // Initial Header
+        const headerTitle = type === 'movie' ? 'Movies' : 'TV Series';
+        const headerIcon = type === 'movie' ? 'movie' : 'tv';
+        // Use timeout to ensure DOM header exists if we just navigated (though usually it exists)
+        setTimeout(() => this.updateDiscoveryHeader(headerTitle, headerIcon), 0);
 
         this.container.innerHTML = `
             <div class="discover-layout">
@@ -693,7 +722,8 @@ class Router {
                             <span class="material-icons" style="color: var(--text-muted);">search</span>
                             <input type="text" placeholder="Search Movies & TV Series directly..." 
                                    style="background: transparent; border: none; color: white; width: 100%; outline: none; font-size: 0.95rem; font-family: var(--font-main);"
-                                   onkeypress="if(event.key === 'Enter') window.router.executeTMDBSearch(this.value)">
+                                   onkeypress="if(event.key === 'Enter') window.router.executeTMDBSearch(this.value)"
+                                   oninput="window.router.handleSearchInput(this.value)">
                         </div>
 
                         <div style="display: flex; align-items: center;">
@@ -1025,16 +1055,7 @@ class Router {
 
     async executeTMDBSearch(q) {
         const grid = document.getElementById('discover-grid');
-        const header = document.getElementById('header-dynamic-content');
-
-        if (header) {
-            header.innerHTML = `
-                <div style="display: flex; align-items: center; gap: 0.75rem;">
-                     <span class="material-icons" style="color: var(--color-primary);">search</span>
-                     <h2 style="font-size: 1rem; font-weight: 800; letter-spacing: 0.1em; color: var(--text-primary); margin: 0;">SEARCH: ${q}</h2>
-                </div>
-            `;
-        }
+        this.updateDiscoveryHeader(`SEARCH: ${q}`, 'search', true);
 
         if (grid) grid.innerHTML = '<div class="loading-spinner"></div>';
 
