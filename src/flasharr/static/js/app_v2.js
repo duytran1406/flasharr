@@ -1346,7 +1346,7 @@ class Router {
         const initialLoader = document.getElementById('discover-initial-loader');
         if (initialLoader) {
             initialLoader.style.display = 'flex';
-            if (grid) grid.innerHTML = '';
+            // Don't clear grid here - it triggers infinite scroll
         } else if (grid) {
             grid.innerHTML = '<div class="loading-container" style="grid-column: 1 / -1; height: 100%;"><div class="loading-spinner"></div></div>';
         }
