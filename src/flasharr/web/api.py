@@ -16,6 +16,8 @@ from pathlib import Path
 
 from ..core.config import get_config
 from ..utils.formatters import format_size, format_speed, format_duration, format_eta
+from ..security.auth import require_auth, generate_api_key
+from ..security.validators import sanitize_filename, validate_url, validate_password
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +227,7 @@ def _format_task(task):
 
 
 @api_bp.route("/downloads", methods=["POST"])
+@require_auth
 def add_download() -> Dict[str, Any]:
     """Add a new download to engine."""
     try:
@@ -233,7 +236,23 @@ def add_download() -> Dict[str, Any]:
             return jsonify({"status": "error", "message": "URL required"}), 400
         
         url = data["url"]
+        
+        # Validate URL to prevent SSRF
+        try:
+            validate_url(url)
+        except ValueError as e:
+            logger.warning(f"Invalid URL rejected: {url} - {e}")
+            return jsonify({"status": "error", "message": f"Invalid URL: {str(e)}"}), 400
+        
         name = data.get("name")
+        
+        # Sanitize filename if provided
+        if name:
+            try:
+                name = sanitize_filename(name)
+            except ValueError as e:
+                return jsonify({"status": "error", "message": f"Invalid filename: {str(e)}"}), 400
+        
         category = data.get("category", "Manual")
         
         if not hasattr(current_app, 'sabnzbd') or not current_app.sabnzbd:
@@ -253,6 +272,7 @@ def add_download() -> Dict[str, Any]:
 
 
 @api_bp.route("/downloads/<task_id>", methods=["DELETE"])
+@require_auth
 def delete_download(task_id: str) -> Dict[str, Any]:
     """Delete a download."""
     try:
@@ -416,6 +436,7 @@ def list_accounts():
 
 
 @api_bp.route("/accounts/add", methods=["POST"])
+@require_auth
 def add_account():
     """Add Fshare account."""
     try:
@@ -424,6 +445,12 @@ def add_account():
         password = data.get("password")
         if not email or not password:
             return jsonify({"status": "error", "message": "Email and password required"}), 400
+        
+        # Validate password complexity
+        try:
+            validate_password(password)
+        except ValueError as e:
+            return jsonify({"status": "error", "message": str(e)}), 400
             
         account = current_app.account_manager.add_account(email, password)
         return jsonify({"status": "ok", "account": account})
@@ -432,6 +459,7 @@ def add_account():
 
 
 @api_bp.route("/accounts/<email>", methods=["DELETE"])
+@require_auth
 def remove_account(email: str):
     """Remove account."""
     try:
@@ -483,6 +511,7 @@ def get_settings():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @api_bp.route("/settings", methods=["PUT"])
+@require_auth
 def update_settings():
     """Update app settings."""
     try:
@@ -571,11 +600,11 @@ def verify_account():
         return jsonify({"status": "error", "message": f"Verification failed: {str(e)}"}), 500
 
 @api_bp.route("/settings/generate-api-key", methods=["POST"])
-def generate_api_key():
+@require_auth
+def generate_new_api_key():
     """Generate a new random API key."""
     try:
-        import secrets
-        new_key = secrets.token_hex(16)
+        new_key = generate_api_key()
         return jsonify({"status": "ok", "key": new_key})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500

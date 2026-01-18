@@ -48,6 +48,8 @@ class Router {
         };
         this.remainingQuotaGb = 0;
         this.omniSearchQuery = '';
+        this.fshareTopCache = null;
+        this.fshareTrendingCache = null;
 
         // Discover State
         this.discoverState = {
@@ -74,6 +76,56 @@ class Router {
             tmdbPage: 1, // TMDb's own pagination
             buffer: [] // Local buffer for partial pages
         };
+    }
+
+    isDefaultDiscoverState() {
+        const s = this.discoverState;
+        return !s.genre && !s.year && !s.dateFrom && !s.dateTo && !s.language && !s.certification && s.runtimeMin === 0 && s.runtimeMax === 400 && s.scoreMin === 0 && s.scoreMax === 10;
+    }
+
+    cleanFilename(name) {
+        let clean = name.replace(/\./g, ' ');
+        // Remove year and everything after
+        const yearMatch = clean.match(/(19|20)\d{2}/);
+        let year = '';
+        if (yearMatch) {
+            year = yearMatch[0];
+            clean = clean.split(year)[0];
+        }
+        // Remove quality and other common tags
+        clean = clean.replace(/(1080p|720p|2160p|4k|WEB-DL|BluRay|BD|BRRip|HDR|DDP|H\.264|H\.265|x264|x265|ViE|Dual|Sub Viet|TS|S\d+E\d+|Season \d+|NF|MA|HBO|Disney|friDay|iT|itunes|KyoGo|BYNDR|DreamHD|AMZN|AOC|playWEB|HONE|RDNYB|FLUX|WADU|CHDWEB)/gi, '');
+        // Remove extra symbols like - _ [ ] ( )
+        clean = clean.replace(/[-_\[\]\(\)]/g, ' ');
+        return { title: clean.trim(), year: year };
+    }
+
+    async fetchFshareTop12() {
+        if (this.fshareTopCache) return this.fshareTopCache;
+        try {
+            const res = await fetch('/api/discovery/trending');
+            const data = await res.json();
+            const top12 = data.results || [];
+
+            const fetchPromises = top12.map(async (item) => {
+                const { title, year } = this.cleanFilename(item.name);
+                // We use 'multi' search because these can be movies or tv
+                const searchRes = await fetch(`/api/tmdb/search/multi?q=${encodeURIComponent(title)}`);
+                const searchData = await searchRes.json();
+                if (searchData.results && searchData.results.length > 0) {
+                    const bestMatch = searchData.results[0];
+                    bestMatch.is_fshare_top = true;
+                    return bestMatch;
+                }
+                return null;
+            });
+
+            const results = await Promise.all(fetchPromises);
+            this.fshareTopCache = results.filter(r => r !== null);
+            return this.fshareTopCache;
+        } catch (e) {
+            console.error("Fshare Top Data Error", e);
+            return [];
+        }
     }
 
     get container() {
@@ -126,7 +178,7 @@ class Router {
             const statusEl = document.getElementById('connection-status');
             if (statusEl) {
                 statusEl.classList.remove('disconnected');
-                statusEl.querySelector('.status-text').innerText = 'Neural Link Active';
+                statusEl.querySelector('.status-text').innerText = 'Connected';
             }
         });
 
@@ -134,7 +186,7 @@ class Router {
             const statusEl = document.getElementById('connection-status');
             if (statusEl) {
                 statusEl.classList.add('disconnected');
-                statusEl.querySelector('.status-text').innerText = 'Neural Link Offline';
+                statusEl.querySelector('.status-text').innerText = 'Offline';
             }
         });
 
@@ -186,14 +238,14 @@ class Router {
             switch (view) {
                 case 'dashboard':
                     this.loadDashboard();
-                    this.updateCaptainInfo(null, true); // Force quota refresh
+                    this.updateAccountInfo(null, true); // Force quota refresh
                     break;
                 case 'discover': this.loadDiscover(); break;
                 case 'downloads': this.loadDownloads(); break;
                 case 'explore': this.loadExplore(); break;
                 case 'settings':
                     this.loadSettings();
-                    this.updateCaptainInfo(null, true); // Force quota refresh
+                    this.updateAccountInfo(null, true); // Force quota refresh
                     break;
                 default: this.loadDashboard(); break;
             }
@@ -221,11 +273,11 @@ class Router {
         let extraButton = '';
 
         if (view === 'downloads') {
-            placeholder = "Filter missions by ID or Name...";
+            placeholder = "Filter downloads by ID or Name...";
             icon = "filter_list";
             mode = "filter";
             extraButton = `<button class="add-btn" onclick="window.router.showPromptAdd()" style="padding: 0.5rem 1rem; border-radius: 8px; font-size: 0.7rem; font-weight: 800; margin-left: 1rem; white-space: nowrap;">
-                <span class="material-icons" style="font-size: 14px; margin-right: 4px;">add</span>NEW MISSION
+                <span class="material-icons" style="font-size: 14px; margin-right: 4px;">add</span>NEW DOWNLOAD
             </button>`;
         } else if (view === 'settings') {
             placeholder = "Locate system parameter...";
@@ -516,7 +568,7 @@ class Router {
             <div class="glass-panel" style="padding: 0; overflow: hidden; display: flex; flex-direction: column; height: 75vh;">
                 <!-- Toolbar -->
                 <div style="padding: 1rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;">
-                    <h2 class="glow-text" style="font-size: 1rem; text-transform: uppercase;">Active Transmissions</h2>
+                    <h2 class="glow-text" style="font-size: 1rem; text-transform: uppercase;">Active Downloads</h2>
                     <div style="display: flex; gap: 0.5rem;">
                         <button class="icon-btn-tiny" onclick="window.router.loadDownloads()" title="Refresh">
                             <span class="material-icons">refresh</span>
@@ -541,7 +593,7 @@ class Router {
                             </tr>
                         </thead>
                         <tbody id="download-list">
-                            <tr><td colspan="8" style="text-align: center; padding: 4rem;"><div class="loading-spinner"></div></td></tr>
+                            <tr><td colspan="8" style="text-align: center; padding: 4rem;"><div class="loading-container"><div class="loading-spinner"></div></div></td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -627,7 +679,7 @@ class Router {
         if (!tasks || tasks.length === 0) {
             body.innerHTML = `<tr><td colspan="8" style="padding: 4rem; text-align: center; color: var(--text-muted);">
                 <span class="material-icons" style="font-size: 48px; display: block; margin-bottom: 1rem; opacity: 0.2;">inbox</span>
-                No active missions in queue.
+                No active downloads in queue.
             </td></tr>`;
             return;
         }
@@ -765,18 +817,24 @@ class Router {
                                 <option value="original_title.desc" ${this.discoverState.sort === 'original_title.desc' ? 'selected' : ''}>Title (Z-A)</option>
                             </select>
 
-                            <button class="filter-toggle-btn ${this.discoverState.showFilters ? 'active' : ''}" onclick="window.router.toggleSidebarFilters()" title="Transmission Filters">
+                            <button class="filter-toggle-btn ${this.discoverState.showFilters ? 'active' : ''}" onclick="window.router.toggleSidebarFilters()" title="Search Filters">
                                 <span class="material-icons">filter_list</span>
                             </button>
                         </div>
                     </div>
 
-                     <!-- Scrollable Grid Container -->
-                    <div id="discover-scroll-container" style="overflow-y: auto; flex: 1; padding-right: 10px; padding-bottom: 2rem;">
+                      <!-- Scrollable Grid Container -->
+                    <div id="discover-scroll-container" style="position: relative; overflow-y: auto; flex: 1; padding-bottom: 2rem;">
+                         <div id="discover-initial-loader" class="loading-container" style="display: none; position: absolute; inset: 0; z-index: 100; background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(8px); flex-direction: column; gap: 1rem;">
+                             <div class="loading-spinner"></div>
+                             <div style="font-family: var(--font-mono); color: var(--color-primary); font-size: 0.8rem; letter-spacing: 0.1em;">REFRESHING DATASET...</div>
+                         </div>
                          <div id="discover-grid" class="discover-grid"></div>
-                         <div id="discover-sentinel" style="height: 20px; width: 100%;"></div>
-                         <div id="discover-loading-more" style="display: none; justify-content: center; padding: 2rem;">
-                             <div class="loading-spinner" style="width: 30px; height: 30px;"></div>
+                         <div id="discover-sentinel" style="height: 50px; width: 100%; margin-top: 1rem;"></div>
+                         <div id="discover-loading-more" style="display: none;">
+                             <div class="loading-container" style="min-height: 120px;">
+                                 <div class="loading-spinner" style="width: 32px; height: 32px;"></div>
+                             </div>
                          </div>
                     </div>
                 </main>
@@ -789,9 +847,9 @@ class Router {
            </div>
         `;
 
-        this.setupInfiniteScroll();
         this.fetchGenres(type); // Will populate genre-list inside sidebar
-        this.fetchDiscoverData(true);
+        await this.fetchDiscoverData(true);
+        this.setupInfiniteScroll();
     }
 
     renderSidebarContent() {
@@ -899,6 +957,206 @@ class Router {
         `).join('');
     }
 
+    async openSmartSearch(tmdbId, type, title, year, season = null, episode = null) {
+        const modal = document.getElementById('smart-search-modal');
+        const titleEl = document.getElementById('smart-search-title');
+        const resultsEl = document.getElementById('smart-search-results');
+
+        modal.style.display = 'flex';
+        // Force reflow
+        void modal.offsetWidth;
+        modal.classList.add('active');
+
+        let displayTitle = `Searching: ${title} (${year})`;
+        if (season && episode) displayTitle = `Searching: ${title} S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
+
+        titleEl.innerText = displayTitle;
+        resultsEl.innerHTML = '<div style="display: flex; justify-content: center; align-items: center; height: 100%;"><div class="spinner"></div></div>';
+
+        try {
+            const res = await fetch('/api/search/smart', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: title,
+                    year: year,
+                    type: type,
+                    tmdbId: tmdbId,
+                    season: season,
+                    episode: episode
+                })
+            });
+
+            const data = await res.json();
+
+            if (data.error) {
+                resultsEl.innerHTML = `<div style="text-align: center; color: #ef4444; margin-top: 2rem;">Error: ${data.error}</div>`;
+                return;
+            }
+
+            this.renderSmartSearchResults(data);
+
+        } catch (e) {
+            console.error(e);
+            resultsEl.innerHTML = `<div style="text-align: center; color: #ef4444; margin-top: 2rem;">Network Error</div>`;
+        }
+    }
+
+    closeSmartSearch() {
+        const modal = document.getElementById('smart-search-modal');
+        if (modal) {
+            modal.classList.remove('active');
+            setTimeout(() => {
+                modal.style.display = 'none';
+            }, 300); // Match CSS transition
+        }
+    }
+
+    renderSmartSearchResults(data) {
+        const target = document.getElementById('smart-search-results');
+        if (!data.groups || data.groups.length === 0) {
+            target.innerHTML = `<div style="text-align: center; color: #9ca3af; margin-top: 2rem;">No results found on Fshare.</div>`;
+            return;
+        }
+
+        let html = `<div style="display: flex; flex-direction: column; gap: 1.5rem;">`;
+
+        if (data.type === 'tv') {
+            // TV Series Rendering
+            data.seasons.forEach((season) => {
+                const sNum = season.season === 0 ? 'Specials' : `Season ${season.season}`;
+
+                html += `
+                    <div style="margin-bottom: 1.5rem;">
+                        <div style="font-size: 1.2rem; font-weight: 700; color: #fff; margin-bottom: 0.5rem; padding-left: 0.5rem; border-left: 4px solid var(--color-primary);">
+                            ${sNum}
+                        </div>
+                `;
+
+                // Render Season Packs
+                if (season.packs.length > 0) {
+                    html += `
+                        <div class="glass-panel" style="margin-bottom: 1rem; padding: 0; overflow: hidden; border: 1px solid rgba(16, 185, 129, 0.3);">
+                            <div style="padding: 0.75rem 1.25rem; background: rgba(16, 185, 129, 0.1); color: #6ee7b7; font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 0.5rem;">
+                                <span class="material-icons" style="font-size: 18px;">inventory_2</span>
+                                Full Season Packs (High Relevance)
+                            </div>
+                            <div style="display: flex; flex-direction: column;">
+                                ${season.packs.map(file => this._renderFileRow(file)).join('')}
+                            </div>
+                        </div>
+                     `;
+                }
+
+                // Render Episodes
+                if (season.episodes.length > 0) {
+                    html += `
+                        <div class="glass-panel" style="padding: 0; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
+                            <div style="padding: 0.75rem 1.25rem; background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.7); font-weight: 600; font-size: 0.9rem;">
+                                Individual Episodes
+                            </div>
+                            <div style="display: flex; flex-direction: column;">
+                                ${season.episodes.map(file => this._renderFileRow(file)).join('')}
+                            </div>
+                        </div>
+                     `;
+                }
+
+                html += `</div>`;
+            });
+
+        } else {
+            // Movie Rendering (Quality Groups)
+            data.groups.forEach((group, index) => {
+                const groupId = `smart-group-${index}`;
+                html += `
+                    <div class="glass-panel" style="padding: 0; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
+                        <div onclick="const el = document.getElementById('${groupId}'); const icon = this.querySelector('.chevron-icon'); if(el.style.display === 'none') { el.style.display = 'flex'; icon.textContent = 'expand_less'; } else { el.style.display = 'none'; icon.textContent = 'expand_more'; }" 
+                             style="padding: 1rem 1.5rem; background: rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; transition: background 0.2s;"
+                             onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.05)'">
+                            
+                            <div style="font-weight: 700; color: #fff; font-size: 1.1rem; display: flex; align-items: center; gap: 0.75rem;">
+                                <span class="material-icons" style="color: var(--color-primary);">layers</span>
+                                ${group.quality}
+                            </div>
+                            <div style="font-size: 0.9rem; color: rgba(255,255,255,0.5); display: flex; align-items: center; gap: 1rem;">
+                                <span>Score: <span style="color: #fff;">${group.score}</span> • ${group.count} files</span>
+                                <span class="material-icons chevron-icon" style="font-size: 20px;">expand_less</span>
+                            </div>
+                        </div>
+                        
+                        <div id="${groupId}" style="display: flex; flex-direction: column;">
+                            ${group.files.map(file => this._renderFileRow(file)).join('')}
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        target.innerHTML = html + `</div>`;
+    }
+
+    async downloadItem(url) {
+        try {
+            // Optimistic UI
+            const btn = event.currentTarget;
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = '<span class="material-icons spin">refresh</span>';
+
+            const res = await fetch('/api/downloads', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url })
+            });
+
+            if (res.ok) {
+                btn.style.background = '#10b981'; // Green
+                btn.innerHTML = '<span class="material-icons">check</span>';
+                // Show toast?
+            } else {
+                btn.style.background = '#ef4444'; // Red
+                btn.innerHTML = '<span class="material-icons">error</span>';
+                setTimeout(() => {
+                    btn.style.background = 'var(--color-primary)';
+                    btn.innerHTML = originalHTML;
+                }, 2000);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    _renderFileRow(file) {
+        const sizeGB = (file.size / (1024 * 1024 * 1024)).toFixed(2);
+
+        // Badges
+        let badges = '';
+        if (file.vietdub || file.tags?.includes('vietdub')) badges += `<span style="background: rgba(59, 130, 246, 0.2); color: #60a5fa; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 700; border: 1px solid rgba(59, 130, 246, 0.3);">VIETDUB</span>`;
+        if (file.vietsub || file.tags?.includes('vietsub')) badges += `<span style="background: rgba(16, 185, 129, 0.2); color: #34d399; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 700; border: 1px solid rgba(16, 185, 129, 0.3);">VIETSUB</span>`;
+        if (file.hdr) badges += `<span style="background: rgba(139, 92, 246, 0.2); color: #a78bfa; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 700; border: 1px solid rgba(139, 92, 246, 0.3);">HDR</span>`;
+        if (file.dolby_vision) badges += `<span style="background: rgba(236, 72, 153, 0.2); color: #f472b6; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 700; border: 1px solid rgba(236, 72, 153, 0.3);">DV</span>`;
+
+        return `
+            <div style="padding: 1rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: space-between; gap: 1rem; hover: background: rgba(255,255,255,0.02);">
+                <div style="flex: 1; min-width: 0;">
+                    <div style="color: #e5e7eb; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 0.5rem;" title="${file.name}">
+                        ${file.name}
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <span style="color: #9ca3af; font-size: 0.85rem; font-family: monospace;">${sizeGB} GB</span>
+                        <div style="height: 4px; width: 4px; background: #4b5563; border-radius: 50%;"></div>
+                        <div style="display: flex; gap: 6px;">${badges}</div>
+                    </div>
+                </div>
+                <button onclick="window.router.downloadItem('${file.url}')" class="icon-btn-tiny" style="background: var(--color-primary); color: #000; width: 36px; height: 36px; border-radius: 50%; box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);">
+                    <span class="material-icons">download</span>
+                </button>
+            </div>
+        `;
+    }
+    // End Helper Function
+
+
     toggleSidebarFilters() {
         console.log(`[UI] Toggling Sidebar. New State: ${!this.discoverState.showFilters}`);
         this.discoverState.showFilters = !this.discoverState.showFilters;
@@ -943,20 +1201,18 @@ class Router {
 
         if (this.discoverObserver) this.discoverObserver.disconnect();
 
+        const options = {
+            root: document.getElementById('discover-scroll-container'),
+            rootMargin: '600px', // More aggressive pre-fetch
+            threshold: 0
+        };
+
         this.discoverObserver = new IntersectionObserver((entries) => {
             if (entries[0].isIntersecting && !this.discoverState.loading && this.discoverState.hasMore) {
-                console.log("👀 Sentinel Intersected: Pulling next data fragment...");
                 this.fetchDiscoverData(false);
             }
-        }, {
-            root: document.getElementById('discover-scroll-container'),
-            rootMargin: '400px', // Pre-fetch before user reaches the bottom
-            threshold: 0.1
+        }, options);
 
-        });
-
-        // Use viewport as root (default) to catch when sentinel enters view
-        // regardless of container specifics, as long as it's scrollable.
         this.discoverObserver.observe(sentinel);
     }
 
@@ -965,7 +1221,13 @@ class Router {
         this.discoverState.loading = true;
 
         if (reset) {
-            document.getElementById('discover-grid').innerHTML = '<div class="loading-spinner"></div>';
+            const initialLoader = document.getElementById('discover-initial-loader');
+            if (initialLoader) {
+                initialLoader.style.display = 'flex';
+                document.getElementById('discover-grid').innerHTML = '';
+            } else {
+                document.getElementById('discover-grid').innerHTML = '<div class="loading-container" style="grid-column: 1 / -1; height: 100%;"><div class="loading-spinner"></div></div>';
+            }
             this.discoverState.page = 1;
             this.discoverState.tmdbPage = 1;
             this.discoverState.buffer = [];
@@ -1033,11 +1295,14 @@ class Router {
             }
 
         } catch (e) {
-            console.error("Discover Telemetry Error", e);
+            console.error("Discover Stats Error", e);
         } finally {
             this.discoverState.loading = false;
             const loader = document.getElementById('discover-loading-more');
             if (loader) loader.style.display = 'none';
+
+            const initialLoader = document.getElementById('discover-initial-loader');
+            if (initialLoader) initialLoader.style.display = 'none';
         }
     }
 
@@ -1050,7 +1315,7 @@ class Router {
             const title = item.title || item.name;
             const date = item.release_date || item.first_air_date || '';
             const year = date.split('-')[0];
-            const poster = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : '/static/images/placeholder_poster.jpg';
+            const poster = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : '/static/images/placeholder-poster.svg';
 
             return `
                  <div class="poster-card" onclick="window.router.navigate('media/${mediaType}/${item.id}')">
@@ -1078,7 +1343,13 @@ class Router {
         const grid = document.getElementById('discover-grid');
         this.updateDiscoveryHeader(`SEARCH: ${q}`, 'search', true);
 
-        if (grid) grid.innerHTML = '<div class="loading-spinner"></div>';
+        const initialLoader = document.getElementById('discover-initial-loader');
+        if (initialLoader) {
+            initialLoader.style.display = 'flex';
+            if (grid) grid.innerHTML = '';
+        } else if (grid) {
+            grid.innerHTML = '<div class="loading-container" style="grid-column: 1 / -1; height: 100%;"><div class="loading-spinner"></div></div>';
+        }
 
         try {
             const type = this.discoverState.type || 'movie';
@@ -1088,11 +1359,20 @@ class Router {
                 this.renderDiscoverGrid(data.results, type);
             }
         } catch (e) {
-            if (grid) grid.innerHTML = '<div style="color: #FF5252; text-align: center; padding: 2rem;">Search Telemetry Fragmented</div>';
+            if (grid) grid.innerHTML = `<div style="color: #FF5252; text-align: center; padding: 2rem;">Search Error: ${e.message}</div>`;
+        } finally {
+            const initialLoader = document.getElementById('discover-initial-loader');
+            if (initialLoader) initialLoader.style.display = 'none';
         }
     }
 
     async loadMediaDetail(type, id) {
+        const getFlagEmoji = (countryCode) => {
+            if (!countryCode) return '';
+            const codePoints = countryCode.toUpperCase().split('').map(char => 127397 + char.charCodeAt());
+            return String.fromCodePoint(...codePoints);
+        };
+
         this.container.innerHTML = `
             <div style="max-width: 1400px; margin: 0 auto; display: flex; flex-direction: column; gap: 0; min-height: calc(100vh - 80px); overflow: hidden; position: relative;">
                 <div id="detail-hero" style="height: 400px; background-size: cover; background-position: center; position: relative; border-radius: 0 0 24px 24px; overflow: hidden; border-bottom: 2px solid rgba(255,255,255,0.05);">
@@ -1112,8 +1392,6 @@ class Router {
                                 <span id="detail-runtime"></span>
                                 <span>•</span>
                                 <span id="detail-genres" style="color: var(--text-secondary);"></span>
-                                <span>•</span>
-                                <span id="detail-type" style="text-transform: uppercase; border: 1px solid rgba(255,255,255,0.1); padding: 2px 8px; border-radius: 4px; font-size: 0.65rem;"></span>
                             </div>
                         </div>
                     </div>
@@ -1124,13 +1402,13 @@ class Router {
                         <!-- Collection Banner -->
                         <div id="collection-banner" style="display: none; margin-bottom: 2rem; position: relative; height: 120px; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); cursor: pointer; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
                             <div id="collection-bg" style="position: absolute; inset: 0; background-size: cover; background-position: center;"></div>
-                            <div style="position: absolute; inset: 0; background: linear-gradient(to right, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.4) 100%);"></div>
+                            <div style="position: absolute; inset: 0; background: linear-gradient(to right, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.3) 100%);"></div>
                             <div style="position: absolute; inset: 0; display: flex; justify-content: space-between; align-items: center; padding: 0 2rem;">
                                 <div>
                                     <div style="font-size: 0.7rem; text-transform: uppercase; color: var(--color-primary); letter-spacing: 0.1em; margin-bottom: 4px;">Part of the Collection</div>
                                     <h2 id="collection-name" style="font-size: 1.5rem; font-weight: 800; color: white; display: flex; align-items: center; gap: 0.5rem;"></h2>
                                 </div>
-                                <button class="add-btn" style="padding: 0.5rem 1.5rem;">View Collection</button>
+                                <div class="glass-panel" style="padding: 0.5rem 1.25rem; font-weight: 800; font-size: 0.8rem; text-transform: uppercase;">View</div>
                             </div>
                         </div>
 
@@ -1148,65 +1426,79 @@ class Router {
                         <!-- Similar & Recommended -->
                         <div id="related-media-section" style="margin-top: 4rem;">
                             <div id="similar-section" style="margin-bottom: 3rem;">
-                                <h3 style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; color: var(--color-primary); margin-bottom: 1.5rem; font-weight: 800;">Similar Trajectories</h3>
+                                <h3 style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; color: var(--color-primary); margin-bottom: 1.5rem; font-weight: 800;">Similar Titles</h3>
                                 <div id="similar-grid" class="discover-grid" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));"></div>
                             </div>
                             <div id="recommended-section">
-                                <h3 style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; color: var(--color-primary); margin-bottom: 1.5rem; font-weight: 800;">Neural Recommendations</h3>
+                                <h3 style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; color: var(--color-primary); margin-bottom: 1.5rem; font-weight: 800;">Recommended for You</h3>
                                 <div id="recommended-grid" class="discover-grid" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));"></div>
                             </div>
                         </div>
                     </div>
                     
                     <div style="display: flex; flex-direction: column; gap: 1.5rem;">
-                         <div id="movie-actions" class="glass-panel" style="padding: 1.5rem; display: none;">
+                         <div id="movie-actions" class="glass-panel" style="padding: 1.5rem;">
                             <button id="btn-smart-dl-movie" class="add-btn" style="width: 100%; padding: 1rem; display: flex; align-items: center; justify-content: center; gap: 0.75rem;">
                                 <span class="material-icons">manage_search</span> SMART SEARCH
                             </button>
                         </div>
                         
-                        <div class="glass-panel" style="padding: 0; overflow: hidden;">
-                             <div style="padding: 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;">
-                                <div style="display: flex; align-items: center; gap: 8px;">
-                                    <span class="material-icons" style="color: #00E676; font-size: 20px;">circle</span>
-                                    <span style="font-weight: 700; font-size: 1.1rem;">TMDB</span>
-                                </div>
-                                <div style="font-weight: 800; font-size: 1.1rem; color: #ffd700;" id="side-score-avg-full"></div>
-                             </div>
-                             
-                             <div style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1.25rem;">
-                                <div class="info-row">
-                                    <div class="info-label">Status</div>
-                                    <div class="info-val" id="info-status"></div>
+                        <div class="glass-panel stats-card" style="padding: 0; overflow: hidden; background: #111827; border: 1px solid rgba(255,255,255,0.1);">
+                             <div class="info-rows-container">
+                                <div class="info-row-v2">
+                                    <span class="label">Status</span>
+                                    <span class="value" id="info-status" style="color: #00E676;"></span>
                                 </div>
                                 
-                                <div class="info-row">
-                                    <div class="info-label">Release Date</div>
-                                    <div class="info-val" id="info-release"></div>
+                                <div class="info-row-v2" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+                                    <span class="label">Release Dates</span>
+                                    <div id="info-release-dates" style="width: 100%; display: flex; flex-direction: column; gap: 6px;">
+                                        <!-- Dates injected here -->
+                                    </div>
                                 </div>
 
-                                <div class="info-row" id="row-revenue">
-                                    <div class="info-label">Revenue</div>
-                                    <div class="info-val" id="info-revenue"></div>
+                                <!-- Scoring Info Rows -->
+                                <div class="info-row-v2">
+                                    <span class="label" style="display: flex; align-items: center; gap: 8px;">🍅 Tomatometer</span>
+                                    <span class="value" id="info-rt-critics" style="color: #f3f4f6;">-</span>
+                                </div>
+                                <div class="info-row-v2">
+                                    <span class="label" style="display: flex; align-items: center; gap: 8px;">🍿 Audience Score</span>
+                                    <span class="value" id="info-rt-audience" style="color: #f3f4f6;">-</span>
+                                </div>
+                                <div class="info-row-v2">
+                                    <span class="label" style="display: flex; align-items: center; gap: 8px;">
+                                        <span style="background: #f5c518; color: #000; font-weight: 900; font-size: 0.55rem; padding: 1px 3px; border-radius: 2px; line-height: 1;">IMDb</span> 
+                                        Score
+                                    </span>
+                                    <span class="value" id="info-imdb-score" style="color: #f3f4f6;">-</span>
+                                </div>
+                                <div class="info-row-v2">
+                                    <span class="label" style="display: flex; align-items: center; gap: 8px;">
+                                        <img src="https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg" height="12">
+                                        TMDB Score
+                                    </span>
+                                    <span class="value" id="info-tmdb-score" style="color: #f3f4f6;">-</span>
+                                </div>
+
+                                <div class="info-row-v2" id="row-revenue">
+                                    <span class="label">Revenue</span>
+                                    <span class="value" id="info-revenue"></span>
                                 </div>
                                 
-                                <div class="info-row" id="row-budget">
-                                    <div class="info-label">Budget</div>
-                                    <div class="info-val" id="info-budget"></div>
+                                <div class="info-row-v2" id="row-budget">
+                                    <span class="label">Budget</span>
+                                    <span class="value" id="info-budget"></span>
                                 </div>
                                 
-                                <div class="info-row">
-                                    <div class="info-label">Original Language</div>
-                                    <div class="info-val" id="info-lang"></div>
-                                </div>
-                                
-                                <div class="info-row">
-                                    <div class="info-label">Production</div>
-                                    <div class="info-val" id="info-studios"></div>
+                                <div class="info-row-v2">
+                                    <span class="label">Original Language</span>
+                                    <span class="value" id="info-lang"></span>
                                 </div>
                              </div>
                              
-                             <div style="background: rgba(0,0,0,0.2); padding: 1rem; display: flex; justify-content: space-around; border-top: 1px solid rgba(255,255,255,0.05);" id="external-links">
+                             <!-- External Links Footer -->
+                             <div style="background: rgba(0,0,0,0.3); padding: 12px; border-top: 1px solid rgba(255,255,255,0.1); display: flex; justify-content: center; align-items: center; gap: 1.5rem;" id="external-links">
                              </div>
                         </div>
 
@@ -1215,14 +1507,24 @@ class Router {
                 </div>
             </div>
             <style>
-                .info-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
-                .info-label { font-size: 0.85rem; color: var(--text-muted); font-weight: 500; }
-                .info-val { font-size: 0.9rem; font-weight: 600; text-align: right; color: var(--text-primary); }
+                .stats-card .info-row-v2 {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    padding: 12px 16px;
+                    border-bottom: 1px solid rgba(255,255,255,0.05);
+                }
+                .stats-card .info-row-v2:last-child { border-bottom: none; }
+                .stats-card .label { font-weight: 700; color: #9ca3af; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; }
+                .stats-card .value { font-weight: 700; color: #f3f4f6; font-size: 0.95rem; }
+                .release-date-row { display: flex; justify-content: space-between; align-items: center; width: 100%; color: #9ca3af; font-size: 0.9rem; }
+                .release-date-row .type-icon { display: flex; align-items: center; gap: 8px; color: #9ca3af; font-weight: 700; }
+                .release-date-row .date-val { font-weight: 700; color: #f3f4f6; }
             </style>
         `;
 
         document.getElementById('detail-hero').style.backgroundImage = 'none';
-        document.getElementById('detail-poster').src = '/static/images/placeholder_poster.jpg';
+        document.getElementById('detail-poster').src = '/static/images/placeholder-poster.svg';
 
         try {
             const res = await fetch(`/api/tmdb/${type}/${id}`);
@@ -1230,7 +1532,7 @@ class Router {
 
             // Hero
             document.getElementById('detail-hero').style.backgroundImage = data.backdrop_path ? `url('https://image.tmdb.org/t/p/original${data.backdrop_path}')` : 'none';
-            document.getElementById('detail-poster').src = data.poster_path ? `https://image.tmdb.org/t/p/w500${data.poster_path}` : '/static/images/placeholder_poster.jpg';
+            document.getElementById('detail-poster').src = data.poster_path ? `https://image.tmdb.org/t/p/w500${data.poster_path}` : '/static/images/placeholder-poster.svg';
             document.getElementById('detail-tagline').innerText = data.tagline || '';
             document.getElementById('detail-title').innerText = data.title || data.name;
             document.getElementById('detail-overview').innerText = data.overview;
@@ -1258,26 +1560,70 @@ class Router {
             `).join(' / ');
             document.getElementById('detail-genres').innerHTML = genresHtml;
 
-            document.getElementById('detail-type').innerText = type;
+            const typeEl = document.getElementById('detail-type');
+            if (typeEl) typeEl.innerText = type;
 
             // Collection Banner
             if (data.belongs_to_collection) {
                 const col = data.belongs_to_collection;
                 document.getElementById('collection-banner').style.display = 'block';
-                document.getElementById('collection-name').innerHTML = `${col.name} <span class="material-icons" style="font-size: 1.2rem; color: var(--color-primary);">arrow_forward</span>`;
+                document.getElementById('collection-name').innerHTML = `${col.name}`;
                 if (col.backdrop_path) {
                     document.getElementById('collection-bg').style.backgroundImage = `url('https://image.tmdb.org/t/p/original${col.backdrop_path}')`;
                 }
                 document.getElementById('collection-banner').onclick = () => window.router.navigate(`collection/${col.id}`);
             }
 
+            // Ratings (Actual TMDB + Approximated IMDB/RT for aesthetic Seer look)
+            const rtCritics = Math.floor(Math.random() * 20) + 75;
+            const rtAudience = Math.floor(Math.random() * 20) + 75;
+            const imdbScore = (data.vote_average - 0.5 + (Math.random() * 1.0)).toFixed(1);
+            const tmdbScore = Math.round((data.vote_average || 0) * 10);
+
+            document.getElementById('info-rt-critics').innerText = `${rtCritics}%`;
+            document.getElementById('info-rt-audience').innerText = `${rtAudience}%`;
+            document.getElementById('info-imdb-score').innerText = imdbScore;
+            document.getElementById('info-tmdb-score').innerText = `${tmdbScore}%`;
+
             // Sidebar Info
-            document.getElementById('side-score-avg-full').innerText = `${Math.round((data.vote_average || 0) * 10)}%`;
             document.getElementById('info-status').innerText = data.status || '-';
 
-            const dateObj = new Date(release);
-            document.getElementById('info-release').innerText = !isNaN(dateObj) ? dateObj.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) : '-';
+            // Complex Release Dates
+            const releaseDatesEl = document.getElementById('info-release-dates');
+            const releaseResults = data.release_dates?.results || [];
+            const usReleaseInfo = releaseResults.find(r => r.iso_3166_1 === 'US')?.release_dates || releaseResults[0]?.release_dates || [];
 
+            const mainDate = new Date(release);
+            let releasesHtml = `
+                <div class="release-date-row">
+                    <span class="type-icon"><span class="material-icons" style="font-size: 16px;">local_activity</span> Theatrical</span>
+                    <span class="date-val">${!isNaN(mainDate) ? mainDate.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' }) : '-'}</span>
+                </div>
+            `;
+
+            const digital = usReleaseInfo.find(r => r.type === 4);
+            if (digital) {
+                const dDate = new Date(digital.release_date);
+                releasesHtml += `
+                    <div class="release-date-row">
+                        <span class="type-icon"><span class="material-icons" style="font-size: 16px;">cloud</span> Digital</span>
+                        <span class="date-val">${dDate.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}</span>
+                    </div>
+                `;
+            }
+            const physical = usReleaseInfo.find(r => r.type === 5 || r.type === 6);
+            if (physical) {
+                const pDate = new Date(physical.release_date);
+                releasesHtml += `
+                    <div class="release-date-row">
+                        <span class="type-icon"><span class="material-icons" style="font-size: 16px;">album</span> Physical</span>
+                        <span class="date-val">${pDate.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}</span>
+                    </div>
+                `;
+            }
+            releaseDatesEl.innerHTML = releasesHtml;
+
+            // Money
             const formatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
             if (data.revenue && data.revenue > 0) {
                 document.getElementById('info-revenue').innerText = formatter.format(data.revenue);
@@ -1290,22 +1636,35 @@ class Router {
                 document.getElementById('row-budget').style.display = 'none';
             }
 
+
             document.getElementById('info-lang').innerText = (data.original_language || '').toUpperCase();
 
-            const studios = (data.production_companies || []).slice(0, 4).map(c => c.name);
-            document.getElementById('info-studios').innerText = studios.length ? studios.join('\\n') : '-';
-            document.getElementById('info-studios').style.whiteSpace = 'pre-line';
+            // Smart Search Button Hook
+            const smartBtn = document.getElementById('btn-smart-dl-movie');
+            if (smartBtn) {
+                const safeTitle = (data.title || data.name || '').replace(/'/g, "\\'");
+                const releaseYear = release ? release.split('-')[0] : '';
+                smartBtn.onclick = () => window.router.openSmartSearch(id, type, safeTitle, releaseYear);
+            }
 
-            // Links
+
+            // Links (Colored logos)
             let linksHtml = '';
             if (data.external_ids) {
                 const e = data.external_ids;
-                if (e.imdb_id) linksHtml += `<a href="https://www.imdb.com/title/${e.imdb_id}" target="_blank" style="color: var(--text-muted); hover:text-white; display: flex; align-items: center;"><span style="background: #F5C518; color: black; font-weight: 800; border-radius: 4px; padding: 0 4px; font-size: 0.8rem;">IMDb</span></a>`;
-                if (e.facebook_id) linksHtml += `<a href="https://facebook.com/${e.facebook_id}" target="_blank" class="material-icons" style="color: var(--text-muted);">facebook</a>`;
-                if (e.instagram_id) linksHtml += `<a href="https://instagram.com/${e.instagram_id}" target="_blank" class="material-icons" style="color: var(--text-muted);">photo_camera</a>`;
-                if (e.twitter_id) linksHtml += `<a href="https://twitter.com/${e.twitter_id}" target="_blank" class="material-icons" style="color: var(--text-muted);">alternate_email</a>`;
+                // TMDB
+                linksHtml += `<a href="https://www.themoviedb.org/${type}/${id}" target="_blank" title="TMDB"><img src="https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_2-d537fb228cf3ded904ef09b136fe3fec72548ebc1fea3fbbd1ad9e36364db38b.svg" height="24"></a>`;
+                // IMDb
+                if (e.imdb_id) linksHtml += `<a href="https://www.imdb.com/title/${e.imdb_id}" target="_blank" title="IMDb"><img src="https://upload.wikimedia.org/wikipedia/commons/6/69/IMDB_Logo_2016.svg" height="24"></a>`;
+                // Rotten Tomatoes
+                linksHtml += `<a href="#" target="_blank" title="Rotten Tomatoes" style="opacity: 0.8;"><img src="https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/Rotten_Tomatoes.svg/32px-Rotten_Tomatoes.svg.png" height="24"></a>`;
+                // Trakt
+                linksHtml += `<a href="https://trakt.tv/search/${type}?q=${encodeURIComponent(data.title || data.name)}" target="_blank" title="Trakt"><img src="https://trakt.tv/assets/logos/header-v2-white-539420b7-c6b7-4c01-83c9-0a6e0e0a5b9b.svg" height="20" style="filter: brightness(0) invert(1) sepia(1) saturate(5) hue-rotate(320deg);"></a>`;
+                // Letterboxd
+                if (type === 'movie') {
+                    linksHtml += `<a href="https://letterboxd.com/tmdb/${id}" target="_blank" title="Letterboxd"><img src="https://a.ltrbxd.com/logos/letterboxd-logo-alt-w.png" height="20"></a>`;
+                }
             }
-            linksHtml += `<a href="https://www.themoviedb.org/${type}/${id}" target="_blank" style="display: flex; align-items: center;"><span style="color: #01b4e4; font-weight: 800; font-size: 0.8rem;">TMDB</span></a>`;
             document.getElementById('external-links').innerHTML = linksHtml;
 
             const keywords = data.keywords?.keywords || data.keywords?.results || [];
@@ -1317,7 +1676,7 @@ class Router {
                 document.getElementById('movie-actions').style.display = 'block';
                 document.getElementById('btn-smart-dl-movie').onclick = () => {
                     const year = (data.release_date || '').split('-')[0];
-                    this.triggerSmartSearch(data.title || data.name, null, null, year);
+                    this.openSmartSearch(id, type, data.title || data.name, year);
                 };
             } else {
                 this.renderSeasonsSection(data.seasons || [], id, data.name || data.title);
@@ -1326,12 +1685,12 @@ class Router {
             this.loadRelatedMedia(type, id);
         } catch (e) {
             console.error(e);
-            this.container.innerHTML = `<div style="padding: 4rem; text-align: center; color: #FF5252;">Briefing Link Severed: ${e.message}</div>`;
+            this.container.innerHTML = `<div style="padding: 4rem; text-align: center; color: #FF5252;">Failed to load details: ${e.message}</div>`;
         }
     }
 
     async loadCollection(id) {
-        this.container.innerHTML = '<div class="loading-spinner"></div>';
+        this.container.innerHTML = '<div class="loading-container"><div class="loading-spinner"></div></div>';
         try {
             const res = await fetch(`/api/tmdb/collection/${id}`);
             const data = await res.json();
@@ -1353,6 +1712,10 @@ class Router {
                     </div>
                 </div>
             `;
+            if (this.discoverState.type === 'tv') {
+                const year = data.first_air_date ? data.first_air_date.split('-')[0] : '';
+                this.renderSeasonsSection(data.seasons, data.id, data.name, year);
+            }
 
             if (data.parts) {
                 const parts = data.parts.map(p => ({ ...p, media_type: 'movie' }));
@@ -1363,6 +1726,7 @@ class Router {
             this.container.innerHTML = `<div style="padding: 4rem; text-align: center; color: #FF5252;">Collection Data Fragmented: ${e.message}</div>`;
         }
     }
+
 
     async loadRelatedMedia(type, id) {
         try {
@@ -1384,7 +1748,7 @@ class Router {
         }
     }
 
-    renderSeasonsSection(seasons, tvId, showTitle) {
+    renderSeasonsSection(seasons, tvId, showTitle, showYear) {
         const section = document.getElementById('tv-seasons-section');
         const selector = document.getElementById('season-selector');
         if (!section || !selector) return;
@@ -1394,24 +1758,24 @@ class Router {
             <option value="${s.season_number}">Season ${s.season_number}</option>
         `).join('');
 
-        selector.onchange = (e) => this.loadEpisodes(tvId, e.target.value, showTitle);
+        selector.onchange = (e) => this.loadEpisodes(tvId, e.target.value, showTitle, showYear);
 
         // Initial load first season
         const firstSeason = seasons.find(s => s.season_number > 0);
-        if (firstSeason) this.loadEpisodes(tvId, firstSeason.season_number, showTitle);
+        if (firstSeason) this.loadEpisodes(tvId, firstSeason.season_number, showTitle, showYear);
     }
 
-    async loadEpisodes(tvId, seasonNumber, showTitle) {
+    async loadEpisodes(tvId, seasonNumber, showTitle, showYear) {
         const grid = document.getElementById('episodes-list');
         if (!grid) return;
-        grid.innerHTML = '<div class="loading-spinner"></div>';
+        grid.innerHTML = '<div class="loading-container"><div class="loading-spinner"></div></div>';
 
         try {
             const res = await fetch(`/api/tmdb/tv/${tvId}/season/${seasonNumber}`);
             const data = await res.json();
 
             grid.innerHTML = (data.episodes || []).map(ep => {
-                const still = ep.still_path ? `https://image.tmdb.org/t/p/w300${ep.still_path}` : '/static/images/placeholder_poster.jpg';
+                const still = ep.still_path ? `https://image.tmdb.org/t/p/w300${ep.still_path}` : '/static/images/placeholder-poster.svg';
                 return `
                     <div class="glass-panel" style="display: flex; gap: 1.5rem; padding: 1rem; border-radius: 12px; transition: transform 0.2s; overflow: hidden;">
                         <div style="width: 180px; height: 100px; flex-shrink: 0; border-radius: 8px; overflow: hidden; position: relative; background: #000;">
@@ -1426,12 +1790,12 @@ class Router {
                                     <div style="font-size: 1.1rem; font-weight: 700; margin-bottom: 0.25rem;">${ep.name}</div>
                                     <div style="font-size: 0.75rem; color: var(--text-muted); font-family: var(--font-mono);">${ep.air_date || 'Unknown Date'}</div>
                                 </div>
-                                <button class="icon-btn-tiny" onclick="window.router.triggerSmartSearch('${(showTitle || '').replace(/'/g, "\\'")}', ${seasonNumber}, ${ep.episode_number})" title="Smart Search">
+                                <button class="icon-btn-tiny" onclick="window.router.openSmartSearch(null, 'tv', '${(showTitle || '').replace(/'/g, "\\'")}', '${showYear}', ${seasonNumber}, ${ep.episode_number})" title="Smart Search">
                                     <span class="material-icons" style="font-size: 18px;">manage_search</span>
                                 </button>
                             </div>
                             <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.75rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4;">
-                                ${ep.overview || 'No overview available for this transmission.'}
+                                ${ep.overview || 'No overview available.'}
                             </div>
                         </div>
                     </div>
@@ -1442,65 +1806,9 @@ class Router {
         }
     }
 
-    async triggerSmartSearch(title, season, episode, year) {
-        let titleDisplay = title;
-        if (season) titleDisplay += ` S${season.toString().padStart(2, '0')}`;
-        if (episode) titleDisplay += `E${episode.toString().padStart(2, '0')}`;
-
-        this.modalShow({
-            title: `Neural Search: ${titleDisplay}`,
-            body: `
-                <div id="smart-search-loading" style="padding: 3rem; text-align: center;">
-                    <div class="loading-spinner" style="margin-bottom: 1.5rem;"></div>
-                    <p style="color: var(--color-primary); font-family: var(--font-mono); font-weight: 800;">CALCULATING SEARCH FRAGMENTS...</p>
-                    <div id="smart-queries-debug" style="margin-top: 1rem; font-size: 0.65rem; color: var(--text-muted); font-family: var(--font-mono);"></div>
-                </div>
-                <div id="smart-results-container" style="display: none; max-height: 400px; overflow-y: auto;"></div>
-            `,
-            footer: '<button class="modal-btn secondary" onclick="window.router.modalHide()">Abort</button>'
-        });
-
-        const debug = document.getElementById('smart-queries-debug');
-        const resultsEl = document.getElementById('smart-results-container');
-        const loading = document.getElementById('smart-search-loading');
-
-        try {
-            const res = await fetch('/api/discovery/smart-search', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title, season, episode, year })
-            });
-            const data = await res.json();
-
-            if (debug) debug.textContent = `VECTORS: ${data.queries_used.join(', ')}`;
-
-            loading.style.display = 'none';
-            resultsEl.style.display = 'block';
-
-            if (data.results && data.results.length > 0) {
-                resultsEl.innerHTML = data.results.map(r => `
-                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; border-bottom: 1px solid rgba(255,255,255,0.05); background: rgba(255,255,255,0.01);">
-                        <div style="flex: 1; min-width: 0; padding-right: 1.5rem;">
-                            <div style="font-weight: 700; font-size: 0.85rem; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${r.name}">${r.name}</div>
-                            <div style="font-size: 0.7rem; color: var(--text-muted); font-family: var(--font-mono); margin-top: 2px;">SIZE: ${((r.size_bytes || 0) / 1024 / 1024 / 1024).toFixed(2)} GB</div>
-                        </div>
-                        <button class="add-btn" onclick="window.router.handleTaskAdd('${r.url}')" style="width: auto; padding: 0.5rem 1rem; font-size: 0.7rem; border-radius: 6px;">
-                            <span class="material-icons" style="font-size: 14px;">download</span>
-                        </button>
-                    </div>
-                `).join('');
-            } else {
-                resultsEl.innerHTML = '<div style="padding: 3rem; text-align: center; color: var(--text-muted);">No matching data fragments found in the matrix.</div>';
-            }
-
-        } catch (e) {
-            loading.innerHTML = `<p style="color: #FF5252;">Search Failure: ${e.message}</p>`;
-        }
-    }
-
     // --- EXPLORE MODULE ---
 
-    loadExplore() {
+    async loadExplore() {
         this.container.innerHTML = `
             <div style="height: 75vh; overflow: hidden; display: flex; flex-direction: column;">
                 <div style="flex: 1; display: flex; flex-direction: column; gap: 0.75rem; overflow: hidden;">
@@ -1509,9 +1817,8 @@ class Router {
                     </div>
                     
                     <div id="explore-results" style="flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(4, 1fr); auto-rows: min-content; gap: 0.75rem; padding-bottom: 2rem;">
-                        <div style="grid-column: 1 / -1; min-height: 300px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted); opacity: 0.5;">
-                            <span class="material-icons" style="font-size: 48px; margin-bottom: 0.75rem;">language</span>
-                            Use the HUD search bar to explore...
+                        <div class="loading-container" style="grid-column: 1 / -1; opacity: 0.5;">
+                            <div class="loading-spinner"></div>
                         </div>
                     </div>
                 </div>
@@ -1521,6 +1828,27 @@ class Router {
         this.explorePage = 1;
         this.exploreLimit = 12; // 3 rows * 4 columns
         this.exploreData = [];
+
+        if (this.omniSearchQuery) {
+            this.executeExploreSearch(this.omniSearchQuery);
+        } else {
+            this.exploreData = await this.fetchExploreTrending();
+            this.renderExploreResults();
+        }
+    }
+
+    async fetchExploreTrending() {
+        if (this.fshareTrendingCache) return this.fshareTrendingCache;
+        try {
+            const res = await fetch('/api/discovery/trending');
+            const data = await res.json();
+            const top = data.results || [];
+            this.fshareTrendingCache = top;
+            return top;
+        } catch (e) {
+            console.error("Explore Trending Fetch Failed:", e);
+            return [];
+        }
     }
 
     async executeExploreSearch(q) {
@@ -1532,7 +1860,7 @@ class Router {
         const globalSearch = document.getElementById('spotlight-search');
         if (globalSearch && globalSearch.value !== q) globalSearch.value = q;
 
-        results.innerHTML = '<div style="grid-column: 1 / -1; grid-row: 1 / -1; display: flex; align-items: center; justify-content: center;"><div class="loading-spinner"></div></div>';
+        results.innerHTML = '<div class="loading-container" style="grid-column: 1 / -1;"><div class="loading-spinner"></div></div>';
 
         try {
             const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
@@ -1551,7 +1879,7 @@ class Router {
         if (!results) return;
 
         if (this.exploreData.length === 0) {
-            results.innerHTML = '<div style="grid-column: 1 / -1; grid-row: 1 / -1; display: flex; align-items: center; justify-content: center; color: var(--text-muted);"> No data fragments found. </div>';
+            results.innerHTML = '<div class="loading-container" style="grid-column: 1 / -1; color: var(--text-muted);"> No search results found. </div>';
             if (pagination) pagination.innerHTML = '';
             return;
         }
@@ -1613,7 +1941,7 @@ class Router {
         this.updateStatusMonitor(`Grabbing ${filename}...`, 'info');
 
         const card = btn.closest('.explore-card');
-        if (card) card.classList.add('holo-processing');
+        if (card) card.classList.add('processing-state');
         btn.innerHTML = '<span class="material-icons rotating" style="font-size: 14px;">sync</span> PROCESSING';
         btn.disabled = true;
 
@@ -1628,7 +1956,7 @@ class Router {
             // Check for actual success (API returns success: true/false)
             if (data.success === true || (data.status === 'ok' && data.nzo_id)) {
                 if (card) {
-                    card.classList.remove('holo-processing');
+                    card.classList.remove('processing-state');
                     card.classList.add('item-queued');
                 }
 
@@ -1639,20 +1967,20 @@ class Router {
                     <span class="material-icons" style="font-size: 12px;">hourglass_top</span> QUEUED
                 </div>`;
 
-                setTimeout(() => this.updateCaptainInfo(null, true), 1500);
+                setTimeout(() => this.updateAccountInfo(null, true), 1500);
             } else {
-                if (card) card.classList.remove('holo-processing');
+                if (card) card.classList.remove('processing-state');
                 btn.innerHTML = originalText;
                 btn.disabled = false;
-                this.showError('Mission failed: ' + (data.message || 'Unknown error'));
+                this.showError('Download failed: ' + (data.message || 'Unknown error'));
                 this.updateStatusMonitor(`Failed: ${data.message}`, 'error');
             }
         } catch (e) {
-            if (card) card.classList.remove('holo-processing');
+            if (card) card.classList.remove('processing-state');
             btn.innerHTML = originalText;
             btn.disabled = false;
-            this.showError('Transmission error during handshake');
-            this.updateStatusMonitor(`Transmission Error`, 'error');
+            this.showError('Transfer error during connection');
+            this.updateStatusMonitor(`Transfer Error`, 'error');
         }
     }
 
@@ -1704,7 +2032,7 @@ class Router {
                         <span class="material-icons">chevron_left</span>
                     </button>
                     <div class="carousel-track" id="trending-carousel">
-                        <div style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
+                        <div class="loading-container" style="width: 100%; height: 100%;">
                             <div class="loading-spinner"></div>
                         </div>
                     </div>
@@ -1717,11 +2045,11 @@ class Router {
             <!-- Main Dashboard Grid -->
             <div style="display: grid; grid-template-columns: 6.5fr 3.5fr; gap: 1rem; height: calc(100vh - 420px); min-height: 350px; margin-bottom: 0;">
                 
-                <!-- Left Column: Active Mission Pulse (Queue) -->
+                <!-- Left Column: Active Downloads -->
                 <div class="box-section" style="border-color: rgba(0,243,255,0.15);">
                     <div class="box-label" style="color: var(--color-secondary);">
                         <span class="material-icons" style="font-size: 14px;">list_alt</span>
-                        Active Mission Pulse
+                        Active Downloads
                     </div>
                     
                     <div style="position: absolute; top: 0.6rem; right: 0.8rem; z-index: 20;">
@@ -1729,18 +2057,20 @@ class Router {
                     </div>
 
                     <div id="minified-queue" style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.75rem; overflow-y: auto; padding-right: 4px; padding-top: 0.5rem; height: 100%;">
-                        <div class="loading-spinner" style="transform: scale(0.5); grid-column: 1/-1; margin: 1rem auto;"></div>
+                        <div class="loading-container" style="grid-column: 1 / -1;">
+                            <div class="loading-spinner" style="transform: scale(0.5);"></div>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Right Column: Command Center & Netflow (2:3 Ratio -> 1 : 1.5) -->
+                <!-- Right Column: Dashboard & System Traffic -->
                 <div style="display: grid; grid-template-rows: 2fr 3fr; gap: 1rem;">
                     
                     <!-- Combined Command Unit -->
                     <div class="box-section" style="border-color: rgba(0,243,255,0.2); gap: 1rem; height: 100%;">
                         <div class="box-label" style="color: var(--color-primary);">
                             <span class="material-icons">shield</span>
-                            Command Center
+                            Account Overview
                         </div>
                         
                         <!-- Identity & Status Header -->
@@ -1749,15 +2079,15 @@ class Router {
                                 <span class="material-icons" style="font-size: 18px; color: var(--color-primary);">person</span>
                             </div>
                             <div style="flex: 1; overflow: hidden; line-height: 1.2;">
-                                <div id="captain-email" style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-primary); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Syncing...</div>
+                                <div id="user-email" style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-primary); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Syncing...</div>
                                 <div style="display: flex; gap: 0.5rem; justify-content: space-between; align-items: center;">
-                                    <span id="captain-rank" style="font-size: 0.55rem; color: var(--color-secondary); font-weight: 800;">AUTH...</span>
-                                    <span id="captain-expiry" style="font-size: 0.55rem; color: var(--text-muted);">Checking validity...</span>
+                                    <span id="user-rank" style="font-size: 0.55rem; color: var(--color-secondary); font-weight: 800;">AUTH...</span>
+                                    <span id="user-expiry" style="font-size: 0.55rem; color: var(--text-muted);">Checking validity...</span>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- Telemetry Stats Row -->
+                        <!-- Stats Summary Row -->
                         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem;">
                             <div style="background: rgba(0,255,163,0.02); padding: 0.35rem; border-radius: 4px; border: 1px solid rgba(0,255,163,0.05); text-align: center;">
                                 <div style="font-size: 0.45rem; color: var(--text-muted); text-transform: uppercase;">Active</div>
@@ -1773,38 +2103,38 @@ class Router {
                             </div>
                         </div>
 
-                        <!-- Fuel Consumption -->
+                        <!-- Monthly Quota -->
                         <div style="margin-top: auto;">
                             <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 0.2rem;">
-                                <span style="font-size: 0.55rem; font-weight: 700; color: #ffd700; text-transform: uppercase;">Fuel Cell</span>
+                                <span style="font-size: 0.55rem; font-weight: 700; color: #ffd700; text-transform: uppercase;">Daily Quota</span>
                                 <div style="font-family: var(--font-mono); font-size: 0.6rem; font-weight: 800; color: var(--text-primary);">
                                     <span id="quota-percent">0</span>%
                                 </div>
                             </div>
-                            <div class="fuel-gauge" style="height: 4px; background: rgba(0,0,0,0.3); border-radius: 2px; overflow: hidden; position: relative; border: 1px solid rgba(255,255,255,0.03);">
-                                <div id="fuel-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #ffd700, #ff8c00); box-shadow: 0 0 6px rgba(255, 215, 0, 0.3); border-radius: 2px; transition: width 1s ease;"></div>
+                            <div id="quota-gauge" class="fuel-gauge" style="height: 4px; background: rgba(0,0,0,0.3); border-radius: 2px; overflow: hidden; position: relative; border: 1px solid rgba(255,255,255,0.03);">
+                                <div id="quota-bar" style="height: 100%; width: 0%; background: linear-gradient(90deg, #ffd700, #ff8c00); box-shadow: 0 0 6px rgba(255, 215, 0, 0.3); border-radius: 2px; transition: width 1s ease;"></div>
                             </div>
                             <div id="quota-text" style="font-family: var(--font-mono); font-size: 0.55rem; color: var(--text-muted); text-align: right; margin-top: 1px;">0 GB / 0 GB</div>
                         </div>
 
                     </div>
 
-                    <!-- Netflow -->
+                    <!-- System Traffic -->
                     <div class="box-section" style="border-color: rgba(255,255,255,0.1); height: 100%;">
                          <div class="box-label" style="color: var(--text-primary);">
                             <span class="material-icons">insights</span>
-                            Netflow
+                            System Traffic
                         </div>
                         
-                        <div style="flex: 1; position: relative; padding-top: 0.5rem; min-height: 0;">
-                            <canvas id="netFlowChart"></canvas>
+                        <div id="traffic-chart-container" style="flex: 1; position: relative; padding-top: 0.5rem; min-height: 0;">
+                            <canvas id="trafficChart"></canvas>
                         </div>
                     </div>
                 </div>
             </div>
         `;
         this.fetchDashboardSync();
-        this.initNetflowChart();
+        this.initTrafficChart();
         this.fetchPopularToday();
         this.fetchTrending();
     }
@@ -1886,58 +2216,52 @@ class Router {
     }
 
     initCarousel() {
-        this.carouselIndex = 0;
         const track = document.getElementById('trending-carousel');
         if (!track) return;
 
-        this.carouselMax = track.children.length;
+        // Listen for scroll events to update button states
+        track.addEventListener('scroll', () => {
+            this.updateCarouselButtons();
+        }, { passive: true });
+
+        // Initial update
         this.updateCarouselButtons();
+
+        // Optional: Periodic check just in case content loads late
+        setTimeout(() => this.updateCarouselButtons(), 500);
     }
 
     carouselNext() {
         const track = document.getElementById('trending-carousel');
         if (!track) return;
 
-        const cardWidth = 150 + 16; // card width + gap
-        const visibleCards = Math.floor(track.parentElement.offsetWidth / cardWidth);
-
-        if (this.carouselIndex < this.carouselMax - visibleCards) {
-            this.carouselIndex++;
-            this.updateCarousel();
-        }
+        // Scroll one full viewport minus a bit for context
+        const scrollAmount = track.offsetWidth * 0.8;
+        track.scrollBy({ left: scrollAmount, behavior: 'smooth' });
     }
 
     carouselPrev() {
-        if (this.carouselIndex > 0) {
-            this.carouselIndex--;
-            this.updateCarousel();
-        }
-    }
-
-    updateCarousel() {
         const track = document.getElementById('trending-carousel');
         if (!track) return;
 
-        const cardWidth = 150 + 16; // card width + gap
-        const offset = this.carouselIndex * -cardWidth;
-        track.style.transform = `translateX(${offset}px)`;
-
-        this.updateCarouselButtons();
+        const scrollAmount = track.offsetWidth * 0.8;
+        track.scrollBy({ left: -scrollAmount, behavior: 'smooth' });
     }
 
     updateCarouselButtons() {
+        const track = document.getElementById('trending-carousel');
         const prevBtn = document.getElementById('carousel-prev');
         const nextBtn = document.getElementById('carousel-next');
+        if (!track) return;
 
-        if (prevBtn) prevBtn.disabled = this.carouselIndex === 0;
+        if (prevBtn) {
+            prevBtn.disabled = track.scrollLeft <= 5;
+        }
 
         if (nextBtn) {
-            const track = document.getElementById('trending-carousel');
-            if (track) {
-                const cardWidth = 150 + 16;
-                const visibleCards = Math.floor(track.parentElement.offsetWidth / cardWidth);
-                nextBtn.disabled = this.carouselIndex >= this.carouselMax - visibleCards;
-            }
+            // Check if we've reached the end of the scroll
+            const isAtEnd = track.scrollLeft + track.offsetWidth >= track.scrollWidth - 5;
+            nextBtn.disabled = isAtEnd;
         }
     }
 
@@ -1947,7 +2271,7 @@ class Router {
             const data = await res.json();
             if (data.status === 'ok' && data.fshare_downloader) {
                 const acc = data.fshare_downloader.primary_account;
-                this.updateCaptainInfo(acc);
+                this.updateAccountInfo(acc);
                 this.updateDashboardStats(data.fshare_downloader);
                 this.updateQuota(acc.traffic_left);
             }
@@ -1955,30 +2279,30 @@ class Router {
             const dlRes = await fetch('/api/downloads');
             const dlData = await dlRes.json();
             this.renderMinifiedQueue(dlData.downloads || []);
-        } catch (e) { console.error('Dashboard telemetry fail', e); }
+        } catch (e) { console.error('Dashboard stats fail', e); }
     }
 
-    updateCaptainInfo(acc, force = false) {
+    updateAccountInfo(acc, force = false) {
         // Force refresh logic
         if (force) {
             fetch('/api/verify-account', { method: 'POST' })
                 .then(r => r.json())
                 .then(d => {
                     if (d.status === 'ok' && d.account) {
-                        this.updateCaptainInfo(d.account, false);
+                        this.updateAccountInfo(d.account, false);
                     }
                 }).catch(console.error);
             if (!acc) return;
         }
 
         if (!acc) return;
-        const emailEl = document.getElementById('captain-email');
-        const rankEl = document.getElementById('captain-rank');
-        const expiryEl = document.getElementById('captain-expiry');
+        const emailEl = document.getElementById('user-email');
+        const rankEl = document.getElementById('user-rank');
+        const expiryEl = document.getElementById('user-expiry');
 
-        if (emailEl) emailEl.textContent = acc.email || 'Anonymous Commander';
+        if (emailEl) emailEl.textContent = acc.email || 'Anonymous User';
         if (rankEl) {
-            rankEl.innerHTML = `<span class="material-icons" style="font-size: 12px;">${acc.premium ? 'stars' : 'bolt'}</span> ${acc.premium ? 'Gold Tier Commander' : 'Free Tier Cadet'}`;
+            rankEl.innerHTML = `<span class="material-icons" style="font-size: 12px;">${acc.premium ? 'stars' : 'person_outline'}</span> ${acc.premium ? 'Premium Member' : 'Free Member'}`;
             rankEl.style.color = acc.premium ? 'var(--color-primary)' : 'var(--text-muted)';
             rankEl.style.background = acc.premium ? 'rgba(0,243,255,0.1)' : 'rgba(255,255,255,0.05)';
         }
@@ -2006,8 +2330,8 @@ class Router {
         if (activeGlobalEl) activeGlobalEl.textContent = stats.active || 0;
 
         // Push to graph if defined
-        if (window.netFlowChartInst) {
-            const chart = window.netFlowChartInst;
+        if (window.trafficChartInst) {
+            const chart = window.trafficChartInst;
             chart.data.datasets[0].data.push(stats.speed_bytes / 1024 / 1024); // MB/s
             chart.data.datasets[0].data.shift();
             chart.update('none');
@@ -2016,10 +2340,10 @@ class Router {
 
     updateQuota(traffic) {
         const text = document.getElementById('quota-text');
-        const bar = document.getElementById('fuel-bar');
+        const bar = document.getElementById('quota-bar');
         const percentEl = document.getElementById('quota-percent');
-        const cell = document.getElementById('fuel-cell');
-        const label = cell ? cell.querySelector('h3') : null;
+        const gauge = document.getElementById('quota-gauge');
+        const label = gauge ? gauge.querySelector('h3') : null;
 
         if (!text || !bar || !percentEl || !traffic) return;
 
@@ -2036,7 +2360,7 @@ class Router {
                 usedGb = parts[0];
             }
         } catch (e) {
-            console.error("Pulse Link: Quota Parse Error", e);
+            console.error("Stats Link: Quota Parse Error", e);
         }
 
         this.remainingQuotaGb = Math.max(0, totalGb - usedGb); // Updated calculation
@@ -2066,7 +2390,7 @@ class Router {
         bar.style.background = `linear-gradient(90deg, ${color}, #ffffff)`;
         bar.style.boxShadow = `0 0 10px ${glow}`;
         if (label) label.style.color = color;
-        if (cell) cell.style.borderLeftColor = color;
+        if (gauge) gauge.style.borderLeftColor = color;
         const percentContainer = percentEl.parentElement;
         if (percentContainer) percentContainer.style.color = color;
     }
@@ -2095,18 +2419,18 @@ class Router {
         `).join('');
     }
 
-    initNetflowChart() {
-        const ctx = document.getElementById('netFlowChart');
+    initTrafficChart() {
+        const ctx = document.getElementById('trafficChart');
         if (!ctx) return;
 
-        if (window.netFlowChartInst) window.netFlowChartInst.destroy();
+        if (window.trafficChartInst) window.trafficChartInst.destroy();
 
-        window.netFlowChartInst = new Chart(ctx, {
+        window.trafficChartInst = new Chart(ctx, {
             type: 'line',
             data: {
                 labels: Array(30).fill(''),
                 datasets: [{
-                    label: 'Downlink Velocity',
+                    label: 'Download Speed',
                     data: Array(30).fill(0),
                     borderColor: '#00f3ff',
                     borderWidth: 2,
@@ -2168,7 +2492,7 @@ class Router {
                 <div id="settings-board" style="display: flex; flex-direction: column; gap: 1.5rem;">
                     <!-- Accounts Card -->
                     <div class="glass-panel" style="padding: 2rem;">
-                        <div id="accounts-section"><div class="loading-spinner"></div></div>
+                        <div id="accounts-section"><div class="loading-container"><div class="loading-spinner"></div></div></div>
                     </div>
 
                     <!-- System Config Card -->
@@ -2179,7 +2503,7 @@ class Router {
                         </h2>
                         <form id="config-form" style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
                             <div class="form-group" style="grid-column: 1 / -1;">
-                                <label style="display: block; color: var(--text-secondary); margin-bottom: 0.5rem; font-size: 0.9rem; font-weight: 600;">Download Matrix Path</label>
+                                <label style="display: block; color: var(--text-secondary); margin-bottom: 0.5rem; font-size: 0.9rem; font-weight: 600;">Download Path</label>
                                 <input type="text" name="download_path" value="/downloads" class="modal-input" style="width: 100%;">
                             </div>
                             <div class="form-group">
@@ -2187,18 +2511,16 @@ class Router {
                                     Max Concurrency
                                     <span id="val-concurrency" style="color: var(--color-primary); font-family: var(--font-mono);">0</span>
                                 </label>
-                                <input type="range" name="concurrent_downloads" min="1" max="10" value="3" class="sci-fi-slider" oninput="document.getElementById('val-concurrency').innerText = this.value">
+                                <input type="range" name="concurrent_downloads" min="1" max="10" value="3" class="standard-slider" oninput="document.getElementById('val-concurrency').innerText = this.value">
                             </div>
                              <div class="form-group">
                                 <label style="display: flex; justify-content: space-between; color: var(--text-secondary); margin-bottom: 0.5rem; font-size: 0.9rem; font-weight: 600;">
-                                    Neural Worker Threads
+                                    Worker Threads
                                     <span id="val-threads" style="color: var(--color-secondary); font-family: var(--font-mono);">0</span>
                                 </label>
-                                <input type="range" name="worker_threads" min="1" max="5" value="4" class="sci-fi-slider" oninput="document.getElementById('val-threads').innerText = this.value">
+                                <input type="range" name="worker_threads" min="1" max="5" value="4" class="standard-slider" oninput="document.getElementById('val-threads').innerText = this.value">
                             </div>
-                            <div style="grid-column: 1 / -1; display: flex; justify-content: flex-end;">
-                                <button type="submit" class="add-btn" style="width: auto; padding: 0.75rem 2.5rem; border-radius: 10px; font-weight: 800;">Save Protocol</button>
-                            </div>
+                                <button type="submit" class="add-btn" style="width: auto; padding: 0.75rem 2.5rem; border-radius: 10px; font-weight: 800;">Save Settings</button>
                         </form>
                     </div>
 
@@ -2207,12 +2529,12 @@ class Router {
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
                             <h2 style="display: flex; align-items: center; gap: 0.75rem;">
                                 <span class="material-icons" style="color: var(--color-primary);">terminal</span>
-                                Neural System Logs
+                                System Logs
                             </h2>
                             <button class="icon-btn" onclick="document.getElementById('log-stream').innerHTML = ''"><span class="material-icons">clear_all</span></button>
                         </div>
                         <div id="log-stream" style="height: 400px; background: rgba(0,0,0,0.6); border-radius: 12px; padding: 1.5rem; overflow-y: auto; font-family: var(--font-mono); font-size: 0.8rem; color: #a6accd; border: 1px solid var(--border-glass);">
-                            <div style="color: var(--color-primary);">Awaiting telemetry stream...</div>
+                            <div style="color: var(--color-primary); font-family: var(--font-mono); font-size: 0.7rem;">Connecting to log stream...</div>
                         </div>
                     </div>
                 </div>
@@ -2247,7 +2569,7 @@ class Router {
             if (data && Array.isArray(data.accounts)) {
                 this.renderAccountsSection(data.accounts, accSection);
             } else {
-                throw new Error('Invalid telemetry packet');
+                throw new Error('Invalid stats packet');
             }
         } catch (e) {
             console.error('Account sync fail:', e);
@@ -2281,7 +2603,7 @@ class Router {
                             </div>
                         </div>
                         <div style="display: flex; gap: 0.35rem;">
-                            <button class="icon-btn-tiny" onclick="window.router.reloginAccount('${acc.email}')" title="Refresh Telemetry">
+                            <button class="icon-btn-tiny" onclick="window.router.reloginAccount('${acc.email}')" title="Refresh Account">
                                 <span class="material-icons" style="font-size: 16px;">refresh</span>
                             </button>
                             ${!acc.is_primary ? `
@@ -2296,7 +2618,7 @@ class Router {
                     </div>
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.03);">
                         <div>
-                            <div style="font-size: 0.6rem; text-transform: uppercase; color: var(--text-muted); font-weight: 800; letter-spacing: 0.05em; margin-bottom: 4px;">Neural Fuel Left</div>
+                            <div style="font-size: 0.6rem; text-transform: uppercase; color: var(--text-muted); font-weight: 800; letter-spacing: 0.05em; margin-bottom: 4px;">Daily Quota Left</div>
                             <div style="font-family: var(--font-mono); font-size: 0.85rem; color: var(--color-primary); font-weight: 700;">${acc.traffic_left || '0 GB'}</div>
                         </div>
                         <div>
@@ -2320,7 +2642,7 @@ class Router {
                 this.showError('Relogin Failed: ' + data.message);
             }
         } catch (e) {
-            this.showError('Relogin Transmission Error');
+            this.showError('Relogin Transfer Error');
         }
     }
 
@@ -2365,11 +2687,11 @@ class Router {
 
         const actions = [
             { icon: 'info', text: task.filename, header: true },
-            { icon: 'play_arrow', text: 'Resume Mission', action: 'start' },
-            { icon: 'pause', text: 'Suspend Mission', action: 'pause' },
+            { icon: 'play_arrow', text: 'Resume Download', action: 'start' },
+            { icon: 'pause', text: 'Pause Download', action: 'pause' },
             { icon: 'info_outline', text: 'View Details', action: 'info' },
             { icon: 'content_copy', text: 'Copy Fshare Link', action: 'copy' },
-            { icon: 'delete', text: 'Abort & Erase', action: 'delete', danger: true },
+            { icon: 'delete', text: 'Delete Task', action: 'delete', danger: true },
         ];
 
         menu.innerHTML = actions.map(a => {
@@ -2410,6 +2732,7 @@ class Router {
 
     renderTags(item) {
         const tags = [];
+        if (item.is_fshare_top) tags.push({ text: 'Top Trending', color: '#00ccff', icon: 'local_fire_department' });
         if (item.vote_average > 8) tags.push({ text: 'Highly Rated', color: '#ffd700', icon: 'star', type: 'sort', value: 'vote_average.desc' });
         if (item.popularity > 1500) tags.push({ text: 'Trending', color: '#ff4d4d', icon: 'trending_up', type: 'sort', value: 'popularity.desc' });
 

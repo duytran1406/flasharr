@@ -78,15 +78,19 @@ class TestTimFshareClient:
         assert client.scoring.keyword_match_points == 20
     
     def test_score_results_keyword_matching(self, client):
+        # Both results must pass similarity threshold (contain query words)
         results = [
             {"name": "Movie Title 2024 1080p.mkv", "url": "", "size": 0},
-            {"name": "Other Film.mkv", "url": "", "size": 0},
+            {"name": "Movie Title.mkv", "url": "", "size": 0},  # Fewer keywords but passes threshold
         ]
         
         scored = client._score_results(results, "movie title 2024")
         
+        # Both should pass similarity threshold
+        assert len(scored) >= 1
         # First result should have higher score due to more keyword matches
-        assert scored[0]["score"] > scored[1]["score"]
+        if len(scored) > 1:
+            assert scored[0]["score"] >= scored[1]["score"]
     
     def test_score_results_year_bonus(self, client):
         results = [

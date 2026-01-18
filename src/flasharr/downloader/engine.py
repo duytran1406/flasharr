@@ -29,6 +29,7 @@ from ..core.exceptions import DownloadError, DownloadFailedError
 from ..core.rate_limiter import GlobalRateLimiter
 from ..core.priority_queue import PriorityQueue, Priority, auto_prioritize
 from ..core.link_checker import get_link_checker, LinkStatus
+from ..security.validators import sanitize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -540,7 +541,7 @@ class DownloadEngine:
         
         Args:
             url: Download URL
-            filename: Target filename
+            filename: Target filename (will be sanitized)
             destination: Download directory (uses config default if not provided)
             task_id: Optional custom task ID
             category: Download category
@@ -551,7 +552,14 @@ class DownloadEngine:
         """
         import uuid
         
-        dest_path = Path(destination or self.config.download_dir) / filename
+        # Sanitize filename to prevent path traversal
+        try:
+            safe_filename = sanitize_filename(filename)
+        except ValueError as e:
+            logger.error(f"Invalid filename '{filename}': {e}")
+            raise ValueError(f"Invalid filename: {e}")
+        
+        dest_path = Path(destination or self.config.download_dir) / safe_filename
         
         task = DownloadTask(
             id=task_id or str(uuid.uuid4()),

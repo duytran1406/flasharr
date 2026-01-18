@@ -6,6 +6,8 @@ Creates and configures the Flask application.
 
 import logging
 import time
+import os
+import secrets
 from pathlib import Path
 from flask import Flask
 
@@ -57,7 +59,16 @@ def create_app(config_override: dict = None) -> Flask:
     # Load configuration
     config = get_config()
     app.config["DEBUG"] = config.server.debug
-    app.config["SECRET_KEY"] = "Flasharr-secret-key"
+    
+    # Secure secret key from environment or generate one
+    secret_key = os.getenv("FLASK_SECRET_KEY")
+    if not secret_key:
+        logger.warning("FLASK_SECRET_KEY not set, generating random key (sessions will not persist across restarts)")
+        secret_key = secrets.token_hex(32)
+    app.config["SECRET_KEY"] = secret_key
+    
+    # API key for authentication (optional, for backward compatibility)
+    app.config["API_KEY"] = config.server.api_key
     
     # Apply overrides
     if config_override:

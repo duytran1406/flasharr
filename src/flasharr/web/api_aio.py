@@ -9,6 +9,7 @@ import time
 import os
 import json
 import psutil
+import re
 from typing import Any, Dict, Optional
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +19,9 @@ from ..core.config import get_config
 from ..utils.formatters import format_size, format_speed, format_duration, format_eta
 from ..services.tmdb import tmdb_client
 from ..services.smart_search import get_smart_search_service
+from ..clients.timfshare import TimFshareClient
+from ..utils.quality_profile import QualityParser, group_by_quality
+from ..utils.normalizer import normalize_filename
 
 logger = logging.getLogger(__name__)
 
@@ -442,6 +446,33 @@ async def api_search(request: web.Request) -> web.Response:
     except Exception as e:
         logger.error(f"Search API error: {e}")
         return web.json_response({"error": str(e)}, status=500)
+
+
+@routes.get("/api/discovery/trending")
+async def get_fshare_trending(request: web.Request) -> web.Response:
+    """Fetch trending files from TimFshare as a proxy to avoid CORS."""
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get('https://timfshare.com/api/key/data-top', timeout=10) as response:
+                if response.status != 200:
+                    return web.json_response({"results": []})
+                data = await response.json()
+                
+                raw_items = data.get("dataFile", [])[:12]
+                results = []
+                for item in raw_items:
+                    results.append({
+                        "id": item.get("id"),
+                        "name": item.get("name"),
+                        "url": f"https://www.fshare.vn/file/{item.get('linkcode')}",
+                        "size": int(item.get("size", 0)),
+                        "quality": "Trending"
+                    })
+                return web.json_response({"results": results})
+    except Exception as e:
+        logger.error(f"Trending Proxy error: {e}")
+        return web.json_response({"results": []})
 
 
 @routes.get("/api/accounts")
@@ -927,4 +958,173 @@ async def api_popular_today(request: web.Request) -> web.Response:
         return web.json_response({"results": unique_results})
     except Exception as e:
         logger.error(f"Popular Today Error: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+@routes.post("/api/search/smart")
+async def smart_search(request: web.Request) -> web.Response:
+    """
+    Perform smart search with quality grouping and scoring.
+    
+    Body: { "title": str, "year": str, "type": "movie"|"tv", "limit": int }
+    """
+    try:
+        data = await get_json(request)
+        title = data.get('title')
+        year = str(data.get('year', ''))
+        media_type = data.get('type', 'movie')
+        season = data.get('season')
+        episode = data.get('episode')
+        
+        if not title:
+            return web.json_response({"error": "Title is required"}, status=400)
+            
+        # Initialize components
+        client = TimFshareClient()
+        parser = QualityParser()
+        
+        # Construct query
+        if media_type == 'movie':
+            query = f"{title} {year}" if year else title
+        else:
+            # TV Logic
+            if season and episode:
+                # Specific episode search: "Title SxxExx"
+                query = f"{title} S{int(season):02d}E{int(episode):02d}"
+            elif season:
+                # Season pack search: "Title Season X" or "Title Sxx"
+                query = f"{title} Season {season}"
+            else:
+                # General show search
+                query = f"{title}"
+        
+        limit = data.get('limit', 20)
+        logger.info(f"Smart Search Query: {query} (type={media_type})")
+        
+        # Execute search
+        results = client.search(query, limit=50, extensions=('.mkv', '.mp4'))
+        
+        # Process results
+        valid_results = []
+        for r in results:
+            r_dict = r.to_dict()
+            
+            # check similarity
+            sim = client._calculate_similarity(title, r.name)
+            if sim < 0.4:  # Similarity threshold
+                continue
+
+            # Strict Year Filter (Movies Only)
+            if year and media_type == 'movie':
+                # Find year in filename: 19xx or 20xx
+                y_match = re.search(r'\b(19|20)\d{2}\b', r.name)
+                if y_match:
+                    file_year = y_match.group(1)
+                    # If file has a year and it doesn't match requested year -> SKIP
+                    if file_year != year:
+                        continue
+                
+            # Profile quality
+            profile = parser.parse(r.name, r.size)
+            
+            # Merge profile data into result
+            r_dict.update(profile.to_dict())
+            r_dict['similarity'] = sim
+            
+            # Extract Season/Episode info for TV
+            if media_type == 'tv':
+                s_match = re.search(r'\bS(\d{1,3})', r.name, re.IGNORECASE)
+                e_match = re.search(r'\bE(\d{1,4})', r.name, re.IGNORECASE)
+                
+                # Check for "Season X" pattern
+                if not s_match:
+                    season_match = re.search(r'\bSeason\s*(\d{1,3})\b', r.name, re.IGNORECASE)
+                    if season_match:
+                        r_dict['season_number'] = int(season_match.group(1))
+                else:
+                    r_dict['season_number'] = int(s_match.group(1))
+                    
+                if e_match:
+                    r_dict['episode_number'] = int(e_match.group(1))
+                    
+            valid_results.append(r_dict)
+            
+        # TV Specific Grouping
+        if media_type == 'tv':
+            seasons = {}
+            for res in valid_results:
+                s_num = res.get('season_number', 0) # 0 = Specials or Unknown
+                if s_num not in seasons:
+                    seasons[s_num] = {'packs': [], 'episodes': []}
+                
+                # Determine if Pack or Episode
+                # Pack: Has Season, No Episode (or explicit "Complete")
+                is_episode = 'episode_number' in res
+                
+                if is_episode:
+                    seasons[s_num]['episodes'].append(res)
+                else:
+                    seasons[s_num]['packs'].append(res)
+                    
+            # Format output for frontend
+            sorted_seasons = []
+            for s_num in sorted(seasons.keys()):
+                pk = seasons[s_num]['packs']
+                ep = seasons[s_num]['episodes']
+                
+                if not pk and not ep:
+                    continue
+                    
+                # Sort packs by score
+                pk.sort(key=lambda x: x['total_score'], reverse=True)
+                # Sort episodes by Episode Number then Score
+                ep.sort(key=lambda x: (x.get('episode_number', 0), -x['total_score']))
+                
+                sorted_seasons.append({
+                    "season": s_num,
+                    "packs": pk,
+                    "episodes": ep
+                })
+                
+            return web.json_response({
+                "query": query,
+                "total_found": len(valid_results),
+                "type": "tv",
+                "seasons": sorted_seasons
+            })
+
+        # Movie Grouping (legacy quality grouping)
+        groups = group_by_quality(valid_results)
+        
+        # Format response: Sort groups by highest score
+        sorted_groups = []
+        for qname, items in groups.items():
+            if not items:
+                continue
+            
+            # Sort items in group by total_score
+            items.sort(key=lambda x: x['total_score'], reverse=True)
+            
+            # Group score is max score of items
+            group_score = items[0]['total_score']
+            
+            sorted_groups.append({
+                "quality": qname,
+                "score": group_score,
+                "count": len(items),
+                "files": items
+            })
+            
+        # Sort groups descending by score
+        sorted_groups.sort(key=lambda x: x['score'], reverse=True)
+        
+        return web.json_response({
+            "query": query,
+            "total_found": len(valid_results),
+            "type": "movie",
+            "groups": sorted_groups
+        })
+
+        
+    except Exception as e:
+        logger.error(f"Smart Search Error: {e}", exc_info=True)
         return web.json_response({"error": str(e)}, status=500)
