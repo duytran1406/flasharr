@@ -1343,13 +1343,18 @@ class Router {
         const grid = document.getElementById('discover-grid');
         this.updateDiscoveryHeader(`SEARCH: ${q}`, 'search', true);
 
+        // Disconnect infinite scroll observer to prevent discover API calls
+        if (this.discoverObserver) {
+            this.discoverObserver.disconnect();
+        }
+
         const initialLoader = document.getElementById('discover-initial-loader');
         if (initialLoader) {
             initialLoader.style.display = 'flex';
-            // Don't clear grid here - it triggers infinite scroll
-        } else if (grid) {
-            grid.innerHTML = '<div class="loading-container" style="grid-column: 1 / -1; height: 100%;"><div class="loading-spinner"></div></div>';
         }
+
+        // Clear grid for search results
+        if (grid) grid.innerHTML = '';
 
         try {
             const type = this.discoverState.type || 'movie';
@@ -1363,6 +1368,7 @@ class Router {
         } finally {
             const initialLoader = document.getElementById('discover-initial-loader');
             if (initialLoader) initialLoader.style.display = 'none';
+            // Don't reconnect observer - search results are static
         }
     }
 
