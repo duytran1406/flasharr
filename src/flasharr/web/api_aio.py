@@ -1002,6 +1002,7 @@ async def smart_search(request: web.Request) -> web.Response:
         
         # Execute search
         results = client.search(query, limit=50, extensions=('.mkv', '.mp4'))
+        logger.info(f"TimFshare client returned {len(results)} results")
         
         # Process results
         valid_results = []
@@ -1013,15 +1014,21 @@ async def smart_search(request: web.Request) -> web.Response:
             if sim < 0.4:  # Similarity threshold
                 continue
 
-            # Strict Year Filter (Movies Only)
+            # Relaxed Year Filter (Movies Only)
+            # Only skip if file explicitly has a DIFFERENT year
             if year and media_type == 'movie':
                 # Find year in filename: 19xx or 20xx
                 y_match = re.search(r'\b(19|20)\d{2}\b', r.name)
                 if y_match:
-                    file_year = y_match.group(1)
+                    file_year = y_match.group(0)  # Get full year (e.g., "2018")
                     # If file has a year and it doesn't match requested year -> SKIP
-                    if file_year != year:
-                        continue
+                    # Allow +/- 1 year tolerance for release date variations
+                    try:
+                        if abs(int(file_year) - int(year)) > 1:
+                            logger.debug(f"Skipping {r.name[:50]} - year mismatch: {file_year} vs {year}")
+                            continue
+                    except ValueError:
+                        pass  # If year parsing fails, include the file
                 
             # Profile quality
             profile = parser.parse(r.name, r.size)
@@ -1047,6 +1054,8 @@ async def smart_search(request: web.Request) -> web.Response:
                     r_dict['episode_number'] = int(e_match.group(1))
                     
             valid_results.append(r_dict)
+            
+        logger.info(f"Valid results after filtering: {len(valid_results)}")
             
         # TV Specific Grouping
         if media_type == 'tv':
@@ -1094,6 +1103,7 @@ async def smart_search(request: web.Request) -> web.Response:
 
         # Movie Grouping (legacy quality grouping)
         groups = group_by_quality(valid_results)
+        logger.info(f"Groups created: {len(groups)} groups from {len(valid_results)} results")
         
         # Format response: Sort groups by highest score
         sorted_groups = []
@@ -1116,6 +1126,8 @@ async def smart_search(request: web.Request) -> web.Response:
             
         # Sort groups descending by score
         sorted_groups.sort(key=lambda x: x['score'], reverse=True)
+        
+        logger.info(f"Returning {len(sorted_groups)} sorted groups with {len(valid_results)} total results")
         
         return web.json_response({
             "query": query,
