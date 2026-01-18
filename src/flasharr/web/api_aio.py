@@ -22,6 +22,7 @@ from ..services.smart_search import get_smart_search_service
 from ..clients.timfshare import TimFshareClient
 from ..utils.quality_profile import QualityParser, group_by_quality
 from ..utils.normalizer import normalize_filename
+from ..utils.title_matcher import calculate_smart_similarity
 
 logger = logging.getLogger(__name__)
 
