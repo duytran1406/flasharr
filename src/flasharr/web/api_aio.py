@@ -1031,7 +1031,7 @@ async def smart_search(request: web.Request) -> web.Response:
             # Smart similarity check using keyword-based matching
             # Use official TMDB title if available for better accuracy
             sim = calculate_smart_similarity(official_title, r.name)
-            if sim < 0.6:  # Higher threshold since we have official title
+            if sim < 0.55:  # Balanced threshold with TMDB official title
                 logger.debug(f"Low similarity ({sim:.2f}): {r.name[:60]}")
                 continue
 
