@@ -1382,7 +1382,7 @@ class Router {
         this.container.innerHTML = `
             <div style="max-width: 1400px; margin: 0 auto; display: flex; flex-direction: column; gap: 0; min-height: calc(100vh - 80px); overflow: hidden; position: relative;">
                 <div id="detail-hero" style="height: 400px; background-size: cover; background-position: center; position: relative; border-radius: 0 0 24px 24px; overflow: hidden; border-bottom: 2px solid rgba(255,255,255,0.05);">
-                    <div style="position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(15,23,42,0.1) 0%, rgba(15,23,42,1) 100%);"></div>
+                    <div style="position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(15,23,42,0.1) 0%, rgba(15,23,42,1) 100%); height: 100%;"></div>
                     <div style="position: absolute; bottom: 2rem; left: 2rem; display: flex; gap: 2rem; align-items: flex-end; width: calc(100% - 4rem);">
                         <div class="glass-panel" style="width: 200px; height: 300px; border-radius: 12px; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.8); border: 2px solid rgba(255,255,255,0.1); flex-shrink: 0; background: #1e293b;">
                              <img id="detail-poster" src="" style="width: 100%; height: 100%; object-fit: cover;">
