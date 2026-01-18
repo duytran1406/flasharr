@@ -1009,9 +1009,10 @@ async def smart_search(request: web.Request) -> web.Response:
         for r in results:
             r_dict = r.to_dict()
             
-            # check similarity
-            sim = client._calculate_similarity(title, r.name)
-            if sim < 0.4:  # Similarity threshold
+            # Smart similarity check using keyword-based matching
+            sim = calculate_smart_similarity(title, r.name)
+            if sim < 0.6:  # Increased threshold for better relevance
+                logger.debug(f"Low similarity ({sim:.2f}): {r.name[:60]}")
                 continue
 
             # Relaxed Year Filter (Movies Only)
