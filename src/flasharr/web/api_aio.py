@@ -999,6 +999,24 @@ async def smart_search(request: web.Request) -> web.Response:
                 query = f"{title}"
         
         limit = data.get('limit', 20)
+        tmdb_id = data.get('tmdbId')
+        
+        # Use TMDB official title if available for more accurate matching
+        official_title = title
+        if tmdb_id and media_type in ('movie', 'tv'):
+            try:
+                if media_type == 'movie':
+                    movie_data = await tmdb_client.get_movie_details(tmdb_id)
+                    official_title = movie_data.get('title', title)
+                else:  # tv
+                    tv_data = await tmdb_client.get_tv_details(tmdb_id)
+                    official_title = tv_data.get('name', title)
+                
+                logger.info(f"Using TMDB official title: '{official_title}' (tmdbId: {tmdb_id})")
+            except Exception as e:
+                logger.warning(f"Failed to fetch TMDB title for {tmdb_id}: {e}, using user input")
+                official_title = title
+        
         logger.info(f"Smart Search Query: {query} (type={media_type})")
         
         # Execute search
