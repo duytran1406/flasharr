@@ -1012,7 +1012,7 @@ async def smart_search(request: web.Request) -> web.Response:
             
             # Smart similarity check using keyword-based matching
             sim = calculate_smart_similarity(title, r.name)
-            if sim < 0.6:  # Increased threshold for better relevance
+            if sim < 0.5:  # Balanced threshold - filters obvious mismatches
                 logger.debug(f"Low similarity ({sim:.2f}): {r.name[:60]}")
                 continue
 
