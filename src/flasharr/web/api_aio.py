@@ -969,7 +969,7 @@ async def smart_search(request: web.Request) -> web.Response:
     """
     try:
         data = await get_json(request)
-        title = data.get('title')
+        title = data.get('title') or data.get('query')  # Accept both parameters for backward compatibility
         year = str(data.get('year', ''))
         media_type = data.get('type', 'movie')
         season = data.get('season')
