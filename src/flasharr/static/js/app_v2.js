@@ -766,9 +766,23 @@ class Router {
 
     handleSearchInput(value) {
         if (!value) {
+            // Search cleared - restore discover view
             const type = this.discoverState.type === 'movie' ? 'Movies' : 'TV Series';
             const icon = this.discoverState.type === 'movie' ? 'movie' : 'tv';
             this.updateDiscoveryHeader(type, icon);
+
+            // Reset and reload discover data
+            this.discoverState.page = 1;
+            this.discoverState.tmdbPage = 1;
+            this.discoverState.buffer = [];
+            this.discoverState.hasMore = true;
+
+            // Clear grid and reload
+            const grid = document.getElementById('discover-grid');
+            if (grid) grid.innerHTML = '';
+
+            this.fetchDiscoverData(true);
+            this.setupInfiniteScroll(); // Reconnect observer
         } else {
             this.updateDiscoveryHeader(`Searching: ${value}`, 'search', true);
         }
