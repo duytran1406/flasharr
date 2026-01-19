@@ -1459,7 +1459,7 @@ class Router {
 
         const options = {
             root: document.getElementById('discover-scroll-container'),
-            rootMargin: '600px', // More aggressive pre-fetch
+            rootMargin: '200px', // Less aggressive pre-fetch to avoid double-triggers
             threshold: 0
         };
 
@@ -1493,7 +1493,7 @@ class Router {
             if (loader) loader.style.display = 'block';
         }
 
-        const itemsPerPage = 28;
+        const itemsPerPage = 20;
         const s = this.discoverState;
 
         try {
