@@ -1041,7 +1041,7 @@ async def smart_search(request: web.Request) -> web.Response:
         logger.info(f"Smart Search Query: {query} (type={media_type})")
         
         # Execute primary search
-        results = client.search(query, limit=50, extensions=('.mkv', '.mp4'))
+        results = client.search(query, limit=100, extensions=('.mkv', '.mp4'))
         logger.info(f"Primary search returned {len(results)} results")
         
         # Dual-search: Also search with Vietnamese alias if available and different
@@ -1051,7 +1051,7 @@ async def smart_search(request: web.Request) -> web.Response:
         if vn_alias and vn_alias.lower() != official_title.lower():
             # Search with original Vietnamese (with diacritics)
             logger.info(f"Performing secondary search with Vietnamese alias: '{vn_alias}'")
-            vn_results = client.search(vn_alias, limit=30, extensions=('.mkv', '.mp4'))
+            vn_results = client.search(vn_alias, limit=100, extensions=('.mkv', '.mp4'))
             logger.info(f"Vietnamese alias search returned {len(vn_results)} results")
             
             # ALSO search with normalized Vietnamese (without diacritics)
@@ -1059,7 +1059,7 @@ async def smart_search(request: web.Request) -> web.Response:
             vn_normalized = normalize_vietnamese(vn_alias)
             if vn_normalized != vn_alias.lower():
                 logger.info(f"Performing normalized search: '{vn_normalized}'")
-                vn_norm_results = client.search(vn_normalized, limit=30, extensions=('.mkv', '.mp4'))
+                vn_norm_results = client.search(vn_normalized, limit=100, extensions=('.mkv', '.mp4'))
                 logger.info(f"Normalized search returned {len(vn_norm_results)} results")
                 vn_results.extend(vn_norm_results)
             
