@@ -252,15 +252,8 @@ def _match_against_title(search_title: str, filename: str) -> Dict:
         # Partial match - calculate how many are missing
         match_ratio = len(common_words) / len(search_words)
         
-        # Only accept if 1 keyword missing AND it's not a short title
-        if len(missing_words) == 1 and len(search_words) >= 3:
-            return {
-                'score': 0.65,
-                'is_valid': True,
-                'match_type': 'partial'
-            }
-        
-        # Too many keywords missing
+        # Strict matching: ALL keywords required (no exceptions)
+        # This prevents false positives like "Tâm" matching Naruto episodes
         return {
             'score': match_ratio * 0.5,
             'is_valid': False,
