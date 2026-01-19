@@ -1081,6 +1081,10 @@ class Router {
         const modal = document.getElementById('smart-search-modal-tv');
         const titleEl = document.getElementById('smart-search-title-tv');
         const resultsEl = document.getElementById('smart-search-results-tv');
+        const smartGrabBtn = document.getElementById('btn-smart-grab');
+
+        // Hide smart grab until we confirm it's a season search
+        if (smartGrabBtn) smartGrabBtn.style.display = 'none';
 
         modal.style.display = 'flex';
         void modal.offsetWidth;
@@ -1133,20 +1137,22 @@ class Router {
                 const epInfo = data.episode_info || {};
                 movieTitleEl.innerText = `${title} - S${String(epInfo.season).padStart(2, '0')}E${String(epInfo.episode).padStart(2, '0')}`;
 
-                this.renderSmartSearchMovieResults(data);
+                // Tiny delay to ensure modal is visible before rendering
+                setTimeout(() => {
+                    this.renderSmartSearchMovieResults(data);
+                }, 10);
                 return;
             }
 
             // Store season data for Smart Grab (TV season mode only)
-            if (data.seasons && data.seasons.length > 0) {
+            if (season && !episode && data.seasons && data.seasons.length > 0) {
                 this.currentSmartSearchData = {
                     tmdbId: tmdbId,
                     season: season,
                     season_data: data.seasons[0]  // First season (current search)
                 };
 
-                // Show Smart Grab button
-                const smartGrabBtn = document.getElementById('btn-smart-grab');
+                // Show Smart Grab button ONLY for season searches
                 if (smartGrabBtn) {
                     smartGrabBtn.style.display = 'flex';
                 }

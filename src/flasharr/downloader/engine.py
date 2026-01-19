@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 from ..core.config import get_config, DownloadConfig
 from ..core.exceptions import DownloadError, DownloadFailedError
 from ..core.rate_limiter import GlobalRateLimiter
-from ..core.priority_queue import PriorityQueue, Priority, auto_prioritize
+from ..core.priority_queue import Priority
 from ..core.link_checker import get_link_checker, LinkStatus
 from ..security.validators import sanitize_filename
 
@@ -435,7 +435,19 @@ class DownloadEngine:
             "Accept-Encoding": "identity",
             "Connection": "keep-alive"
         }
-        self._session = aiohttp.ClientSession(headers=headers)
+        
+        # Configure connection pooling
+        connector = aiohttp.TCPConnector(
+            limit=100,           # Total connections
+            limit_per_host=10,   # Connections per host
+            ttl_dns_cache=300
+        )
+        
+        self._session = aiohttp.ClientSession(
+            headers=headers,
+            connector=connector,
+            timeout=aiohttp.ClientTimeout(total=None, connect=30, sock_read=30)
+        )
         
         # Start worker tasks
         for i in range(self.max_concurrent):
@@ -786,7 +798,7 @@ class DownloadEngine:
             task.destination.parent.mkdir(parents=True, exist_ok=True)
             
             logger.info(f"Using Premium URL: {task.url}")
-            logger.info(f"DEBUG: Premium Link for {task.filename}: {task.url}")
+            logger.debug(f"Premium Link for {task.filename}: {task.url}")
             
             # Check for existing partial download
             start_byte = 0
@@ -1037,12 +1049,6 @@ class DownloadEngine:
         task.progress.downloaded_bytes = start_byte
         task.state = DownloadState.DOWNLOADING
         
-        # Open file for writing
-        mode = "ab" if start_byte > 0 else "wb"
-        start_time = time.monotonic()
-        last_log_time = start_time
-        
-        logger.info(f"Opening file {task.destination} in mode {mode}")
         # Open file for writing
         mode = "ab" if start_byte > 0 else "wb"
         start_time = time.monotonic()
