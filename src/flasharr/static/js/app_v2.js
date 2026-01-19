@@ -2469,13 +2469,11 @@ class Router {
         this.container.innerHTML = `
             <div style="padding: 1.5rem; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 1rem; overflow: hidden;">
             <!-- Trending Carousel Mount -->
-            <div id="trending-mount"></div>
-
             <!-- Trending Carousel Mount -->
             <div id="trending-mount"></div>
 
             <!-- Trending Section (Static Structure) -->
-            <div class="box-section" style="margin-bottom: 1rem; border-color: rgba(255, 215, 0, 0.3); min-height: 280px; display: flex; flex-direction: column; justify-content: center;">
+            <div class="box-section" style="margin-bottom: 1rem; border-color: rgba(255, 215, 0, 0.3); min-height: 302px; display: flex; flex-direction: column; justify-content: center;">
                 <div class="box-label" style="color: #ffd700;">
                     <span class="material-icons">trending_up</span>
                     Trending This Week
