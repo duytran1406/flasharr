@@ -74,7 +74,9 @@ class Router {
             hasMore: true,
             showFilters: false, // Hidden by default
             tmdbPage: 1, // TMDb's own pagination
-            buffer: [] // Local buffer for partial pages
+            buffer: [], // Local buffer for partial pages
+            renderedItems: [], // Cache for all rendered items in the current view
+            lastScrollPos: 0 // Track scroll position for restoration
         };
     }
 
@@ -202,7 +204,17 @@ class Router {
     }
 
     navigate(view, addToHistory = true) {
-        console.log(`🚀 Navigating to: ${view}`);
+        const currentView = this.container.getAttribute('data-view');
+        console.log(`🚀 Navigating from ${currentView} to: ${view}`);
+
+        // Save scroll position if leaving discover
+        if (currentView === 'discover') {
+            const scrollContainer = document.getElementById('discover-scroll-container');
+            if (scrollContainer) {
+                this.discoverState.lastScrollPos = scrollContainer.scrollTop;
+                console.log(`Saved discover scroll position: ${this.discoverState.lastScrollPos}`);
+            }
+        }
 
         // Update Title
         document.title = `Flasharr - ${view.charAt(0).toUpperCase() + view.slice(1)}`;
@@ -240,7 +252,7 @@ class Router {
                     this.loadDashboard();
                     this.updateAccountInfo(null, true); // Force quota refresh
                     break;
-                case 'discover': this.loadDiscover(); break;
+                case 'discover': this.loadDiscover(null, !addToHistory); break;
                 case 'downloads': this.loadDownloads(); break;
                 case 'explore': this.loadExplore(); break;
                 case 'settings':
@@ -775,6 +787,7 @@ class Router {
             this.discoverState.page = 1;
             this.discoverState.tmdbPage = 1;
             this.discoverState.buffer = [];
+            this.discoverState.renderedItems = [];
             this.discoverState.hasMore = true;
 
             // Clear grid and reload
@@ -788,17 +801,52 @@ class Router {
         }
     }
 
-    async loadDiscover(type = 'movie') {
-        this.discoverState.type = type;
-        this.discoverState.page = 1;
-        this.discoverState.tmdbPage = 1;
-        this.discoverState.buffer = [];
-        this.discoverState.hasMore = true;
+    async loadDiscover(type = null, isRestoring = false) {
+        const s = this.discoverState;
 
-        // Initial Header
+        // If type is not provided, use current type (preserves last tab)
+        if (!type) {
+            type = s.type || 'movie';
+        }
+
+        // State Restoration Logic
+        if (isRestoring && s.renderedItems.length > 0 && s.type === type) {
+            console.log("Restoring discover state...");
+            this.renderDiscoverLayout(type);
+            this.renderDiscoverGrid(s.renderedItems, type);
+
+            // Restore scroll position
+            setTimeout(() => {
+                const scrollContainer = document.getElementById('discover-scroll-container');
+                if (scrollContainer) {
+                    scrollContainer.scrollTop = s.lastScrollPos;
+                    console.log(`Restored scroll to: ${s.lastScrollPos}`);
+                }
+            }, 50);
+
+            this.setupInfiniteScroll();
+            return;
+        }
+
+        // Fresh Load logic
+        s.type = type;
+        s.page = 1;
+        s.tmdbPage = 1;
+        s.buffer = [];
+        s.hasMore = true;
+        s.renderedItems = [];
+
+        this.renderDiscoverLayout(type);
+        this.fetchGenres(type);
+        await this.fetchDiscoverData(true);
+        this.setupInfiniteScroll();
+    }
+
+    renderDiscoverLayout(type) {
         const headerTitle = type === 'movie' ? 'Movies' : 'TV Series';
         const headerIcon = type === 'movie' ? 'movie' : 'tv';
-        // Use timeout to ensure DOM header exists if we just navigated (though usually it exists)
+
+        // Initial Header
         setTimeout(() => this.updateDiscoveryHeader(headerTitle, headerIcon), 0);
 
         this.container.innerHTML = `
@@ -815,8 +863,8 @@ class Router {
 
                         <div style="display: flex; align-items: center;">
                             <div class="tab-container">
-                                <button class="tab-btn ${this.discoverState.type === 'movie' ? 'active' : ''}" onclick="window.router.switchDiscoverType('movie')">Movies</button>
-                                <button class="tab-btn ${this.discoverState.type === 'tv' ? 'active' : ''}" onclick="window.router.switchDiscoverType('tv')">TV Series</button>
+                                <button class="tab-btn ${this.discoverState.type === 'movie' ? 'active' : ''}" onclick="window.router.loadDiscover('movie')">Movies</button>
+                                <button class="tab-btn ${this.discoverState.type === 'tv' ? 'active' : ''}" onclick="window.router.loadDiscover('tv')">TV Series</button>
                             </div>
 
                             <select onchange="window.router.setDiscoverSort(this.value)" class="sort-select-premium" style="margin-right: 1rem;">
@@ -857,13 +905,8 @@ class Router {
                 <div id="discover-sidebar" class="discover-sidebar custom-scrollbar ${this.discoverState.showFilters ? '' : 'collapsed'}">
                     ${this.renderSidebarContent()}
                 </div>
-
-           </div>
+            </div>
         `;
-
-        this.fetchGenres(type); // Will populate genre-list inside sidebar
-        await this.fetchDiscoverData(true);
-        this.setupInfiniteScroll();
     }
 
     renderSidebarContent() {
@@ -946,6 +989,7 @@ class Router {
         this.discoverState.page = 1;
         this.discoverState.tmdbPage = 1;
         this.discoverState.buffer = []; // Corrected reference
+        this.discoverState.renderedItems = [];
         this.discoverState.hasMore = true;
         this.fetchDiscoverData(true);
     }
@@ -1536,9 +1580,11 @@ class Router {
                 }
             }
 
-            // Slice 18 items from buffer
+            // Slice items from buffer
             const chunk = s.buffer.splice(0, itemsPerPage);
             if (chunk.length > 0) {
+                if (reset) s.renderedItems = [];
+                s.renderedItems.push(...chunk);
                 this.renderDiscoverGrid(chunk, s.type, !reset);
                 s.page++;
             }
