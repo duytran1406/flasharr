@@ -419,10 +419,13 @@ body.sidebar-collapsed .sidebar-collapse-btn {
     padding: 2rem;
     overflow-y: auto;
     position: relative;
+    display: flex;
+    flex-direction: column;
 }
 
-/* Discover Mode Overrides */
-.view-container[data-view="discover"] {
+.view-container[data-view="discover"],
+.view-container[data-view="dashboard"],
+.view-container[data-view="downloads"] {
     overflow: hidden;
     padding: 0;
 }

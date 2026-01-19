@@ -580,23 +580,24 @@ class Router {
 
     loadDownloads() {
         this.container.innerHTML = `
-            <div class="glass-panel" style="padding: 0; overflow: hidden; display: flex; flex-direction: column; height: 825px; max-height: 90vh;">
-                <!-- Toolbar -->
-                <div style="padding: 1rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;">
-                    <h2 class="glow-text" style="font-size: 1rem; text-transform: uppercase;">Active Downloads</h2>
-                    <div style="display: flex; gap: 0.5rem; align-items: center;">
-                        <button class="btn-tiny btn-success" onclick="window.router.batchTaskAction('resume-all')" title="Start/Resume All">
-                            <span class="material-icons">play_arrow</span>
-                        </button>
-                        <button class="btn-tiny btn-danger" onclick="window.router.batchTaskAction('pause-all')" title="Pause/Stop All">
-                            <span class="material-icons">pause</span>
-                        </button>
-                        <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.1); margin: 0 0.25rem;"></div>
-                        <button class="btn-tiny" onclick="window.router.loadDownloads()" title="Refresh">
-                            <span class="material-icons">refresh</span>
-                        </button>
+            <div style="padding: 1.5rem; height: 100%; box-sizing: border-box; display: flex; flex-direction: column;">
+                <div class="glass-panel" style="padding: 0; overflow: hidden; display: flex; flex-direction: column; flex: 1;">
+                    <!-- Toolbar -->
+                    <div style="padding: 1rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;">
+                        <h2 class="glow-text" style="font-size: 1rem; text-transform: uppercase;">Active Downloads</h2>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <button class="btn-tiny btn-success" onclick="window.router.batchTaskAction('resume-all')" title="Start/Resume All">
+                                <span class="material-icons">play_arrow</span>
+                            </button>
+                            <button class="btn-tiny btn-danger" onclick="window.router.batchTaskAction('pause-all')" title="Pause/Stop All">
+                                <span class="material-icons">pause</span>
+                            </button>
+                            <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.1); margin: 0 0.25rem;"></div>
+                            <button class="btn-tiny" onclick="window.router.loadDownloads()" title="Refresh">
+                                <span class="material-icons">refresh</span>
+                            </button>
+                        </div>
                     </div>
-                </div>
 
                 <!-- Table Container with fixed height for ~12 items -->
                 <div style="flex: 1; overflow: hidden; padding: 0; position: relative;">
@@ -639,6 +640,7 @@ class Router {
                     <div id="downloads-pagination" class="pagination-coordinator"></div>
                 </div>
             </div>
+        </div>
         `;
         this.downloadPage = 1;
         this.downloadLimit = 12;
@@ -2465,6 +2467,7 @@ class Router {
 
     loadDashboard() {
         this.container.innerHTML = `
+            <div style="padding: 1.5rem; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 1rem; overflow: hidden;">
             <!-- Trending Carousel Mount -->
             <div id="trending-mount"></div>
 
@@ -2493,7 +2496,7 @@ class Router {
             </div>
 
             <!-- Main Dashboard Grid -->
-            <div style="display: grid; grid-template-columns: 6.5fr 3.5fr; gap: 1rem; height: calc(100vh - 420px); min-height: 350px; margin-bottom: 0;">
+            <div style="display: grid; grid-template-columns: 6.5fr 3.5fr; gap: 1rem; flex: 1; min-height: 0; margin-bottom: 0;">
                 
                 <!-- Left Column: Active Downloads -->
                 <div class="box-section" style="border-color: rgba(0,243,255,0.15);">
@@ -2582,6 +2585,7 @@ class Router {
                     </div>
                 </div>
             </div>
+        </div>
         `;
         this.fetchDashboardSync();
         this.initTrafficChart();
