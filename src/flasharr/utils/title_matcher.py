@@ -115,6 +115,9 @@ def extract_core_title(text: str) -> str:
     # Remove common separators and brackets
     name = re.sub(r'[\[\]()]', ' ', name)
     
+    # Remove colons and other punctuation (important for titles like "Predator: Badlands")
+    name = re.sub(r'[:\'"!?,;]', ' ', name)
+    
     # Replace dots, underscores, dashes with spaces
     name = re.sub(r'[._-]+', ' ', name)
     
