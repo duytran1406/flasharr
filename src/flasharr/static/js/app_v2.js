@@ -1231,8 +1231,8 @@ class Router {
                         ${scoreBar}
                     </div>
                 </div>
-                <button onclick="window.router.downloadItem('${file.url}')" class="icon-btn-tiny" style="background: var(--color-primary); color: #000; width: 36px; height: 36px; border-radius: 50%; box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);">
-                    <span class="material-icons">download</span>
+                <button onclick="window.router.downloadItem('${file.url}')" class="dl-btn-premium">
+                    <span class="material-icons" style="font-size: 16px;">download</span> GET
                 </button>
             </div>
         `;
@@ -1733,7 +1733,15 @@ class Router {
             if (smartBtn) {
                 const safeTitle = (data.title || data.name || '').replace(/'/g, "\\'");
                 const releaseYear = release ? release.split('-')[0] : '';
-                smartBtn.onclick = () => window.router.openSmartSearch(id, type, safeTitle, releaseYear);
+                smartBtn.onclick = () => {
+                    let activeSeason = null;
+                    // For TV shows, try to grab the currently selected season from the dropdown
+                    if (type === 'tv') {
+                        const selector = document.getElementById('season-selector');
+                        if (selector && selector.value) activeSeason = selector.value;
+                    }
+                    window.router.openSmartSearch(id, type, safeTitle, releaseYear, activeSeason);
+                };
             }
 
 
