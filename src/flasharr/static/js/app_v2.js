@@ -2517,7 +2517,7 @@ class Router {
                 </div>
 
                 <!-- Right Column: Dashboard & System Traffic -->
-                <div style="display: grid; grid-template-rows: 2fr 3fr; gap: 1rem;">
+                <div style="display: grid; grid-template-rows: 1.84fr 2.76fr; gap: 1rem;">
                     
                     <!-- Combined Command Unit -->
                     <div class="box-section" style="border-color: rgba(0,243,255,0.2); gap: 1rem; height: 100%;">

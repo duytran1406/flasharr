@@ -965,6 +965,7 @@ input[type=range]::-webkit-slider-thumb:hover {
      ========================================= */
 .transfer-row:hover {
     background: rgba(255, 255, 255, 0.04) !important;
+    box-shadow: inset 0 0 20px rgba(0, 243, 255, 0.05), 0 0 8px rgba(0, 243, 255, 0.1);
 }
 
 .icon-btn-tiny {
