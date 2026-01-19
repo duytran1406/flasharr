@@ -1142,6 +1142,7 @@ class Router {
 
     _renderFileRow(file) {
         const sizeGB = (file.size / (1024 * 1024 * 1024)).toFixed(2);
+        const normalizedScore = file.normalized_score || Math.round((file.total_score || 0) / 3);
 
         // Badges
         let badges = '';
@@ -1150,16 +1151,36 @@ class Router {
         if (file.hdr) badges += `<span style="background: rgba(139, 92, 246, 0.2); color: #a78bfa; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 700; border: 1px solid rgba(139, 92, 246, 0.3);">HDR</span>`;
         if (file.dolby_vision) badges += `<span style="background: rgba(236, 72, 153, 0.2); color: #f472b6; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 700; border: 1px solid rgba(236, 72, 153, 0.3);">DV</span>`;
 
+        // Match source indicator (Phase 5)
+        let matchIndicator = '';
+        if (file.match_type === 'alias') {
+            matchIndicator = `<span style="background: rgba(251, 191, 36, 0.15); color: #fbbf24; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: 600; border: 1px solid rgba(251, 191, 36, 0.3);" title="Matched via alternative title">🌍 ALIAS</span>`;
+        } else if (file.match_type === 'exact') {
+            matchIndicator = `<span style="background: rgba(34, 197, 94, 0.15); color: #22c55e; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: 600; border: 1px solid rgba(34, 197, 94, 0.3);">✓ EXACT</span>`;
+        }
+
+        // Normalized score bar
+        const scoreColor = normalizedScore >= 70 ? '#22c55e' : normalizedScore >= 50 ? '#fbbf24' : '#ef4444';
+        const scoreBar = `
+            <div style="display: flex; align-items: center; gap: 6px; min-width: 80px;">
+                <div style="flex: 1; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden;">
+                    <div style="height: 100%; width: ${normalizedScore}%; background: ${scoreColor}; border-radius: 2px;"></div>
+                </div>
+                <span style="font-size: 0.7rem; color: ${scoreColor}; font-weight: 600;">${normalizedScore}</span>
+            </div>
+        `;
+
         return `
             <div style="padding: 1rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: space-between; gap: 1rem; hover: background: rgba(255,255,255,0.02);">
                 <div style="flex: 1; min-width: 0;">
                     <div style="color: #e5e7eb; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 0.5rem;" title="${file.name}">
                         ${file.name}
                     </div>
-                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
                         <span style="color: #9ca3af; font-size: 0.85rem; font-family: monospace;">${sizeGB} GB</span>
                         <div style="height: 4px; width: 4px; background: #4b5563; border-radius: 50%;"></div>
-                        <div style="display: flex; gap: 6px;">${badges}</div>
+                        <div style="display: flex; gap: 6px;">${badges}${matchIndicator}</div>
+                        ${scoreBar}
                     </div>
                 </div>
                 <button onclick="window.router.downloadItem('${file.url}')" class="icon-btn-tiny" style="background: var(--color-primary); color: #000; width: 36px; height: 36px; border-radius: 50%; box-shadow: 0 4px 12px rgba(0, 230, 118, 0.3);">

@@ -199,6 +199,90 @@ class QualityProfile:
         """Total score = base quality + custom format bonuses."""
         return self.quality_score + self.custom_format_score
     
+    @property
+    def normalized_score(self) -> float:
+        """
+        Normalized score 0-100 for UI display.
+        
+        Based on:
+        - Quality: 0-40 points (max 180 → 40)
+        - Language: 0-25 points (Vietnamese dub priority)
+        - HDR: 0-15 points
+        - Audio: 0-10 points
+        - Codec: 0-10 points
+        """
+        # Quality contribution (max 40 points)
+        quality = min(self.quality_score / 180 * 40, 40)
+        
+        # Language contribution (max 25 points)
+        if self.vietdub:
+            lang = 25
+        elif self.vietsub:
+            lang = 15
+        else:
+            lang = 10  # Base for original/English
+        
+        # HDR contribution (max 15 points)
+        if self.dolby_vision:
+            hdr = 15
+        elif self.hdr:
+            hdr = 10
+        else:
+            hdr = 0
+        
+        # Audio contribution (max 10 points)
+        audio_map = {
+            AudioCodec.Atmos: 10,
+            AudioCodec.TrueHD: 9,
+            AudioCodec.DTS_HD: 8,
+            AudioCodec.DTS: 6,
+            AudioCodec.EAC3: 5,
+            AudioCodec.AC3: 4,
+            AudioCodec.AAC: 3,
+            AudioCodec.MP3: 1,
+        }
+        audio = audio_map.get(self.audio_codec, 2)
+        
+        # Codec contribution (max 10 points)
+        codec = 10 if self.video_codec == VideoCodec.H265 else 5
+        
+        return min(quality + lang + hdr + audio + codec, 100)
+    
+    def get_score_breakdown(self) -> Dict:
+        """
+        Get detailed score breakdown for UI transparency.
+        
+        Returns dict with individual score components.
+        """
+        return {
+            "quality": {
+                "name": self.quality_name,
+                "score": self.quality_score,
+                "max": 180,
+            },
+            "language": {
+                "vietdub": self.vietdub,
+                "vietsub": self.vietsub,
+                "score": 100 if self.vietdub else (10 if self.vietsub else 0),
+            },
+            "hdr": {
+                "hdr": self.hdr,
+                "dolby_vision": self.dolby_vision,
+                "score": 50 if self.dolby_vision else (30 if self.hdr else 0),
+            },
+            "audio": {
+                "codec": self.audio_codec.name,
+                "score": min(15, max(0, self.audio_codec.value - 3) * 3),
+            },
+            "video": {
+                "codec": self.video_codec.name,
+                "bit_depth": self.bit_depth,
+                "score": 10 if self.video_codec == VideoCodec.H265 else 0,
+            },
+            "total": self.total_score,
+            "normalized": round(self.normalized_score, 1),
+        }
+    
     def to_dict(self) -> Dict:
         return {
             "quality_name": self.quality_name,
@@ -213,6 +297,7 @@ class QualityProfile:
             "quality_score": self.quality_score,
             "custom_format_score": self.custom_format_score,
             "total_score": self.total_score,
+            "normalized_score": round(self.normalized_score, 1),
         }
 
 

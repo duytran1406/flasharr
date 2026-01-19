@@ -312,7 +312,7 @@ def is_likely_different_movie(search_title: str, filename: str, threshold: float
 
 
 # ============================================================================
-# VIETNAMESE SUPPORT (Phase 2 Preparation)
+# VIETNAMESE SUPPORT (Phase 3: Phonetic Matching)
 # ============================================================================
 
 VIETNAMESE_CHARS = set('ăâđêôơưáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ')
@@ -352,3 +352,73 @@ def normalize_vietnamese(text: str) -> str:
     for viet, ascii_char in viet_to_ascii.items():
         result = result.replace(viet, ascii_char)
     return result
+
+
+def phonetic_match_vietnamese(search: str, filename: str) -> float:
+    """
+    Match Vietnamese titles that may be romanized differently.
+    
+    Example: "Bộ Bộ Kinh Tâm" should match:
+    - Bo.Bo.Kinh.Tam.mkv
+    - BuocBuocKinhTam.mkv
+    - Bu.Bu.Jing.Xin.mkv (Mandarin romanization)
+    
+    Returns similarity score 0.0-1.0
+    """
+    search_norm = normalize_vietnamese(search)
+    file_norm = normalize_vietnamese(filename)
+    
+    # Remove non-alphanumeric and compare
+    search_clean = re.sub(r'[^a-z0-9]', '', search_norm)
+    file_clean = re.sub(r'[^a-z0-9]', '', file_norm)
+    
+    # Exact normalized match
+    if search_clean in file_clean:
+        return 1.0
+    
+    # Partial word matching
+    search_words = set(search_norm.split())
+    file_words = set(file_norm.split())
+    
+    if search_words and search_words.issubset(file_words):
+        return 0.9
+    
+    # Fuzzy match using difflib
+    return difflib.SequenceMatcher(None, search_clean, file_clean).ratio()
+
+
+# ============================================================================
+# CROSS-LANGUAGE ROMANIZATION (Phase 3)
+# ============================================================================
+
+# Common romanization mappings for Asian languages
+ROMANIZATION_MAP = {
+    # Chinese Pinyin variants
+    'xin': ['心', 'kinh'],  # heart
+    'jing': ['经', 'kinh'],  # classic/through
+    'bu': ['步', 'bộ'],  # step
+    
+    # Korean romanization
+    'bo': ['보', 'bộ'],
+    'kyung': ['경', 'kinh'],
+    'sim': ['심', 'tâm'],
+}
+
+
+def get_romanization_variants(word: str) -> List[str]:
+    """
+    Get alternative romanizations for a word.
+    
+    Useful for matching:
+    - "Kinh" → "Jing" (Vietnamese → Pinyin)
+    - "Tâm" → "Xin" (Vietnamese → Pinyin)
+    """
+    variants = [word.lower()]
+    
+    for romanization, equivalents in ROMANIZATION_MAP.items():
+        if word.lower() == romanization or word.lower() in equivalents:
+            variants.append(romanization)
+            variants.extend([e for e in equivalents if isinstance(e, str)])
+    
+    return list(set(variants))
+
