@@ -1785,7 +1785,7 @@ class Router {
             </style>
         `;
 
-        document.getElementById('detail-hero').style.backgroundImage = 'none';
+        document.getElementById('detail-hero').style.backgroundImage = "url('/static/images/placeholder-banner.png')";
         document.getElementById('detail-poster').src = '/static/images/placeholder-poster.svg';
 
         try {
@@ -1793,7 +1793,7 @@ class Router {
             const data = await res.json();
 
             // Hero
-            document.getElementById('detail-hero').style.backgroundImage = data.backdrop_path ? `url('https://image.tmdb.org/t/p/original${data.backdrop_path}')` : 'none';
+            document.getElementById('detail-hero').style.backgroundImage = data.backdrop_path ? `url('https://image.tmdb.org/t/p/original${data.backdrop_path}')` : "url('/static/images/placeholder-banner.png')";
             document.getElementById('detail-poster').src = data.poster_path ? `https://image.tmdb.org/t/p/w500${data.poster_path}` : '/static/images/placeholder-poster.svg';
             document.getElementById('detail-tagline').innerText = data.tagline || '';
             document.getElementById('detail-title').innerText = data.title || data.name;
@@ -1832,6 +1832,8 @@ class Router {
                 document.getElementById('collection-name').innerHTML = `${col.name}`;
                 if (col.backdrop_path) {
                     document.getElementById('collection-bg').style.backgroundImage = `url('https://image.tmdb.org/t/p/original${col.backdrop_path}')`;
+                } else {
+                    document.getElementById('collection-bg').style.backgroundImage = "url('/static/images/placeholder-banner.png')";
                 }
                 document.getElementById('collection-banner').onclick = () => window.router.navigate(`collection/${col.id}`);
             }
@@ -1968,7 +1970,7 @@ class Router {
             this.container.innerHTML = `
                 <div style="max-width: 1400px; margin: 0 auto; min-height: calc(100vh - 80px);">
                     <div style="height: 400px; position: relative; border-radius: 0 0 24px 24px; overflow: hidden; margin-bottom: 2rem; border-bottom: 2px solid rgba(255,255,255,0.05);">
-                         <div style="position: absolute; inset: 0; background-image: url('https://image.tmdb.org/t/p/original${data.backdrop_path}'); background-size: cover; background-position: center;"></div>
+                         <div style="position: absolute; inset: 0; background-image: url('${data.backdrop_path ? `https://image.tmdb.org/t/p/original${data.backdrop_path}` : '/static/images/placeholder-banner.png'}'); background-size: cover; background-position: center;"></div>
                          <div style="position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(15,23,42,0.1) 0%, rgba(15,23,42,1) 100%);"></div>
                          <div style="position: absolute; bottom: 2rem; left: 2rem;">
                               <h1 style="font-size: 3rem; font-weight: 800; margin-bottom: 0.5rem; text-shadow: 0 2px 10px rgba(0,0,0,0.5);">${data.name}</h1>
