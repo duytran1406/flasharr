@@ -1021,6 +1021,19 @@ async def smart_search(request: web.Request) -> web.Response:
                 if aliases:
                     logger.info(f"Alternative titles: {aliases[:5]}{'...' if len(aliases) > 5 else ''}")
                     
+                    # Also add normalized Vietnamese versions (without diacritics)
+                    # Files are often named "Bo Bo Kinh Tam" instead of "Bộ Bộ Kinh Tâm"
+                    from ..utils.title_matcher import is_vietnamese_title, normalize_vietnamese
+                    normalized_aliases = []
+                    for alias in aliases:
+                        if is_vietnamese_title(alias):
+                            normalized = normalize_vietnamese(alias)
+                            if normalized not in [a.lower() for a in aliases]:
+                                normalized_aliases.append(normalized)
+                    if normalized_aliases:
+                        aliases = list(aliases) + normalized_aliases
+                        logger.info(f"Added normalized aliases: {normalized_aliases}")
+                    
             except Exception as e:
                 logger.warning(f"Failed to fetch TMDB data for {tmdb_id}: {e}, using user input")
                 official_title = title
