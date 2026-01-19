@@ -983,20 +983,27 @@ async def smart_search(request: web.Request) -> web.Response:
         client = TimFshareClient()
         parser = QualityParser()
         
-        # Construct query
+        # Normalize title for search (remove special characters like ū → u)
+        import unicodedata
+        normalized_title = ''.join(
+            c for c in unicodedata.normalize('NFD', title) 
+            if unicodedata.category(c) != 'Mn'
+        ) if title else title
+        
+        # Construct query using normalized title
         if media_type == 'movie':
-            query = f"{title} {year}" if year else title
+            query = f"{normalized_title} {year}" if year else normalized_title
         else:
             # TV Logic
             if season and episode:
                 # Specific episode search: "Title SxxExx"
-                query = f"{title} S{int(season):02d}E{int(episode):02d}"
+                query = f"{normalized_title} S{int(season):02d}E{int(episode):02d}"
             elif season:
                 # Season pack search: "Title Season X" or "Title Sxx"
-                query = f"{title} Season {season}"
+                query = f"{normalized_title} Season {season}"
             else:
                 # General show search
-                query = f"{title}"
+                query = f"{normalized_title}"
         
         limit = data.get('limit', 20)
         tmdb_id = data.get('tmdbId')
@@ -1232,6 +1239,12 @@ async def smart_search(request: web.Request) -> web.Response:
             
             if not sim_result['is_valid']:
                 logger.debug(f"Rejected ({sim_result['match_type']}, {sim_result['score']:.2f}): {r.name[:60]}")
+                continue
+            
+            # STRICT TMDB FILTERING: When TMDB ID provided, only accept alias matches
+            # This prevents wrong shows (e.g., Korean "Scarlet Heart Ryeo") from appearing
+            if tmdb_id and sim_result['match_type'] != 'alias':
+                logger.debug(f"Rejected non-alias match (tmdbId={tmdb_id}): {r.name[:60]}")
                 continue
 
             # Relaxed Year Filter (Movies Only)
