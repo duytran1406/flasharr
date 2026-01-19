@@ -1584,7 +1584,7 @@ input[type=range]::-webkit-slider-thumb:hover {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     gap: 1.5rem;
-    padding: 0 1rem;
+    padding: 10px 1rem 0 1rem;
 }
 
 /* Poster Card Revamp */
