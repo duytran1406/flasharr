@@ -580,7 +580,7 @@ class Router {
 
     loadDownloads() {
         this.container.innerHTML = `
-            <div class="glass-panel" style="padding: 0; overflow: hidden; display: flex; flex-direction: column; height: 75vh;">
+            <div class="glass-panel" style="padding: 0; overflow: hidden; display: flex; flex-direction: column; height: 680px; max-height: 80vh;">
                 <!-- Toolbar -->
                 <div style="padding: 1rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;">
                     <h2 class="glow-text" style="font-size: 1rem; text-transform: uppercase;">Active Downloads</h2>
@@ -592,7 +592,7 @@ class Router {
                             <span class="material-icons">pause</span>
                         </button>
                         <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.1); margin: 0 0.25rem;"></div>
-                        <button class="icon-btn-tiny" onclick="window.router.loadDownloads()" title="Refresh">
+                        <button class="btn-tiny" onclick="window.router.loadDownloads()" title="Refresh">
                             <span class="material-icons">refresh</span>
                         </button>
                     </div>
@@ -604,25 +604,25 @@ class Router {
                         <table class="data-table" style="width: 100%; border-collapse: collapse; table-layout: fixed;">
                             <thead style="position: sticky; top: 0; background: rgba(15, 23, 42, 0.95); z-index: 10; backdrop-filter: blur(10px);">
                                 <tr style="font-size: 0.62rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid rgba(255,255,255,0.03);">
-                                    <th style="padding: 0.6rem 1.25rem; text-align: left; width: 30%; cursor: pointer;" onclick="window.router.setDownloadSort('filename')">
+                                    <th style="padding: 0.6rem 1.25rem; text-align: left; width: 22%; cursor: pointer;" onclick="window.router.setDownloadSort('filename')">
                                         <div style="display: flex; align-items: center; gap: 4px;">Filename ${this.getSortIcon('filename')}</div>
                                     </th>
-                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 12%; cursor: pointer;" onclick="window.router.setDownloadSort('state')">
+                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 10%; cursor: pointer;" onclick="window.router.setDownloadSort('state')">
                                         <div style="display: flex; align-items: center; gap: 4px;">Status ${this.getSortIcon('state')}</div>
                                     </th>
-                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 10%; cursor: pointer;" onclick="window.router.setDownloadSort('size_bytes')">
-                                        <div style="display: flex; align-items: center; gap: 4px;">Size ${this.getSortIcon('size_bytes')}</div>
+                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 10%; cursor: pointer;" onclick="window.router.setDownloadSort('size')">
+                                        <div style="display: flex; align-items: center; gap: 4px;">Size ${this.getSortIcon('size')}</div>
                                     </th>
                                     <th style="padding: 0.6rem 0.5rem; text-align: left; width: 15%; cursor: pointer;" onclick="window.router.setDownloadSort('progress')">
                                         <div style="display: flex; align-items: center; gap: 4px;">Progress ${this.getSortIcon('progress')}</div>
                                     </th>
-                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 12%; cursor: pointer;" onclick="window.router.setDownloadSort('speed_bytes')">
-                                        <div style="display: flex; align-items: center; gap: 4px;">Speed ${this.getSortIcon('speed_bytes')}</div>
+                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 18%; cursor: pointer;" onclick="window.router.setDownloadSort('speed')">
+                                        <div style="display: flex; align-items: center; gap: 4px;">Speed ${this.getSortIcon('speed')}</div>
                                     </th>
-                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 10%; cursor: pointer;" onclick="window.router.setDownloadSort('eta_seconds')">
-                                        <div style="display: flex; align-items: center; gap: 4px;">ETA ${this.getSortIcon('eta_seconds')}</div>
+                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 12%; cursor: pointer;" onclick="window.router.setDownloadSort('eta')">
+                                        <div style="display: flex; align-items: center; gap: 4px;">ETA ${this.getSortIcon('eta')}</div>
                                     </th>
-                                    <th style="padding: 0.6rem 1.25rem; text-align: left; width: 11%; cursor: pointer;" onclick="window.router.setDownloadSort('added')">
+                                    <th style="padding: 0.6rem 1.25rem; text-align: left; width: 13%; cursor: pointer;" onclick="window.router.setDownloadSort('added')">
                                         <div style="display: flex; align-items: center; gap: 4px; justify-content: flex-start;">Added ${this.getSortIcon('added')}</div>
                                     </th>
                                 </tr>
@@ -671,11 +671,14 @@ class Router {
                 let valA = a[col];
                 let valB = b[col];
 
-                // Handle derived fields from emulated SAB output if needed
-                if (col === 'speed_bytes') {
-                    valA = a.speed?.bytes || 0;
-                    valB = b.speed?.bytes || 0;
-                } else if (col === 'eta_seconds') {
+                // Handle derived fields from UI formatter output
+                if (col === 'size') {
+                    valA = a.size?.total || 0;
+                    valB = b.size?.total || 0;
+                } else if (col === 'speed') {
+                    valA = a.speed?.bytes_per_sec || 0;
+                    valB = b.speed?.bytes_per_sec || 0;
+                } else if (col === 'eta') {
                     valA = a.eta?.seconds || 999999;
                     valB = b.eta?.seconds || 999999;
                 }

@@ -871,13 +871,18 @@ class DownloadEngine:
                     if content_length > 0:
                         task.segments = calculate_optimal_segments(content_length, task.segments)
                     
-                    if content_length > 0 and accept_ranges and task.segments > 1 and start_byte == 0:
-                        # Only use segmented download for fresh starts with multi-segment config
-                        logger.info(f"Using {task.segments} segments for {task.filename} ({content_length / (1024*1024):.1f} MB)")
-                        await self._handle_segmented_download(task, content_length)
+                    # Calculate total expected size (accounting for resume)
+                    total_size = content_length
+                    if start_byte > 0:
+                        total_size += start_byte
+                    
+                    # Use segmented download if server supports ranges and segments > 1
+                    # Now works for both fresh downloads AND resumes
+                    if content_length > 0 and accept_ranges and task.segments > 1:
+                        logger.info(f"Using {task.segments} segments for {task.filename} ({total_size / (1024*1024):.1f} MB, resume from {start_byte})")
+                        await self._handle_segmented_download(task, total_size, start_byte)
                     else:
-                        # Fallback to single stream if no ranges, small file, OR RESUMING (start_byte > 0)
-                        # Segmented download currently overwrites/truncates file, so safely append with single stream
+                        # Fallback to single stream if no range support or single segment
                         await self._handle_response_stream(response, task, start_byte)
             
             except Exception as e:
@@ -892,20 +897,22 @@ class DownloadEngine:
         finally:
              await self._sync_to_db(task)
 
-    async def _handle_segmented_download(self, task: DownloadTask, total_size: int) -> None:
-        """Download file using multiple concurrent segments."""
+    async def _handle_segmented_download(self, task: DownloadTask, total_size: int, start_byte: int = 0) -> None:
+        """Download file using multiple concurrent segments with resume support."""
         task.progress.total_bytes = total_size
+        task.progress.downloaded_bytes = start_byte
         task.state = DownloadState.DOWNLOADING
         task.started_at = datetime.now()
         
         # Use task.segments (assigned at queue time, possibly adjusted by smart calculation)
         num_segments = task.segments
         
-        # Pre-allocate file (Blocking I/O offloaded)
-        def pre_allocate():
-             with open(task.destination, "wb") as f:
-                f.truncate(total_size)
-        await self._loop.run_in_executor(self._io_executor, pre_allocate)
+        # Pre-allocate file if starting fresh, otherwise file already exists
+        if start_byte == 0:
+            def pre_allocate():
+                 with open(task.destination, "wb") as f:
+                    f.truncate(total_size)
+            await self._loop.run_in_executor(self._io_executor, pre_allocate)
         
         segment_size = total_size // num_segments
         segment_tasks = []
@@ -915,14 +922,24 @@ class DownloadEngine:
         start_time = time.monotonic()
         
         for i in range(num_segments):
-            start = i * segment_size
-            end = (i + 1) * segment_size - 1 if i < num_segments - 1 else total_size - 1
+            seg_start = i * segment_size
+            seg_end = (i + 1) * segment_size - 1 if i < num_segments - 1 else total_size - 1
             
-            logger.debug(f"Starting segment {i+1}/{num_segments} for {task.filename} (bytes {start}-{end})")
+            # Skip segments that are already complete (for resume)
+            if seg_end < start_byte:
+                logger.debug(f"Skipping segment {i+1}/{num_segments} (already downloaded)")
+                continue
+            
+            # Adjust segment start if partially downloaded
+            if seg_start < start_byte:
+                logger.debug(f"Resuming segment {i+1}/{num_segments} from byte {start_byte}")
+                seg_start = start_byte
+            
+            logger.debug(f"Starting segment {i+1}/{num_segments} for {task.filename} (bytes {seg_start}-{seg_end})")
             
             segment_tasks.append(
                 asyncio.create_task(
-                    self._download_segment(task, start, end, lock, start_time, segment_id=i+1)
+                    self._download_segment(task, seg_start, seg_end, lock, start_time, segment_id=i+1)
                 )
             )
             
@@ -937,62 +954,74 @@ class DownloadEngine:
             logger.info(f"Segmented download completed: {task.filename} ({num_segments} segments, Speed: {task.progress.speed_bytes_per_sec / (1024*1024):.2f} MB/s)")
 
     async def _download_segment(self, task: DownloadTask, start: int, end: int, lock: asyncio.Lock, start_time: float, segment_id: int) -> None:
-        """Download a specific byte range."""
+        """Download a specific byte range with per-segment retry logic."""
         segment_start_time = time.monotonic()
         headers = {"Range": f"bytes={start}-{end}"}
         # Use a longer timeout for segments
         timeout = aiohttp.ClientTimeout(total=None, connect=60, sock_read=60)
         
-        try:
-            async with self._session.get(task.url, headers=headers, timeout=timeout) as response:
-                if response.status != 206:
-                    # Some servers don't support range for small files or specific states
-                    # If we already pre-allocated, we can't just stream to top
-                    raise DownloadFailedError(f"Segment {segment_id} failed with status {response.status}")
+        # Track where we are in case of retries
+        current_pos = start
+        max_retries = self.config.retry_attempts
+        
+        for attempt in range(max_retries + 1):
+            try:
+                # Update headers for resume if we are retrying
+                if current_pos > start:
+                    headers["Range"] = f"bytes={current_pos}-{end}"
+                    logger.info(f"Retrying segment {segment_id} from byte {current_pos} (Attempt {attempt+1}/{max_retries})")
                 
-                current_pos = start
-                
-                # Use a larger chunk size for the iterator
-                chunk_size = self.config.chunk_size
-                
-                # Use aiofiles to keep file handle open for entire segment
-                # This eliminates thousands of open/close operations
-                async with aiofiles.open(task.destination, 'r+b') as f:
-                    async for chunk in response.content.iter_chunked(chunk_size):
-                        if task.is_cancelled:
-                            return
-                        
-                        while task.is_paused and not task.is_cancelled:
-                            await asyncio.sleep(0.5)
-                        
-                        # Rate Limiting
-                        await self._rate_limiter.consume(len(chunk))
-                        
-                        chunk_len = len(chunk)
-                        
-                        # Async file I/O - no thread executor needed
-                        await f.seek(current_pos)
-                        await f.write(chunk)
+                async with self._session.get(task.url, headers=headers, timeout=timeout) as response:
+                    if response.status not in (200, 206):
+                        raise DownloadFailedError(f"Segment {segment_id} failed with status {response.status}")
+                    
+                    # Use a larger chunk size for the iterator
+                    chunk_size = self.config.chunk_size
+                    
+                    # Use aiofiles to keep file handle open for entire segment
+                    async with aiofiles.open(task.destination, 'r+b') as f:
+                        async for chunk in response.content.iter_chunked(chunk_size):
+                            if task.is_cancelled:
+                                return
                             
-                        task.progress.downloaded_bytes += chunk_len
-                        task.progress.update(
-                            task.progress.downloaded_bytes,
-                            task.progress.total_bytes,
-                            time.monotonic() - start_time
-                        )
-                        
-                        current_pos += chunk_len
-                        
-                        if self.progress_callback:
-                            self.progress_callback(task)
+                            while task.is_paused and not task.is_cancelled:
+                                await asyncio.sleep(0.5)
                             
-                duration = time.monotonic() - segment_start_time
-                speed = (current_pos - start) / duration if duration > 0 else 0
-                logger.debug(f"Segment {segment_id} finished for {task.filename} (Speed: {speed / (1024*1024):.2f} MB/s)")
-        except Exception as e:
-            logger.error(f"Segment {start}-{end} failed: {e}")
-            task.state = DownloadState.FAILED
-            task.error_message = str(e)
+                            # Rate Limiting
+                            await self._rate_limiter.consume(len(chunk))
+                            
+                            chunk_len = len(chunk)
+                            
+                            # Async file I/O
+                            await f.seek(current_pos)
+                            await f.write(chunk)
+                                
+                            task.progress.downloaded_bytes += chunk_len
+                            task.progress.update(
+                                task.progress.downloaded_bytes,
+                                task.progress.total_bytes,
+                                time.monotonic() - start_time
+                            )
+                            
+                            current_pos += chunk_len
+                            
+                            if self.progress_callback:
+                                self.progress_callback(task)
+                                
+                    duration = time.monotonic() - segment_start_time
+                    speed = (current_pos - start) / duration if duration > 0 else 0
+                    logger.debug(f"Segment {segment_id} finished for {task.filename} (Speed: {speed / (1024*1024):.2f} MB/s)")
+                    return  # Success!
+                    
+            except Exception as e:
+                if attempt < max_retries:
+                    logger.warning(f"Segment {segment_id} failed (Attempt {attempt+1}): {e}. Retrying in 2s...")
+                    await asyncio.sleep(2.0)
+                else:
+                    logger.error(f"Segment {start}-{end} failed after {max_retries} attempts: {e}")
+                    task.state = DownloadState.FAILED
+                    task.error_message = f"Segment {segment_id} failed: {str(e)}"
+                    raise  # Re-raise so asyncio.gather knows it failed
 
     async def _handle_response_stream(self, response: aiohttp.ClientResponse, task: DownloadTask, start_byte: int) -> None:
         """Handle the response stream and write file."""
