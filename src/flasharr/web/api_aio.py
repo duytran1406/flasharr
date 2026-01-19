@@ -1327,6 +1327,10 @@ async def smart_search(request: web.Request) -> web.Response:
                 # Filter by specific season if requested (Strict Mode)
                 if season is not None and str(season).strip() != '':
                     req_s = str(season).strip()
+                    # LOGGING FOR DEBUG
+                    if len(seasons) == 0: # Log first few mismatches
+                         logger.info(f"FILTER DEBUG: s_num={s_num} (type {type(s_num)}) req={req_s}")
+                    
                     if str(s_num) != req_s:
                         continue
                 
