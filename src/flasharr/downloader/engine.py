@@ -133,21 +133,26 @@ class DownloadProgress:
     speed_bytes_per_sec: float = 0.0
     eta_seconds: float = 0.0
     percentage: float = 0.0
+    initial_bytes: int = 0 # Bytes already present when session started
     
     def update(self, downloaded: int, total: int, elapsed_seconds: float) -> None:
         """Update progress calculations."""
-        self.downloaded_bytes = downloaded
+        self.downloaded_bytes = min(downloaded, total) if total > 0 else downloaded
         self.total_bytes = total
         
         if total > 0:
-            self.percentage = (downloaded / total) * 100
+            self.percentage = min((self.downloaded_bytes / total) * 100, 100.0)
         
         if elapsed_seconds > 0:
-            self.speed_bytes_per_sec = downloaded / elapsed_seconds
+            # Speed should be based on bytes downloaded in CURRENT session
+            session_downloaded = self.downloaded_bytes - self.initial_bytes
+            self.speed_bytes_per_sec = max(0, session_downloaded / elapsed_seconds)
             
             if self.speed_bytes_per_sec > 0 and total > 0:
-                remaining = total - downloaded
-                self.eta_seconds = remaining / self.speed_bytes_per_sec
+                remaining = total - self.downloaded_bytes
+                self.eta_seconds = max(0, remaining / self.speed_bytes_per_sec)
+            else:
+                self.eta_seconds = 0
 
 
 @dataclass
@@ -816,6 +821,8 @@ class DownloadEngine:
             if task.destination.exists():
                 start_byte = task.destination.stat().st_size
                 logger.info(f"Resuming download from byte {start_byte}")
+            
+            task.progress.initial_bytes = start_byte
             
             # Prepare headers for resume
             headers = {}
