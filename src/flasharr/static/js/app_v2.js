@@ -78,6 +78,8 @@ class Router {
             renderedItems: [], // Cache for all rendered items in the current view
             lastScrollPos: 0 // Track scroll position for restoration
         };
+
+        this.discoverController = null;
     }
 
     isDefaultDiscoverState() {
@@ -797,7 +799,17 @@ class Router {
             this.fetchDiscoverData(true);
             this.setupInfiniteScroll(); // Reconnect observer
         } else {
+            this.abortDiscoverFetch();
             this.updateDiscoveryHeader(`Searching: ${value}`, 'search', true);
+        }
+    }
+
+    abortDiscoverFetch() {
+        if (this.discoverController) {
+            console.log("[Discover] Aborting previous fetch...");
+            this.discoverController.abort();
+            this.discoverController = null;
+            this.discoverState.loading = false;
         }
     }
 
@@ -829,6 +841,7 @@ class Router {
         }
 
         // Fresh Load logic
+        this.abortDiscoverFetch();
         s.type = type;
         s.page = 1;
         s.tmdbPage = 1;
@@ -986,6 +999,7 @@ class Router {
     }
 
     resetAndFetch() {
+        this.abortDiscoverFetch();
         this.discoverState.page = 1;
         this.discoverState.tmdbPage = 1;
         this.discoverState.buffer = []; // Corrected reference
@@ -1475,6 +1489,7 @@ class Router {
 
     switchDiscoverType(type) {
         if (this.discoverState.type === type) return;
+        this.abortDiscoverFetch();
         this.discoverState.type = type;
         this.discoverState.genre = '';
         this.discoverState.page = 1;
@@ -1517,8 +1532,13 @@ class Router {
     }
 
     async fetchDiscoverData(reset = false) {
-        if (this.discoverState.loading) return;
+        if (this.discoverState.loading && !reset) return;
+
+        if (reset) this.abortDiscoverFetch();
+
         this.discoverState.loading = true;
+        this.discoverController = new AbortController();
+        const signal = this.discoverController.signal;
 
         if (reset) {
             const initialLoader = document.getElementById('discover-initial-loader');
@@ -1564,7 +1584,7 @@ class Router {
                     endpoint = `/api/discovery/popular-today?page=${s.tmdbPage}`;
                 }
 
-                const res = await fetch(endpoint);
+                const res = await fetch(endpoint, { signal });
                 const data = await res.json();
 
                 if (data.results && data.results.length > 0) {
@@ -1597,9 +1617,15 @@ class Router {
             }
 
         } catch (e) {
+            if (e.name === 'AbortError') {
+                console.log("[Discover] Fetch aborted successfully.");
+                return;
+            }
             console.error("Discover Stats Error", e);
         } finally {
+            if (signal.aborted) return;
             this.discoverState.loading = false;
+            this.discoverController = null;
             const loader = document.getElementById('discover-loading-more');
             if (loader) loader.style.display = 'none';
 
