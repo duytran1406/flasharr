@@ -1074,8 +1074,10 @@ async def _smart_search_movie(request: web.Request, data: dict) -> web.Response:
             if not sim_result['is_valid']:
                 continue
                 
-            # TMDB Filter
-            if tmdb_id and tmdb_id != "null" and sim_result['match_type'] != 'alias':
+            # STRICT TMDB FILTERING: Accept alias, exact, or strong keyword matches
+            valid_match_types = ('alias', 'exact', 'all_keywords')
+            if tmdb_id and tmdb_id != "null" and sim_result['match_type'] not in valid_match_types:
+                logger.debug(f"Rejected strict match (type={sim_result['match_type']}, tmdbId={tmdb_id}): {r.name[:60]}")
                 continue
                 
             # Year Filter (Movie Specific)
@@ -1281,7 +1283,8 @@ async def _smart_search_tv(request: web.Request, data: dict) -> web.Response:
             sim_result = calculate_unified_similarity(official_title, r.name, aliases=aliases)
             if not sim_result['is_valid']: continue
             
-            if tmdb_id and tmdb_id != "null" and sim_result['match_type'] != 'alias':
+            valid_match_types = ('alias', 'exact', 'all_keywords')
+            if tmdb_id and tmdb_id != "null" and sim_result['match_type'] not in valid_match_types:
                 continue
                 
             # Profile
