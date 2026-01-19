@@ -1059,6 +1059,21 @@ class Router {
                 return;
             }
 
+            // Store season data for Smart Grab
+            if (data.seasons && data.seasons.length > 0) {
+                this.currentSmartSearchData = {
+                    tmdbId: tmdbId,
+                    season: season,
+                    season_data: data.seasons[0]  // First season (current search)
+                };
+
+                // Show Smart Grab button
+                const smartGrabBtn = document.getElementById('btn-smart-grab');
+                if (smartGrabBtn) {
+                    smartGrabBtn.style.display = 'flex';
+                }
+            }
+
             this.renderSmartSearchTVResults(data);
 
         } catch (e) {
@@ -1272,6 +1287,78 @@ class Router {
         } catch (e) {
             console.error(e);
         }
+    }
+
+    async smartGrabSeason() {
+        const btn = document.getElementById('btn-smart-grab');
+        if (!btn || !this.currentSmartSearchData) return;
+
+        // Show loading state
+        btn.disabled = true;
+        const originalHTML = btn.innerHTML;
+        btn.innerHTML = '<span class="material-icons rotating">sync</span> Grabbing...';
+
+        try {
+            const res = await fetch('/api/search/smart-grab', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    tmdbId: this.currentSmartSearchData.tmdbId,
+                    season: this.currentSmartSearchData.season,
+                    season_data: this.currentSmartSearchData.season_data
+                })
+            });
+
+            const data = await res.json();
+
+            if (data.error) {
+                alert(`Smart Grab Error: ${data.error}`);
+                return;
+            }
+
+            // Batch download all URLs
+            await this.batchDownload(data.urls, data.metadata);
+
+            // Show success notification
+            const meta = data.metadata;
+            alert(`✅ Smart Grab Complete!\n\n` +
+                `Episodes: ${meta.found_episodes}/${meta.total_episodes}\n` +
+                `Primary Group: ${meta.primary_group}\n` +
+                `Mixed Sources: ${meta.mixed_sources ? 'Yes' : 'No'}\n\n` +
+                `All files queued for download!`);
+
+        } catch (e) {
+            console.error(e);
+            alert('Smart Grab failed. Check console for details.');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = originalHTML;
+        }
+    }
+
+    async batchDownload(urls, metadata) {
+        let queued = 0;
+        for (const url of urls) {
+            try {
+                const res = await fetch('/api/downloads', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: url })
+                });
+
+                if (res.ok) {
+                    queued++;
+                }
+
+                // Rate limit: 500ms between requests
+                await new Promise(r => setTimeout(r, 500));
+            } catch (e) {
+                console.error(`Failed to queue: ${url}`, e);
+            }
+        }
+
+        console.log(`Smart Grab: Queued ${queued}/${urls.length} files`);
+        return queued;
     }
 
     _renderFileRow(file) {

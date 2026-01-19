@@ -25,6 +25,7 @@ from ..clients.timfshare import TimFshareClient
 from ..utils.quality_profile import QualityParser, group_by_quality
 from ..utils.normalizer import normalize_filename
 from ..utils.title_matcher import calculate_unified_similarity
+from ..utils.smart_grab import smart_grab_season
 
 logger = logging.getLogger(__name__)
 
@@ -1423,5 +1424,45 @@ async def _smart_search_tv(request: web.Request, data: dict) -> web.Response:
         })
     except Exception as e:
         logger.error(f"Smart Search TV Error: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+@routes.post("/api/search/smart-grab")
+async def smart_grab(request: web.Request) -> web.Response:
+    """
+    Smart Grab: Intelligently select best complete season pack.
+    
+    Analyzes release groups, quality consistency, and completeness.
+    Fills gaps with best alternatives.
+    
+    Body: {
+        "tmdbId": str,
+        "season": int,
+        "season_data": dict  // Full season data from smart search
+    }
+    
+    Returns: {
+        "urls": [str],  // File URLs in episode order
+        "metadata": dict  // Selection metadata
+    }
+    """
+    try:
+        data = await get_json(request)
+        season_data = data.get('season_data', {})
+        
+        if not season_data:
+            return web.json_response({"error": "Missing season_data"}, status=400)
+        
+        logger.info(f"Smart Grab: Season {data.get('season')}")
+        
+        # Run Smart Grab algorithm
+        result = smart_grab_season(season_data)
+        
+        logger.info(f"Smart Grab Result: {result['metadata']}")
+        
+        return web.json_response(result)
+        
+    except Exception as e:
+        logger.error(f"Smart Grab Error: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
