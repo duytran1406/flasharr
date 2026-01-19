@@ -1298,6 +1298,30 @@ async def smart_search(request: web.Request) -> web.Response:
         if media_type == 'tv':
             seasons = {}
             for res in valid_results:
+                # Enhanced Parsing Fallback
+                if 'episode_number' not in res:
+                    name = res.get('name', '')
+                    # Patterns: "10_Title", "Tap 10", "Ep 10"
+                    patterns = [
+                        r'^(\d+)[_.\s-]+',          # 10_Title
+                        r'(?i)tap\s*(\d+)',         # Tap 10
+                        r'(?i)[^a-z]e(\d+)[^a-z]',  # .E10. (strict boundaries)
+                        r'(?i)\s(\d{2,4})\s*$'      # Ends with number? Risk of year. Skip.
+                    ]
+                    for p in patterns:
+                        m = re.search(p, name)
+                        if m:
+                            try:
+                                ep_num = int(m.group(1))
+                                # filtering ridiculous numbers (e.g. year 2011)
+                                if 0 < ep_num < 1900: 
+                                    res['episode_number'] = ep_num
+                                    if res.get('season_number', 0) == 0:
+                                        res['season_number'] = 1
+                                    break
+                            except:
+                                pass
+
                 s_num = res.get('season_number', 0) # 0 = Specials or Unknown
                 if s_num not in seasons:
                     seasons[s_num] = {'packs': [], 'episodes': []}
