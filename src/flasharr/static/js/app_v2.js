@@ -985,7 +985,7 @@ class Router {
         if (season && episode) displayTitle = `Searching: ${title} S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
 
         titleEl.innerText = displayTitle;
-        resultsEl.innerHTML = '<div style="display: flex; justify-content: center; align-items: center; height: 100%;"><div class="spinner"></div></div>';
+        resultsEl.innerHTML = '<div style="display: flex; justify-content: center; align-items: center; min-height: 300px; width: 100%;"><div class="loading-spinner"></div></div>';
 
         try {
             const res = await fetch('/api/search/smart', {
