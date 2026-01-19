@@ -28,7 +28,7 @@ from datetime import datetime, timedelta
 from ..core.config import get_config, DownloadConfig
 from ..core.exceptions import DownloadError, DownloadFailedError
 from ..core.rate_limiter import GlobalRateLimiter
-from ..core.priority_queue import Priority
+from ..core.priority_queue import PriorityQueue, Priority, auto_prioritize
 from ..core.link_checker import get_link_checker, LinkStatus
 from ..security.validators import sanitize_filename
 
@@ -172,6 +172,7 @@ class DownloadTask:
     plugin_name: Optional[str] = None
     priority: Priority = Priority.NORMAL
     segments: int = 1  # Number of segments for this task (assigned at queue time)
+    checksum: Optional[str] = None  # Expected checksum (MD5 or SHA256)
     
     # Internal state
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
@@ -278,7 +279,7 @@ class DownloadEngine:
         self.queue_manager = queue_manager
         
         self._tasks: Dict[str, DownloadTask] = {}
-        self._queue: asyncio.Queue = asyncio.Queue()
+        self._queue = PriorityQueue()
         self._workers: list = []
         self._running = False
         self._session: Optional[aiohttp.ClientSession] = None
@@ -376,7 +377,7 @@ class DownloadEngine:
                 
                 # Determine where to put it
                 if task.state == DownloadState.QUEUED:
-                    await self._queue.put(task.id)
+                    await self._queue.put(task.id, task.priority, task.progress.total_bytes)
                     count += 1
                 elif task.state == DownloadState.PAUSED:
                     task.pause() # Ensure event is cleared
@@ -545,7 +546,7 @@ class DownloadEngine:
                             logger.info(f"Task {task.filename} ready for retry. Re-queueing.")
                             task.state = DownloadState.QUEUED
                             task.wait_until = None
-                            await self._queue.put(task.id)
+                            await self._queue.put(task.id, task.priority, task.progress.total_bytes)
                             
                 await asyncio.sleep(1.0)
             except asyncio.CancelledError:
@@ -655,9 +656,11 @@ class DownloadEngine:
         # Persist to DB
         await self._add_to_db(task)
 
-        await self._queue.put(task.id)
+        # Use auto-prioritization
+        task.priority = auto_prioritize(filename, 0, category)
+        await self._queue.put(task.id, task.priority, 0)
         
-        logger.info(f"Added download: {filename} -> {dest_path} (segments={task.segments})")
+        logger.info(f"Added download: {filename} -> {dest_path} (segments={task.segments}, priority={task.priority.name})")
         return task
     
     def get_task(self, task_id: str) -> Optional[DownloadTask]:
@@ -688,7 +691,10 @@ class DownloadEngine:
                 task.wait_until = None # Clear wait
                 task.state = DownloadState.QUEUED
                 logger.info(f"Forced resume (Skip Wait) for task {task.filename}")
-                asyncio.run_coroutine_threadsafe(self._queue.put(task.id), self._loop or asyncio.get_running_loop())
+                asyncio.run_coroutine_threadsafe(
+                    self._queue.put(task.id, task.priority, task.progress.total_bytes), 
+                    self._loop or asyncio.get_running_loop()
+                )
                 return True
                 
             task.resume()
@@ -739,6 +745,10 @@ class DownloadEngine:
                 task = self._tasks.get(task_id)
                 if not task:
                     logger.warning(f"Worker {worker_id}: Picked up non-existent task {task_id}")
+                    continue
+                
+                if task.state != DownloadState.QUEUED:
+                    logger.debug(f"Worker {worker_id}: Skipping task {task.id} in state {task.state}")
                     continue
                 
                 logger.info(f"Worker {worker_id}: Processing task {task.filename} ({task_id})")
@@ -946,6 +956,13 @@ class DownloadEngine:
         await asyncio.gather(*segment_tasks)
         
         if not task.is_cancelled and task.state != DownloadState.FAILED:
+            # Verify checksum if present
+            if task.checksum:
+                if not await self._verify_checksum(task):
+                    task.state = DownloadState.FAILED
+                    task.error_message = f"Checksum verification failed"
+                    return
+
             task.state = DownloadState.COMPLETED
             task.completed_at = datetime.now()
             task.progress.percentage = 100.0
@@ -1091,10 +1108,55 @@ class DownloadEngine:
                 if self.progress_callback:
                     self.progress_callback(task)
     
+        # Verify checksum if present
+        if task.checksum:
+            if not await self._verify_checksum(task):
+                task.state = DownloadState.FAILED
+                task.error_message = f"Checksum verification failed"
+                return
+
         # Mark as completed
         task.state = DownloadState.COMPLETED
         task.completed_at = datetime.now()
         task.progress.percentage = 100.0
         
         logger.info(f"Download completed: {task.filename}")
+
+    async def _verify_checksum(self, task: DownloadTask) -> bool:
+        """Verify the downloaded file checksum."""
+        if not task.checksum:
+            return True
+            
+        import hashlib
+        
+        logger.info(f"Verifying checksum for {task.filename}")
+        
+        # Determine algorithm based on length (MD5=32, SHA256=64)
+        if len(task.checksum) == 32:
+            algo = hashlib.md5()
+        elif len(task.checksum) == 64:
+            algo = hashlib.sha256()
+        else:
+            logger.warning(f"Unknown checksum format for {task.filename}: {task.checksum}")
+            return True
+            
+        try:
+            # Read file in chunks to avoid memory issues
+            async with aiofiles.open(task.destination, mode='rb') as f:
+                while True:
+                    chunk = await f.read(1024 * 1024) # 1MB chunks
+                    if not chunk:
+                        break
+                    algo.update(chunk)
+            
+            calculated = algo.hexdigest()
+            if calculated.lower() == task.checksum.lower():
+                logger.info(f"Checksum verified for {task.filename}")
+                return True
+            else:
+                logger.error(f"Checksum mismatch for {task.filename}: expected {task.checksum}, got {calculated}")
+                return False
+        except Exception as e:
+            logger.error(f"Error during checksum verification for {task.filename}: {e}")
+            return False
 

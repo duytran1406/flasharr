@@ -580,7 +580,7 @@ class Router {
 
     loadDownloads() {
         this.container.innerHTML = `
-            <div class="glass-panel" style="padding: 0; overflow: hidden; display: flex; flex-direction: column; height: 680px; max-height: 80vh;">
+            <div class="glass-panel" style="padding: 0; overflow: hidden; display: flex; flex-direction: column; height: 750px; max-height: 90vh;">
                 <!-- Toolbar -->
                 <div style="padding: 1rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;">
                     <h2 class="glow-text" style="font-size: 1rem; text-transform: uppercase;">Active Downloads</h2>
@@ -604,7 +604,7 @@ class Router {
                         <table class="data-table" style="width: 100%; border-collapse: collapse; table-layout: fixed;">
                             <thead style="position: sticky; top: 0; background: rgba(15, 23, 42, 0.95); z-index: 10; backdrop-filter: blur(10px);">
                                 <tr style="font-size: 0.62rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid rgba(255,255,255,0.03);">
-                                    <th style="padding: 0.6rem 1.25rem; text-align: left; width: 22%; cursor: pointer;" onclick="window.router.setDownloadSort('filename')">
+                                    <th style="padding: 0.6rem 1.25rem; text-align: left; width: 31%; cursor: pointer;" onclick="window.router.setDownloadSort('filename')">
                                         <div style="display: flex; align-items: center; gap: 4px;">Filename ${this.getSortIcon('filename')}</div>
                                     </th>
                                     <th style="padding: 0.6rem 0.5rem; text-align: left; width: 10%; cursor: pointer;" onclick="window.router.setDownloadSort('state')">
@@ -616,7 +616,7 @@ class Router {
                                     <th style="padding: 0.6rem 0.5rem; text-align: left; width: 15%; cursor: pointer;" onclick="window.router.setDownloadSort('progress')">
                                         <div style="display: flex; align-items: center; gap: 4px;">Progress ${this.getSortIcon('progress')}</div>
                                     </th>
-                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 18%; cursor: pointer;" onclick="window.router.setDownloadSort('speed')">
+                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 9%; cursor: pointer;" onclick="window.router.setDownloadSort('speed')">
                                         <div style="display: flex; align-items: center; gap: 4px;">Speed ${this.getSortIcon('speed')}</div>
                                     </th>
                                     <th style="padding: 0.6rem 0.5rem; text-align: left; width: 12%; cursor: pointer;" onclick="window.router.setDownloadSort('eta')">
