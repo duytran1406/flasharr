@@ -972,17 +972,68 @@ class Router {
     }
 
     async openSmartSearch(tmdbId, type, title, year, season = null, episode = null) {
-        const modal = document.getElementById('smart-search-modal');
-        const titleEl = document.getElementById('smart-search-title');
-        const resultsEl = document.getElementById('smart-search-results');
+        // Router function - dispatch to correct modal based on type
+        if (type === 'tv') {
+            return this.openSmartSearchTV(tmdbId, title, year, season, episode);
+        } else {
+            return this.openSmartSearchMovie(tmdbId, title, year);
+        }
+    }
+
+    async openSmartSearchMovie(tmdbId, title, year) {
+        const modal = document.getElementById('smart-search-modal-movie');
+        const titleEl = document.getElementById('smart-search-title-movie');
+        const resultsEl = document.getElementById('smart-search-results-movie');
 
         modal.style.display = 'flex';
-        // Force reflow
         void modal.offsetWidth;
         modal.classList.add('active');
 
-        let displayTitle = `Searching: ${title} (${year})`;
-        if (season && episode) displayTitle = `Searching: ${title} S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
+        titleEl.innerText = `Searching: ${title} (${year})`;
+        resultsEl.innerHTML = '<div style="display: flex; justify-content: center; align-items: center; min-height: 300px; width: 100%;"><div class="loading-spinner"></div></div>';
+
+        try {
+            const res = await fetch('/api/search/smart', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    title: title,
+                    year: year,
+                    type: 'movie',
+                    tmdbId: tmdbId
+                })
+            });
+
+            const data = await res.json();
+
+            if (data.error) {
+                resultsEl.innerHTML = `<div style="text-align: center; color: #ef4444; margin-top: 2rem;">Error: ${data.error}</div>`;
+                return;
+            }
+
+            this.renderSmartSearchMovieResults(data);
+
+        } catch (e) {
+            console.error(e);
+            resultsEl.innerHTML = `<div style="text-align: center; color: #ef4444; margin-top: 2rem;">Network Error</div>`;
+        }
+    }
+
+    async openSmartSearchTV(tmdbId, title, year, season = null, episode = null) {
+        const modal = document.getElementById('smart-search-modal-tv');
+        const titleEl = document.getElementById('smart-search-title-tv');
+        const resultsEl = document.getElementById('smart-search-results-tv');
+
+        modal.style.display = 'flex';
+        void modal.offsetWidth;
+        modal.classList.add('active');
+
+        let displayTitle = `Searching: ${title}`;
+        if (season && episode) {
+            displayTitle = `Searching: ${title} S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
+        } else if (season) {
+            displayTitle = `Searching: ${title} - Season ${season}`;
+        }
 
         titleEl.innerText = displayTitle;
         resultsEl.innerHTML = '<div style="display: flex; justify-content: center; align-items: center; min-height: 300px; width: 100%;"><div class="loading-spinner"></div></div>';
@@ -994,7 +1045,7 @@ class Router {
                 body: JSON.stringify({
                     title: title,
                     year: year,
-                    type: type,
+                    type: 'tv',
                     tmdbId: tmdbId,
                     season: season,
                     episode: episode
@@ -1008,7 +1059,7 @@ class Router {
                 return;
             }
 
-            this.renderSmartSearchResults(data);
+            this.renderSmartSearchTVResults(data);
 
         } catch (e) {
             console.error(e);
@@ -1016,144 +1067,179 @@ class Router {
         }
     }
 
-    closeSmartSearch() {
-        const modal = document.getElementById('smart-search-modal');
+    closeSmartSearchMovie() {
+        const modal = document.getElementById('smart-search-modal-movie');
         if (modal) {
             modal.classList.remove('active');
             setTimeout(() => {
                 modal.style.display = 'none';
-            }, 300); // Match CSS transition
+            }, 300);
         }
     }
 
+    closeSmartSearchTV() {
+        const modal = document.getElementById('smart-search-modal-tv');
+        if (modal) {
+            modal.classList.remove('active');
+            setTimeout(() => {
+                modal.style.display = 'none';
+            }, 300);
+        }
+    }
+
+    // Legacy function for backwards compatibility
+    closeSmartSearch() {
+        this.closeSmartSearchMovie();
+        this.closeSmartSearchTV();
+    }
+
+    // Legacy function - routes to correct renderer
     renderSmartSearchResults(data) {
-        const target = document.getElementById('smart-search-results');
-        // Check for results using total_found or seasons array
-        if (!data.total_found || data.total_found === 0 || (!data.seasons && !data.groups)) {
+        if (data.type === 'tv') {
+            this.renderSmartSearchTVResults(data);
+        } else {
+            this.renderSmartSearchMovieResults(data);
+        }
+    }
+
+    renderSmartSearchMovieResults(data) {
+        const target = document.getElementById('smart-search-results-movie');
+
+        if (!data.total_found || data.total_found === 0 || !data.groups) {
             target.innerHTML = `<div style="text-align: center; color: #9ca3af; margin-top: 2rem;">No results found on Fshare.</div>`;
             return;
         }
 
         let html = `<div style="display: flex; flex-direction: column; gap: 1.5rem;">`;
 
-        if (data.type === 'tv') {
-            // TV Series Rendering
-            data.seasons.forEach((season) => {
-                // Skip rendering if no episodes to show (since Packs are disabled)
-                const hasEpisodes = (season.episodes_grouped && season.episodes_grouped.length > 0) || (season.episodes && season.episodes.length > 0);
-                if (!hasEpisodes) return;
-
-                const sNum = season.season === 0 ? 'Specials' : `Season ${season.season}`;
-
-                html += `
-                    <div style="margin-bottom: 1.5rem;">
-                        <div style="font-size: 1.2rem; font-weight: 700; color: #fff; margin-bottom: 0.5rem; padding-left: 0.5rem; border-left: 4px solid var(--color-primary);">
-                            ${sNum}
-                        </div>
-                `;
-
-                // Render Season Packs (Disabled)
-                if (false && season.packs.length > 0) {
-                    html += `
-                        <div class="glass-panel" style="margin-bottom: 1rem; padding: 0; overflow: hidden; border: 1px solid rgba(16, 185, 129, 0.3);">
-                            <div style="padding: 0.75rem 1.25rem; background: rgba(16, 185, 129, 0.1); color: #6ee7b7; font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 0.5rem;">
-                                <span class="material-icons" style="font-size: 18px;">inventory_2</span>
-                                Full Season Packs (High Relevance)
-                            </div>
-                            <div style="display: flex; flex-direction: column;">
-                                ${season.packs.map(file => this._renderFileRow(file)).join('')}
-                            </div>
-                        </div>
-                     `;
-                }
-
-                // Render Episodes (Grouped with Metadata)
-                if (season.episodes_grouped && season.episodes_grouped.length > 0) {
-                    html += `<div style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.5rem;">`;
-                    season.episodes_grouped.forEach((ep) => {
-                        const epId = `ep-${season.season}-${ep.episode_number}`;
-                        const hasOverview = ep.overview && ep.overview !== 'No overview available.';
-
-                        html += `
-                            <div class="glass-panel" style="padding: 0; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
-                                <div onclick="const el = document.getElementById('${epId}'); const icon = this.querySelector('.chevron-icon'); if(el.style.display === 'none') { el.style.display = 'flex'; icon.textContent = 'expand_less'; } else { el.style.display = 'none'; icon.textContent = 'expand_more'; }" 
-                                     style="padding: 1rem; background: rgba(255,255,255,0.05); cursor: pointer; user-select: none; transition: background 0.2s;"
-                                     onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.05)'">
-                                    
-                                    <div style="display: flex; gap: 1rem;">
-                                        ${ep.still_path ? `<img src="https://image.tmdb.org/t/p/w300${ep.still_path}" style="width: 110px; height: 62px; object-fit: cover; border-radius: 6px; flex-shrink: 0;">` : ''}
-                                        
-                                        <div style="flex: 1; min-width: 0;">
-                                            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                                                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
-                                                    <div style="font-weight: 700; color: #fff; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
-                                                        <span style="color: var(--color-primary); margin-right: 0.5rem;">E${ep.episode_number}</span>${ep.name}
-                                                    </div>
-                                                    <div style="font-size: 0.8rem; color: rgba(255,255,255,0.5);">
-                                                        ${ep.air_date || ''}
-                                                    </div>
-                                                </div>
-                                                <div style="display: flex; align-items: center; gap: 0.5rem; color: rgba(255,255,255,0.5); font-size: 0.8rem; padding-left: 0.5rem;">
-                                                    <span style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; white-space: nowrap;">${ep.files.length} files</span>
-                                                    <span class="material-icons chevron-icon" style="font-size: 20px;">expand_more</span>
-                                                </div>
-                                            </div>
-                                            
-                                            ${hasOverview ? `<div style="margin-top: 0.5rem; font-size: 0.85rem; color: rgba(255,255,255,0.7); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4;">${ep.overview}</div>` : ''}
-                                        </div>
-                                    </div>
-                                </div>
-                                
-                                <div id="${epId}" style="display: none; flex-direction: column; border-top: 1px solid rgba(255,255,255,0.1);">
-                                    ${ep.files.map(file => this._renderFileRow(file)).join('')}
-                                </div>
-                            </div>
-                        `;
-                    });
-                    html += `</div>`;
-                } else if (season.episodes && season.episodes.length > 0) {
-                    html += `
-                        <div class="glass-panel" style="padding: 0; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
-                            <div style="padding: 0.75rem 1.25rem; background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.7); font-weight: 600; font-size: 0.9rem;">
-                                Individual Episodes
-                            </div>
-                            <div style="display: flex; flex-direction: column;">
-                                ${season.episodes.map(file => this._renderFileRow(file)).join('')}
-                            </div>
-                        </div>
-                     `;
-                }
-
-                html += `</div>`;
-            });
-
-        } else {
-            // Movie Rendering (Quality Groups)
-            data.groups.forEach((group, index) => {
-                const groupId = `smart-group-${index}`;
-                html += `
-                    <div class="glass-panel" style="padding: 0; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
-                        <div onclick="const el = document.getElementById('${groupId}'); const icon = this.querySelector('.chevron-icon'); if(el.style.display === 'none') { el.style.display = 'flex'; icon.textContent = 'expand_less'; } else { el.style.display = 'none'; icon.textContent = 'expand_more'; }" 
-                             style="padding: 1rem 1.5rem; background: rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; transition: background 0.2s;"
-                             onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.05)'">
-                            
-                            <div style="font-weight: 700; color: #fff; font-size: 1.1rem; display: flex; align-items: center; gap: 0.75rem;">
-                                <span class="material-icons" style="color: var(--color-primary);">layers</span>
-                                ${group.quality}
-                            </div>
-                            <div style="font-size: 0.9rem; color: rgba(255,255,255,0.5); display: flex; align-items: center; gap: 1rem;">
-                                <span>Score: <span style="color: #fff;">${group.score}</span> • ${group.count} files</span>
-                                <span class="material-icons chevron-icon" style="font-size: 20px;">expand_less</span>
-                            </div>
-                        </div>
+        // Movie Rendering - Quality Groups
+        data.groups.forEach((group, index) => {
+            const groupId = `smart-group-${index}`;
+            html += `
+                <div class="glass-panel" style="padding: 0; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
+                    <div onclick="const el = document.getElementById('${groupId}'); const icon = this.querySelector('.chevron-icon'); if(el.style.display === 'none') { el.style.display = 'flex'; icon.textContent = 'expand_less'; } else { el.style.display = 'none'; icon.textContent = 'expand_more'; }" 
+                         style="padding: 1rem 1.5rem; background: rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; transition: background 0.2s;"
+                         onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.05)'">
                         
-                        <div id="${groupId}" style="display: flex; flex-direction: column;">
-                            ${group.files.map(file => this._renderFileRow(file)).join('')}
+                        <div style="font-weight: 700; color: #fff; font-size: 1.1rem; display: flex; align-items: center; gap: 0.75rem;">
+                            <span class="material-icons" style="color: var(--color-primary);">layers</span>
+                            ${group.quality}
+                        </div>
+                        <div style="font-size: 0.9rem; color: rgba(255,255,255,0.5); display: flex; align-items: center; gap: 1rem;">
+                            <span>Score: <span style="color: #fff;">${group.score}</span> • ${group.count} files</span>
+                            <span class="material-icons chevron-icon" style="font-size: 20px;">expand_less</span>
                         </div>
                     </div>
-                `;
-            });
+                    
+                    <div id="${groupId}" style="display: flex; flex-direction: column;">
+                        ${group.files.map(file => this._renderFileRow(file)).join('')}
+                    </div>
+                </div>
+            `;
+        });
+
+        target.innerHTML = html + `</div>`;
+    }
+
+    renderSmartSearchTVResults(data) {
+        const target = document.getElementById('smart-search-results-tv');
+
+        if (!data.total_found || data.total_found === 0 || !data.seasons) {
+            target.innerHTML = `<div style="text-align: center; color: #9ca3af; margin-top: 2rem;">No results found on Fshare.</div>`;
+            return;
         }
+
+        let html = `<div style="display: flex; flex-direction: column; gap: 1.5rem;">`;
+
+        // TV Series Rendering
+        data.seasons.forEach((season) => {
+            // Skip rendering if no episodes to show
+            const hasEpisodes = (season.episodes_grouped && season.episodes_grouped.length > 0) || (season.episodes && season.episodes.length > 0);
+            if (!hasEpisodes) return;
+
+            const sNum = season.season === 0 ? 'Specials' : `Season ${season.season}`;
+
+            html += `
+                <div style="margin-bottom: 1.5rem;">
+                    <div style="font-size: 1.2rem; font-weight: 700; color: #fff; margin-bottom: 0.5rem; padding-left: 0.5rem; border-left: 4px solid var(--color-primary);">
+                        ${sNum}
+                    </div>
+            `;
+
+            // Render Season Packs (Disabled for now)
+            if (false && season.packs.length > 0) {
+                html += `
+                    <div class="glass-panel" style="margin-bottom: 1rem; padding: 0; overflow: hidden; border: 1px solid rgba(16, 185, 129, 0.3);">
+                        <div style="padding: 0.75rem 1.25rem; background: rgba(16, 185, 129, 0.1); color: #6ee7b7; font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 0.5rem;">
+                            <span class="material-icons" style="font-size: 18px;">inventory_2</span>
+                            Full Season Packs (High Relevance)
+                        </div>
+                        <div style="display: flex; flex-direction: column;">
+                            ${season.packs.map(file => this._renderFileRow(file)).join('')}
+                        </div>
+                    </div>
+                 `;
+            }
+
+            // Render Episodes (Grouped with Metadata)
+            if (season.episodes_grouped && season.episodes_grouped.length > 0) {
+                html += `<div style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.5rem;">`;
+                season.episodes_grouped.forEach((ep) => {
+                    const epId = `ep-${season.season}-${ep.episode_number}`;
+                    const hasOverview = ep.overview && ep.overview !== 'No overview available.';
+
+                    html += `
+                        <div class="glass-panel" style="padding: 0; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
+                            <div onclick="const el = document.getElementById('${epId}'); const icon = this.querySelector('.chevron-icon'); if(el.style.display === 'none') { el.style.display = 'flex'; icon.textContent = 'expand_less'; } else { el.style.display = 'none'; icon.textContent = 'expand_more'; }" 
+                                 style="padding: 1rem; background: rgba(255,255,255,0.05); cursor: pointer; user-select: none; transition: background 0.2s;"
+                                 onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.05)'">
+                                
+                                <div style="display: flex; gap: 1rem;">
+                                    ${ep.still_path ? `<img src="https://image.tmdb.org/t/p/w300${ep.still_path}" style="width: 110px; height: 62px; object-fit: cover; border-radius: 6px; flex-shrink: 0;">` : ''}
+                                    
+                                    <div style="flex: 1; min-width: 0;">
+                                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                                            <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                                                <div style="font-weight: 700; color: #fff; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                                    <span style="color: var(--color-primary); margin-right: 0.5rem;">E${ep.episode_number}</span>${ep.name}
+                                                </div>
+                                                <div style="font-size: 0.8rem; color: rgba(255,255,255,0.5);">
+                                                    ${ep.air_date || ''}
+                                                </div>
+                                            </div>
+                                            <div style="display: flex; align-items: center; gap: 0.5rem; color: rgba(255,255,255,0.5); font-size: 0.8rem; padding-left: 0.5rem;">
+                                                <span style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; white-space: nowrap;">${ep.files.length} files</span>
+                                                <span class="material-icons chevron-icon" style="font-size: 20px;">expand_more</span>
+                                            </div>
+                                        </div>
+                                        
+                                        ${hasOverview ? `<div style="margin-top: 0.5rem; font-size: 0.85rem; color: rgba(255,255,255,0.7); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4;">${ep.overview}</div>` : ''}
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div id="${epId}" style="display: none; flex-direction: column; border-top: 1px solid rgba(255,255,255,0.1);">
+                                ${ep.files.map(file => this._renderFileRow(file)).join('')}
+                            </div>
+                        </div>
+                    `;
+                });
+                html += `</div>`;
+            } else if (season.episodes && season.episodes.length > 0) {
+                html += `
+                    <div class="glass-panel" style="padding: 0; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
+                        <div style="padding: 0.75rem 1.25rem; background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.7); font-weight: 600; font-size: 0.9rem;">
+                            Individual Episodes
+                        </div>
+                        <div style="display: flex; flex-direction: column;">
+                            ${season.episodes.map(file => this._renderFileRow(file)).join('')}
+                        </div>
+                    </div>
+                 `;
+            }
+
+            html += `</div>`;
+        });
 
         target.innerHTML = html + `</div>`;
     }
