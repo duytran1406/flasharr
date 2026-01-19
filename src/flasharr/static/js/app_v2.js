@@ -1048,8 +1048,8 @@ class Router {
                         </div>
                 `;
 
-                // Render Season Packs
-                if (season.packs.length > 0) {
+                // Render Season Packs (Disabled)
+                if (false && season.packs.length > 0) {
                     html += `
                         <div class="glass-panel" style="margin-bottom: 1rem; padding: 0; overflow: hidden; border: 1px solid rgba(16, 185, 129, 0.3);">
                             <div style="padding: 0.75rem 1.25rem; background: rgba(16, 185, 129, 0.1); color: #6ee7b7; font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 0.5rem;">
