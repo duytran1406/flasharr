@@ -1931,10 +1931,10 @@ class Router {
                 // Rotten Tomatoes
                 linksHtml += `<a href="#" target="_blank" title="Rotten Tomatoes" style="opacity: 0.8;"><img src="https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/Rotten_Tomatoes.svg/32px-Rotten_Tomatoes.svg.png" height="24"></a>`;
                 // Trakt
-                linksHtml += `<a href="https://trakt.tv/search/${type}?q=${encodeURIComponent(data.title || data.name)}" target="_blank" title="Trakt"><img src="https://trakt.tv/assets/logos/header-v2-white-539420b7-c6b7-4c01-83c9-0a6e0e0a5b9b.svg" height="20" style="filter: brightness(0) invert(1) sepia(1) saturate(5) hue-rotate(320deg);"></a>`;
+                linksHtml += `<a href="https://trakt.tv/search/${type}?q=${encodeURIComponent(data.title || data.name)}" target="_blank" title="Trakt"><img src="https://cdn.simpleicons.org/trakt/ED1C24" height="20"></a>`;
                 // Letterboxd
                 if (type === 'movie') {
-                    linksHtml += `<a href="https://letterboxd.com/tmdb/${id}" target="_blank" title="Letterboxd"><img src="https://a.ltrbxd.com/logos/letterboxd-logo-alt-w.png" height="20"></a>`;
+                    linksHtml += `<a href="https://letterboxd.com/tmdb/${id}" target="_blank" title="Letterboxd"><img src="https://cdn.simpleicons.org/letterboxd/00E24B" height="20"></a>`;
                 }
             }
             document.getElementById('external-links').innerHTML = linksHtml;
