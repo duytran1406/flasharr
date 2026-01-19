@@ -1243,7 +1243,8 @@ async def smart_search(request: web.Request) -> web.Response:
             
             # STRICT TMDB FILTERING: When TMDB ID provided, only accept alias matches
             # This prevents wrong shows (e.g., Korean "Scarlet Heart Ryeo") from appearing
-            if tmdb_id and sim_result['match_type'] != 'alias':
+            # Note: Check for both None and string "null" (from JSON payload)
+            if tmdb_id and tmdb_id != "null" and sim_result['match_type'] != 'alias':
                 logger.debug(f"Rejected non-alias match (tmdbId={tmdb_id}): {r.name[:60]}")
                 continue
 
