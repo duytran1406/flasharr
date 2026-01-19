@@ -1063,8 +1063,51 @@ class Router {
                      `;
                 }
 
-                // Render Episodes
-                if (season.episodes.length > 0) {
+                // Render Episodes (Grouped with Metadata)
+                if (season.episodes_grouped && season.episodes_grouped.length > 0) {
+                    html += `<div style="display: flex; flex-direction: column; gap: 0.75rem; margin-top: 0.5rem;">`;
+                    season.episodes_grouped.forEach((ep) => {
+                        const epId = `ep-${season.season}-${ep.episode_number}`;
+                        const hasOverview = ep.overview && ep.overview !== 'No overview available.';
+
+                        html += `
+                            <div class="glass-panel" style="padding: 0; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
+                                <div onclick="const el = document.getElementById('${epId}'); const icon = this.querySelector('.chevron-icon'); if(el.style.display === 'none') { el.style.display = 'flex'; icon.textContent = 'expand_less'; } else { el.style.display = 'none'; icon.textContent = 'expand_more'; }" 
+                                     style="padding: 1rem; background: rgba(255,255,255,0.05); cursor: pointer; user-select: none; transition: background 0.2s;"
+                                     onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='rgba(255,255,255,0.05)'">
+                                    
+                                    <div style="display: flex; gap: 1rem;">
+                                        ${ep.still_path ? `<img src="https://image.tmdb.org/t/p/w300${ep.still_path}" style="width: 110px; height: 62px; object-fit: cover; border-radius: 6px; flex-shrink: 0;">` : ''}
+                                        
+                                        <div style="flex: 1; min-width: 0;">
+                                            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                                                <div style="display: flex; flex-direction: column; gap: 0.25rem;">
+                                                    <div style="font-weight: 700; color: #fff; font-size: 0.95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                                        <span style="color: var(--color-primary); margin-right: 0.5rem;">E${ep.episode_number}</span>${ep.name}
+                                                    </div>
+                                                    <div style="font-size: 0.8rem; color: rgba(255,255,255,0.5);">
+                                                        ${ep.air_date || ''}
+                                                    </div>
+                                                </div>
+                                                <div style="display: flex; align-items: center; gap: 0.5rem; color: rgba(255,255,255,0.5); font-size: 0.8rem; padding-left: 0.5rem;">
+                                                    <span style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; white-space: nowrap;">${ep.files.length} files</span>
+                                                    <span class="material-icons chevron-icon" style="font-size: 20px;">expand_more</span>
+                                                </div>
+                                            </div>
+                                            
+                                            ${hasOverview ? `<div style="margin-top: 0.5rem; font-size: 0.85rem; color: rgba(255,255,255,0.7); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4;">${ep.overview}</div>` : ''}
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div id="${epId}" style="display: none; flex-direction: column; border-top: 1px solid rgba(255,255,255,0.1);">
+                                    ${ep.files.map(file => this._renderFileRow(file)).join('')}
+                                </div>
+                            </div>
+                        `;
+                    });
+                    html += `</div>`;
+                } else if (season.episodes && season.episodes.length > 0) {
                     html += `
                         <div class="glass-panel" style="padding: 0; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);">
                             <div style="padding: 0.75rem 1.25rem; background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.7); font-weight: 600; font-size: 0.9rem;">

@@ -13,6 +13,8 @@ import re
 from typing import Any, Dict, Optional
 from datetime import datetime
 from pathlib import Path
+import asyncio
+import asyncio
 
 from aiohttp import web
 from ..core.config import get_config
@@ -1309,24 +1311,76 @@ async def smart_search(request: web.Request) -> web.Response:
                 else:
                     seasons[s_num]['packs'].append(res)
                     
-            # Format output for frontend
+            # Format output for frontend with metadata
             sorted_seasons = []
+            
+            # 1. Fetch metadata if tmdb_id is present (concurrently)
+            from ..services.tmdb import tmdb_client
+            season_meta_map = {} # s_num -> {ep_num: metadata}
+            
+            if tmdb_id:
+                valid_season_nums = sorted([s for s in seasons.keys() if s > 0])
+                if valid_season_nums:
+                    try:
+                        tasks = [tmdb_client.get_season_details(tmdb_id, s) for s in valid_season_nums]
+                        meta_results = await asyncio.gather(*tasks, return_exceptions=True)
+                        
+                        for s_num, res in zip(valid_season_nums, meta_results):
+                            if isinstance(res, dict) and 'episodes' in res:
+                                season_meta_map[s_num] = {
+                                    ep['episode_number']: {
+                                        'name': ep.get('name', ''),
+                                        'overview': ep.get('overview', ''),
+                                        'air_date': ep.get('air_date', ''),
+                                        'still_path': ep.get('still_path', '')
+                                    }
+                                    for ep in res['episodes']
+                                }
+                    except Exception as e:
+                        logger.error(f"Failed to fetch season metadata: {e}")
+
+            # 2. Build final response structure
             for s_num in sorted(seasons.keys()):
                 pk = seasons[s_num]['packs']
-                ep = seasons[s_num]['episodes']
+                ep_files = seasons[s_num]['episodes']
                 
-                if not pk and not ep:
+                if not pk and not ep_files:
                     continue
                     
                 # Sort packs by score
                 pk.sort(key=lambda x: x['total_score'], reverse=True)
-                # Sort episodes by Episode Number then Score
-                ep.sort(key=lambda x: (x.get('episode_number', 0), -x['total_score']))
+                
+                # Group episodes by episode number
+                grouped_eps = {}
+                for f in ep_files:
+                    ep_num = f.get('episode_number', 0)
+                    if ep_num not in grouped_eps:
+                        grouped_eps[ep_num] = []
+                    grouped_eps[ep_num].append(f)
+                
+                # Create detailed episode objects with metadata
+                final_episodes = []
+                for ep_num in sorted(grouped_eps.keys()):
+                    # Get metadata for this episode
+                    meta = season_meta_map.get(s_num, {}).get(ep_num, {})
+                    
+                    # Sort files in this episode by score
+                    files = grouped_eps[ep_num]
+                    files.sort(key=lambda x: x['total_score'], reverse=True)
+                    
+                    final_episodes.append({
+                        'episode_number': ep_num,
+                        'name': meta.get('name', f'Episode {ep_num}'),
+                        'overview': meta.get('overview', 'No overview available.'),
+                        'air_date': meta.get('air_date', ''),
+                        'still_path': meta.get('still_path', ''),
+                        'files': files
+                    })
                 
                 sorted_seasons.append({
                     "season": s_num,
                     "packs": pk,
-                    "episodes": ep
+                    "episodes_grouped": final_episodes
                 })
                 
             return web.json_response({
