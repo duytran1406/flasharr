@@ -1117,7 +1117,27 @@ class Router {
                 return;
             }
 
-            // Store season data for Smart Grab
+            // EPISODE-SPECIFIC RESPONSE: Use Movie Modal
+            if (data.type === 'episode') {
+                // Close TV modal, open Movie modal instead
+                modal.classList.remove('active');
+                modal.style.display = 'none';
+
+                const movieModal = document.getElementById('smart-search-modal-movie');
+                const movieTitleEl = document.getElementById('smart-search-title-movie');
+
+                movieModal.style.display = 'flex';
+                void movieModal.offsetWidth;
+                movieModal.classList.add('active');
+
+                const epInfo = data.episode_info || {};
+                movieTitleEl.innerText = `${title} - S${String(epInfo.season).padStart(2, '0')}E${String(epInfo.episode).padStart(2, '0')}`;
+
+                this.renderSmartSearchMovieResults(data);
+                return;
+            }
+
+            // Store season data for Smart Grab (TV season mode only)
             if (data.seasons && data.seasons.length > 0) {
                 this.currentSmartSearchData = {
                     tmdbId: tmdbId,

@@ -1333,7 +1333,52 @@ async def _smart_search_tv(request: web.Request, data: dict) -> web.Response:
                 
             valid_results.append(r_dict)
 
-        # Grouping & Filtering (TV Specific)
+        # EPISODE-SPECIFIC PATH: When both season AND episode are provided
+        # Return movie-style grouped results instead of season hierarchy
+        if season and episode:
+            try:
+                req_season = int(season)
+                req_episode = int(episode)
+            except (ValueError, TypeError):
+                req_season = req_episode = None
+            
+            if req_season and req_episode:
+                # Filter to only matching episode
+                episode_results = [
+                    r for r in valid_results
+                    if r.get('season_number') == req_season and r.get('episode_number') == req_episode
+                ]
+                
+                logger.info(f"Episode-specific search: S{req_season:02d}E{req_episode:02d} - {len(episode_results)} results")
+                
+                # Group by quality (like movie search)
+                groups = group_by_quality(episode_results)
+                sorted_groups = []
+                for qname, items in groups.items():
+                    if not items: continue
+                    items.sort(key=lambda x: x['total_score'], reverse=True)
+                    sorted_groups.append({
+                        "quality": qname,
+                        "score": items[0]['total_score'],
+                        "count": len(items),
+                        "files": items
+                    })
+                
+                # Sort groups by top score
+                sorted_groups.sort(key=lambda x: x['score'], reverse=True)
+                
+                return web.json_response({
+                    "query": query,
+                    "total_found": len(episode_results),
+                    "type": "episode",
+                    "episode_info": {
+                        "season": req_season,
+                        "episode": req_episode
+                    },
+                    "groups": sorted_groups
+                })
+
+        # Grouping & Filtering (TV Specific - Season mode)
         seasons = {}
         for res in valid_results:
             # Fallback Parsing

@@ -34,6 +34,59 @@ from ..security.validators import sanitize_filename
 logger = logging.getLogger(__name__)
 
 
+# Smart segment calculation constants
+# Assuming ~50 MB/s per connection, we want segments to complete in ~10-30 seconds
+MIN_SEGMENT_SIZE = 50 * 1024 * 1024   # 50 MB minimum per segment
+MAX_SEGMENT_SIZE = 200 * 1024 * 1024  # 200 MB maximum per segment
+MIN_SEGMENTS = 1
+MAX_SEGMENTS = 8  # Hard limit (user can configure 1-8)
+SMALL_FILE_THRESHOLD = 100 * 1024 * 1024  # Files < 100MB use single stream
+
+
+def calculate_optimal_segments(file_size: int, user_max: int = 8) -> int:
+    """
+    Calculate optimal segment count based on file size.
+    
+    The user's configured max (user_max) acts as the CEILING.
+    Smart calculation can return LESS than user's setting but NEVER MORE.
+    
+    Assumes ~50 MB/s download speed per connection.
+    Target: Each segment should take 10-30 seconds to download.
+    
+    Args:
+        file_size: Total file size in bytes
+        user_max: User's configured max segments (1-8), acts as ceiling
+        
+    Returns:
+        Optimal number of segments (1 to user_max)
+    """
+    # Validate user_max
+    user_max = max(1, min(user_max, MAX_SEGMENTS))
+    
+    if file_size <= 0:
+        return 1
+    
+    # Small files: single stream is more efficient
+    if file_size < SMALL_FILE_THRESHOLD:
+        return 1
+    
+    # Calculate based on target segment size
+    # We want segments between 50MB and 200MB
+    optimal = file_size // MIN_SEGMENT_SIZE
+    
+    # Clamp to reasonable range based on file size
+    if file_size < 500 * 1024 * 1024:  # < 500MB
+        optimal = min(optimal, 4)
+    elif file_size < 1024 * 1024 * 1024:  # < 1GB
+        optimal = min(optimal, 8)
+    
+    # Never exceed user's configured maximum
+    optimal = min(optimal, user_max)
+    
+    # Ensure at least 1
+    return max(1, optimal)
+
+
 class DownloadState(Enum):
     """Download task state."""
     QUEUED = "Queued"
@@ -117,6 +170,7 @@ class DownloadTask:
     retry_count: int = 0
     plugin_name: Optional[str] = None
     priority: Priority = Priority.NORMAL
+    segments: int = 1  # Number of segments for this task (assigned at queue time)
     
     # Internal state
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
@@ -210,15 +264,15 @@ class DownloadEngine:
         Initialize the download engine.
         
         Args:
-            max_concurrent: Maximum concurrent files
-            segments_per_download: Number of connections per file
+            max_concurrent: Maximum concurrent files (minimum 1)
+            segments_per_download: Default number of connections per file
             config: Download configuration
             progress_callback: Optional callback for progress updates
             queue_manager: Optional persistence manager
         """
         self.config = config or get_config().download
-        self.max_concurrent = max_concurrent
-        self.segments_per_download = segments_per_download
+        self.max_concurrent = max(1, max_concurrent)  # Enforce minimum of 1
+        self.segments_per_download = max(1, segments_per_download)  # Default for new tasks
         self.progress_callback = progress_callback
         self.queue_manager = queue_manager
         
@@ -236,6 +290,8 @@ class DownloadEngine:
             
         # Executor for file I/O
         self._io_executor = None # Use default executor (ThreadPoolExecutor)
+        
+        logger.info(f"Engine initialized: max_concurrent={self.max_concurrent}, default_segments={self.segments_per_download}")
 
     
     @property
@@ -266,8 +322,6 @@ class DownloadEngine:
         if self._rate_limiter.is_enabled:
             stats["rate_limiter"] = self._rate_limiter.get_stats()
         
-        return stats
-    
         return stats
         
     async def restore_from_repository(self) -> None:
@@ -413,6 +467,8 @@ class DownloadEngine:
         """
         Update the maximum concurrent downloads at runtime.
         """
+        new_max = max(1, new_max)  # Enforce minimum of 1
+        
         if new_max == self.max_concurrent:
             return
         
@@ -568,6 +624,7 @@ class DownloadEngine:
             destination=dest_path,
             category=category,
             package_name=package_name,
+            segments=self.segments_per_download,  # Capture current setting at queue time
         )
         
         self._tasks[task.id] = task
@@ -583,12 +640,11 @@ class DownloadEngine:
             # Non-critical failure, continue
 
         # Persist to DB
-        # Persist to DB
         await self._add_to_db(task)
 
         await self._queue.put(task.id)
         
-        logger.info(f"Added download: {filename} -> {dest_path}")
+        logger.info(f"Added download: {filename} -> {dest_path} (segments={task.segments})")
         return task
     
     def get_task(self, task_id: str) -> Optional[DownloadTask]:
@@ -794,8 +850,13 @@ class DownloadEngine:
                     content_length = int(response.headers.get("Content-Length", 0))
                     accept_ranges = response.headers.get("Accept-Ranges", "") == "bytes"
                     
-                    if content_length > 0 and accept_ranges and self.segments_per_download > 1 and start_byte == 0:
-                        # Only use segmented download for fresh starts
+                    # Apply smart segment calculation based on file size
+                    if content_length > 0:
+                        task.segments = calculate_optimal_segments(content_length, task.segments)
+                    
+                    if content_length > 0 and accept_ranges and task.segments > 1 and start_byte == 0:
+                        # Only use segmented download for fresh starts with multi-segment config
+                        logger.info(f"Using {task.segments} segments for {task.filename} ({content_length / (1024*1024):.1f} MB)")
                         await self._handle_segmented_download(task, content_length)
                     else:
                         # Fallback to single stream if no ranges, small file, OR RESUMING (start_byte > 0)
@@ -806,14 +867,6 @@ class DownloadEngine:
                 task.state = DownloadState.FAILED
                 task.error_message = str(e)
                 logger.error(f"Download failed: {task.filename} - {e}")
-            
-            except Exception as e:
-                # If network error, maybe wait instead of fail?
-                # For now, let's keep it robust: connection errors -> Retry?
-                # Simpler to fail for now unless it's a known transient error
-                task.state = DownloadState.FAILED
-                task.error_message = str(e)
-                logger.error(f"Download failed (request): {task.filename} - {e}")
         
         except Exception as e:
             task.state = DownloadState.FAILED
@@ -828,32 +881,35 @@ class DownloadEngine:
         task.state = DownloadState.DOWNLOADING
         task.started_at = datetime.now()
         
+        # Use task.segments (assigned at queue time, possibly adjusted by smart calculation)
+        num_segments = task.segments
+        
         # Pre-allocate file (Blocking I/O offloaded)
         def pre_allocate():
              with open(task.destination, "wb") as f:
                 f.truncate(total_size)
         await self._loop.run_in_executor(self._io_executor, pre_allocate)
         
-        segment_size = total_size // self.segments_per_download
-        tasks = []
+        segment_size = total_size // num_segments
+        segment_tasks = []
         lock = asyncio.Lock()
         self._file_locks[task.id] = lock
         
         start_time = time.monotonic()
         
-        for i in range(self.segments_per_download):
+        for i in range(num_segments):
             start = i * segment_size
-            end = (i + 1) * segment_size - 1 if i < self.segments_per_download - 1 else total_size - 1
+            end = (i + 1) * segment_size - 1 if i < num_segments - 1 else total_size - 1
             
-            logger.info(f"DEBUG: Starting segment {i+1}/{self.segments_per_download} for {task.filename} (bytes {start}-{end})")
+            logger.debug(f"Starting segment {i+1}/{num_segments} for {task.filename} (bytes {start}-{end})")
             
-            tasks.append(
+            segment_tasks.append(
                 asyncio.create_task(
                     self._download_segment(task, start, end, lock, start_time, segment_id=i+1)
                 )
             )
             
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*segment_tasks)
         
         if not task.is_cancelled and task.state != DownloadState.FAILED:
             task.state = DownloadState.COMPLETED
@@ -861,7 +917,7 @@ class DownloadEngine:
             task.progress.percentage = 100.0
             # Ensure bytes match total (fix for 97% bug if rounding errors occurred)
             task.progress.downloaded_bytes = task.progress.total_bytes
-            logger.info(f"Segmented download completed: {task.filename} (Total Speed: {task.progress.speed_bytes_per_sec / (1024*1024):.2f} MB/s)")
+            logger.info(f"Segmented download completed: {task.filename} ({num_segments} segments, Speed: {task.progress.speed_bytes_per_sec / (1024*1024):.2f} MB/s)")
 
     async def _download_segment(self, task: DownloadTask, start: int, end: int, lock: asyncio.Lock, start_time: float, segment_id: int) -> None:
         """Download a specific byte range."""
@@ -922,11 +978,6 @@ class DownloadEngine:
                     
                     while task.is_paused and not task.is_cancelled:
                         await asyncio.sleep(0.5)
-                    
-                    # TEST MODE: Stop after 1 second
-                    if time.monotonic() - start_time > 1.0:
-                        logger.warning(f"TEST MODE: Stopping segment {segment_id} for {task.filename} after 1s to save quota.")
-                        return
                     
                     # Rate Limiting
                     await self._rate_limiter.consume(len(chunk))
@@ -1027,11 +1078,6 @@ class DownloadEngine:
             # Wait if paused
             while task.is_paused and not task.is_cancelled:
                 await asyncio.sleep(0.1)
-
-            # TEST MODE: Stop after 1 second
-            if time.monotonic() - start_time > 1.0:
-                logger.warning(f"TEST MODE: Stopping download {task.filename} after 1s to save quota.")
-                break
             
             # Rate Limiting
             await self._rate_limiter.consume(len(chunk))
