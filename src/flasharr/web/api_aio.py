@@ -1315,7 +1315,7 @@ async def smart_search(request: web.Request) -> web.Response:
             sorted_seasons = []
             
             # 1. Fetch metadata if tmdb_id is present (concurrently)
-            from ..services.tmdb import tmdb_client
+            # tmdb_client is already imported globally
             season_meta_map = {} # s_num -> {ep_num: metadata}
             
             if tmdb_id:
