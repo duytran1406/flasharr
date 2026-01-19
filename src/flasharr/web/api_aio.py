@@ -1323,6 +1323,10 @@ async def smart_search(request: web.Request) -> web.Response:
                                 pass
 
                 s_num = res.get('season_number', 0) # 0 = Specials or Unknown
+                
+                # Filter by specific season if requested (Strict Mode)
+                if season is not None and str(season) != '' and str(s_num) != str(season):
+                    continue
                 if s_num not in seasons:
                     seasons[s_num] = {'packs': [], 'episodes': []}
                 

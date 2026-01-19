@@ -1039,6 +1039,10 @@ class Router {
         if (data.type === 'tv') {
             // TV Series Rendering
             data.seasons.forEach((season) => {
+                // Skip rendering if no episodes to show (since Packs are disabled)
+                const hasEpisodes = (season.episodes_grouped && season.episodes_grouped.length > 0) || (season.episodes && season.episodes.length > 0);
+                if (!hasEpisodes) return;
+
                 const sNum = season.season === 0 ? 'Specials' : `Season ${season.season}`;
 
                 html += `
