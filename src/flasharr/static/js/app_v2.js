@@ -1028,7 +1028,8 @@ class Router {
 
     renderSmartSearchResults(data) {
         const target = document.getElementById('smart-search-results');
-        if (!data.groups || data.groups.length === 0) {
+        // Check for results using total_found or seasons array
+        if (!data.total_found || data.total_found === 0 || (!data.seasons && !data.groups)) {
             target.innerHTML = `<div style="text-align: center; color: #9ca3af; margin-top: 2rem;">No results found on Fshare.</div>`;
             return;
         }
