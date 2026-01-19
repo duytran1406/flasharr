@@ -1293,19 +1293,25 @@ async def _smart_search_tv(request: web.Request, data: dict) -> web.Response:
             r_dict['similarity'] = sim_result['score']
             r_dict['match_type'] = sim_result['match_type']
             
-            # TV Extraction
-            s_match = re.search(r'\bS(\d{1,3})', r.name, re.IGNORECASE)
-            e_match = re.search(r'\bE(\d{1,4})', r.name, re.IGNORECASE)
-            
-            if not s_match:
-                season_match = re.search(r'\bSeason\s*(\d{1,3})\b', r.name, re.IGNORECASE)
-                if season_match:
-                    r_dict['season_number'] = int(season_match.group(1))
+            # TV Extraction - Use combined SxxExx first to avoid false matches
+            se_combined = re.search(r'(?i)S(\d{1,3})E(\d{1,4})', r.name)
+            if se_combined:
+                r_dict['season_number'] = int(se_combined.group(1))
+                r_dict['episode_number'] = int(se_combined.group(2))
             else:
-                r_dict['season_number'] = int(s_match.group(1))
+                # Separate patterns as fallback
+                s_match = re.search(r'\bS(\d{1,3})', r.name, re.IGNORECASE)
+                if not s_match:
+                    season_match = re.search(r'\bSeason\s*(\d{1,3})\b', r.name, re.IGNORECASE)
+                    if season_match:
+                        r_dict['season_number'] = int(season_match.group(1))
+                else:
+                    r_dict['season_number'] = int(s_match.group(1))
                 
-            if e_match:
-                r_dict['episode_number'] = int(e_match.group(1))
+                # For standalone E, require separators to avoid hex checksums
+                e_match = re.search(r'(?i)(?:^|[\s.\-_])E(\d{1,4})(?:[\s.\-_]|$)', r.name)
+                if e_match:
+                    r_dict['episode_number'] = int(e_match.group(1))
                 
             valid_results.append(r_dict)
 
