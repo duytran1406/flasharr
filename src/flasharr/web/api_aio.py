@@ -1325,8 +1325,11 @@ async def smart_search(request: web.Request) -> web.Response:
                 s_num = res.get('season_number', 0) # 0 = Specials or Unknown
                 
                 # Filter by specific season if requested (Strict Mode)
-                if season is not None and str(season) != '' and str(s_num) != str(season):
-                    continue
+                if season is not None and str(season).strip() != '':
+                    req_s = str(season).strip()
+                    if str(s_num) != req_s:
+                        continue
+                
                 if s_num not in seasons:
                     seasons[s_num] = {'packs': [], 'episodes': []}
                 
@@ -1411,9 +1414,12 @@ async def smart_search(request: web.Request) -> web.Response:
                     "episodes_grouped": final_episodes
                 })
                 
+            # Calculate actual total found after filtering
+            final_total = sum(len(s['packs']) + len(s['episodes']) for s in seasons.values())
+            
             return web.json_response({
                 "query": query,
-                "total_found": len(valid_results),
+                "total_found": final_total,
                 "type": "tv",
                 "seasons": sorted_seasons
             })
