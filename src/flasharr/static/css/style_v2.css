@@ -1709,12 +1709,12 @@ input[type=range]::-webkit-slider-thumb:hover {
 /* Carousel Styles */
 .carousel-container {
     position: relative;
-    padding: 0 3rem;
+    padding: 0 2.76rem;
 }
 
 .carousel-track {
     display: flex;
-    gap: 1.5rem;
+    gap: 1.38rem;
     overflow-x: auto;
     scroll-behavior: smooth;
     scroll-snap-type: x mandatory;
@@ -1745,8 +1745,8 @@ input[type=range]::-webkit-slider-thumb:hover {
     backdrop-filter: blur(10px);
     border: 1px solid var(--border-glass);
     border-radius: 50%;
-    width: 48px;
-    height: 48px;
+    width: 44px;
+    height: 44px;
     display: flex;
     align-items: center;
     justify-content: center;

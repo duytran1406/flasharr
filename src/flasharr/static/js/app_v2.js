@@ -2643,7 +2643,7 @@ class Router {
         const fshareAvailable = item.fshare_available;
         const fshareCount = item.fshare_count || 0;
 
-        const cardWidth = variant === 'carousel' ? 'min-width: 150px; width: 150px;' : '';
+        const cardWidth = variant === 'carousel' ? 'min-width: 138px; width: 138px;' : '';
 
         return `
             <div class="poster-card" style="${cardWidth}" onclick="window.router.navigate('media/${mediaType}/${id}')">
