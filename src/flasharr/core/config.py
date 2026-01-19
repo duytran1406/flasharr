@@ -108,6 +108,8 @@ class DownloadConfig:
     chunk_size: int = 128 * 1024  # 128KB chunks for better performance
     retry_attempts: int = 3
     retry_delay: float = 5.0
+    retry_backoff_multiplier: int = 60  # Seconds to multiply by retry count
+    retry_max_wait: int = 600  # Maximum wait time in seconds (10 minutes)
     
     speed_limit: Optional[int] = None  # Bytes/sec, None = unlimited
     
@@ -123,6 +125,8 @@ class DownloadConfig:
             chunk_size=int(os.getenv("CHUNK_SIZE", "1048576")),
             retry_attempts=int(os.getenv("RETRY_ATTEMPTS", "3")),
             retry_delay=float(os.getenv("RETRY_DELAY", "5.0")),
+            retry_backoff_multiplier=int(os.getenv("RETRY_BACKOFF_MULTIPLIER", "60")),
+            retry_max_wait=int(os.getenv("RETRY_MAX_WAIT", "600")),
             speed_limit=speed_limit,
         )
 

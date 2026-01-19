@@ -79,6 +79,7 @@ class Router {
             lastScrollPos: 0 // Track scroll position for restoration
         };
 
+        this.downloadSort = { column: 'added', direction: 'desc' };
         this.discoverController = null;
     }
 
@@ -583,7 +584,14 @@ class Router {
                 <!-- Toolbar -->
                 <div style="padding: 1rem 1.5rem; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;">
                     <h2 class="glow-text" style="font-size: 1rem; text-transform: uppercase;">Active Downloads</h2>
-                    <div style="display: flex; gap: 0.5rem;">
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button class="btn-tiny btn-success" onclick="window.router.batchTaskAction('resume-all')" title="Start/Resume All">
+                            <span class="material-icons">play_arrow</span>
+                        </button>
+                        <button class="btn-tiny btn-danger" onclick="window.router.batchTaskAction('pause-all')" title="Pause/Stop All">
+                            <span class="material-icons">pause</span>
+                        </button>
+                        <div style="width: 1px; height: 16px; background: rgba(255,255,255,0.1); margin: 0 0.25rem;"></div>
                         <button class="icon-btn-tiny" onclick="window.router.loadDownloads()" title="Refresh">
                             <span class="material-icons">refresh</span>
                         </button>
@@ -593,23 +601,37 @@ class Router {
                 <!-- Table Container with fixed height for ~12 items -->
                 <div style="flex: 1; overflow: hidden; padding: 0; position: relative;">
                     <div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; overflow-y: auto;">
-                        <table class="data-table" style="width: 100%; border-collapse: collapse;">
+                        <table class="data-table" style="width: 100%; border-collapse: collapse; table-layout: fixed;">
                             <thead style="position: sticky; top: 0; background: rgba(15, 23, 42, 0.95); z-index: 10; backdrop-filter: blur(10px);">
-                                <tr style="font-size: 0.65rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid rgba(255,255,255,0.03);">
-                                    <th style="padding: 0.6rem 1.25rem; text-align: left; width: 35%;">Resource Identity</th>
-                                <th style="padding: 0.6rem 0.5rem; text-align: left; width: 10%;">Status</th>
-                                <th style="padding: 0.6rem 0.5rem; text-align: left; width: 8%;">Size</th>
-                                <th style="padding: 0.6rem 0.5rem; text-align: left; width: 15%;">Progress</th>
-                                <th style="padding: 0.6rem 0.5rem; text-align: left; width: 10%;">Speed</th>
-                                <th style="padding: 0.6rem 0.5rem; text-align: left; width: 8%;">ETA</th>
-                                <th style="padding: 0.6rem 0.5rem; text-align: left; width: 10%;">Added</th>
-                                <th style="padding: 0.6rem 1.25rem; text-align: right; width: 4%;">...</th>
-                            </tr>
-                        </thead>
-                        <tbody id="download-list">
-                            <tr><td colspan="8" style="text-align: center; padding: 4rem;"><div class="loading-container"><div class="loading-spinner"></div></div></td></tr>
-                        </tbody>
-                    </table>
+                                <tr style="font-size: 0.62rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid rgba(255,255,255,0.03);">
+                                    <th style="padding: 0.6rem 1.25rem; text-align: left; width: 30%; cursor: pointer;" onclick="window.router.setDownloadSort('filename')">
+                                        <div style="display: flex; align-items: center; gap: 4px;">Filename ${this.getSortIcon('filename')}</div>
+                                    </th>
+                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 12%; cursor: pointer;" onclick="window.router.setDownloadSort('state')">
+                                        <div style="display: flex; align-items: center; gap: 4px;">Status ${this.getSortIcon('state')}</div>
+                                    </th>
+                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 10%; cursor: pointer;" onclick="window.router.setDownloadSort('size_bytes')">
+                                        <div style="display: flex; align-items: center; gap: 4px;">Size ${this.getSortIcon('size_bytes')}</div>
+                                    </th>
+                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 15%; cursor: pointer;" onclick="window.router.setDownloadSort('progress')">
+                                        <div style="display: flex; align-items: center; gap: 4px;">Progress ${this.getSortIcon('progress')}</div>
+                                    </th>
+                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 12%; cursor: pointer;" onclick="window.router.setDownloadSort('speed_bytes')">
+                                        <div style="display: flex; align-items: center; gap: 4px;">Speed ${this.getSortIcon('speed_bytes')}</div>
+                                    </th>
+                                    <th style="padding: 0.6rem 0.5rem; text-align: left; width: 10%; cursor: pointer;" onclick="window.router.setDownloadSort('eta_seconds')">
+                                        <div style="display: flex; align-items: center; gap: 4px;">ETA ${this.getSortIcon('eta_seconds')}</div>
+                                    </th>
+                                    <th style="padding: 0.6rem 1.25rem; text-align: left; width: 11%; cursor: pointer;" onclick="window.router.setDownloadSort('added')">
+                                        <div style="display: flex; align-items: center; gap: 4px; justify-content: flex-start;">Added ${this.getSortIcon('added')}</div>
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody id="download-list">
+                                <tr><td colspan="7" style="text-align: center; padding: 4rem;"><div class="loading-container"><div class="loading-spinner"></div></div></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
                 <div style="padding: 0.5rem 1.25rem; display: flex; justify-content: flex-end; border-top: 1px solid rgba(255,255,255,0.03); background: rgba(0,0,0,0.15);">
@@ -618,7 +640,7 @@ class Router {
             </div>
         `;
         this.downloadPage = 1;
-        this.downloadLimit = 10;
+        this.downloadLimit = 12;
         this.refreshDownloads();
         this.startDownloadPolling();
     }
@@ -643,9 +665,25 @@ class Router {
                 const q = this.omniSearchQuery.toLowerCase();
                 return t.filename.toLowerCase().includes(q) || t.id.toLowerCase().includes(q);
             }).sort((a, b) => {
-                const dateA = new Date(a.added);
-                const dateB = new Date(b.added);
-                return dateB - dateA;
+                const col = this.downloadSort.column;
+                const dir = this.downloadSort.direction === 'asc' ? 1 : -1;
+
+                let valA = a[col];
+                let valB = b[col];
+
+                // Handle derived fields from emulated SAB output if needed
+                if (col === 'speed_bytes') {
+                    valA = a.speed?.bytes || 0;
+                    valB = b.speed?.bytes || 0;
+                } else if (col === 'eta_seconds') {
+                    valA = a.eta?.seconds || 999999;
+                    valB = b.eta?.seconds || 999999;
+                }
+
+                if (typeof valA === 'string') {
+                    return valA.localeCompare(valB) * dir;
+                }
+                return (valA - valB) * dir;
             });
 
             // Client-side pagination
@@ -667,9 +705,12 @@ class Router {
         const containers = [document.getElementById('downloads-pagination')];
         containers.forEach(el => {
             if (!el) return;
+            const start = totalItems === 0 ? 0 : (current - 1) * this.downloadLimit + 1;
+            const end = Math.min(current * this.downloadLimit, totalItems);
+
             el.innerHTML = `
                 <div style="display: flex; gap: 1.5rem; align-items: center;">
-                    <span class="page-info" style="font-size: 0.7rem; color: var(--text-muted); letter-spacing: 0.1em; font-weight: 700;">REGISTRY: ${totalItems} ENTITIES</span>
+                    <span class="page-info" style="font-size: 0.7rem; color: var(--text-muted); letter-spacing: 0.05em; font-weight: 700;">Showing ${start}-${end} of ${totalItems} items</span>
                     <div style="display: flex; gap: .5rem; background: rgba(255,255,255,0.03); padding: 4px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05);">
                         <button class="icon-btn-tiny" onclick="window.router.setDownloadPage(${current - 1})" ${current === 1 ? 'disabled' : ''} style="background: transparent;">
                             <span class="material-icons" style="font-size: 16px;">chevron_left</span>
@@ -687,6 +728,41 @@ class Router {
     setDownloadPage(page) {
         this.downloadPage = page;
         this.refreshDownloads();
+    }
+
+    getSortIcon(col) {
+        if (this.downloadSort.column !== col) return '<span class="material-icons" style="font-size: 12px; opacity: 0.3;">sort</span>';
+        return this.downloadSort.direction === 'asc' ? '<span class="material-icons" style="font-size: 12px; color: var(--color-primary);">expand_less</span>' : '<span class="material-icons" style="font-size: 12px; color: var(--color-primary);">expand_more</span>';
+    }
+
+    setDownloadSort(col) {
+        if (this.downloadSort.column === col) {
+            this.downloadSort.direction = this.downloadSort.direction === 'asc' ? 'desc' : 'asc';
+        } else {
+            this.downloadSort.column = col;
+            this.downloadSort.direction = 'desc';
+        }
+        this.loadDownloads(); // Re-render headers
+    }
+
+    async batchTaskAction(action) {
+        try {
+            const btn = event.currentTarget;
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = '<span class="material-icons spin" style="font-size: 18px;">refresh</span>';
+            btn.disabled = true;
+
+            const res = await fetch(`/api/downloads/${action}`, { method: 'POST' });
+            const data = await res.json();
+
+            setTimeout(() => {
+                btn.innerHTML = originalHTML;
+                btn.disabled = false;
+                this.refreshDownloads();
+            }, 1000);
+        } catch (e) {
+            console.error("Batch Action Error", e);
+        }
     }
 
     renderDownloadList(tasks, body) {

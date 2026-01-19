@@ -413,6 +413,20 @@ async def retry_download(request: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"status": "error", "message": str(e)}, status=500)
 
+@routes.post("/api/downloads/pause-all")
+async def pause_all_downloads(request: web.Request) -> web.Response:
+    sab = request.app.get('sabnzbd')
+    if not sab: return web.json_response({"error": "SAB not initialized"}, status=503)
+    success = await sab.pause_queue()
+    return web.json_response({"status": "ok", "success": success})
+
+@routes.post("/api/downloads/resume-all")
+async def resume_all_downloads(request: web.Request) -> web.Response:
+    sab = request.app.get('sabnzbd')
+    if not sab: return web.json_response({"error": "SAB not initialized"}, status=503)
+    success = await sab.resume_queue()
+    return web.json_response({"status": "ok", "success": success})
+
 
 @routes.get("/api/search")
 async def api_search(request: web.Request) -> web.Response:
