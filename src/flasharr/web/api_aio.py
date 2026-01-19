@@ -1163,23 +1163,60 @@ async def smart_search(request: web.Request) -> web.Response:
                     logger.info(f"Deep-dive: {template[:50]} - found {len(found_eps)}, missing {len(missing_eps)}")
                     
                     # Search for missing episodes using base pattern
-                    base = data['base']
-                    snowball_query = f"{base}"
-                    logger.info(f"Snowball search for missing: '{snowball_query}'")
+                    base_pattern = data['base']
                     
-                    snowball_results = client.search(snowball_query, limit=100, extensions=('.mkv', '.mp4'))
-                    logger.info(f"Snowball returned {len(snowball_results)} results")
+                    # ADAPTIVE PARTITIONING STRATEGY
+                    # If we are missing a LOT of episodes (> 50) or have a very long series,
+                    # a single search for 'base' will likely hit the 100-item limit and fail.
+                    # We partition the search space by digits: "Base 1", "Base 2"...
                     
-                    # Add only new results
-                    new_count = 0
-                    for sr in snowball_results:
-                        if sr.url not in seen_urls:
-                            results.append(sr)
-                            seen_urls.add(sr.url)
-                            new_count += 1
+                    is_large_series = len(missing_eps) > 50 or max_ep > 100
+                    snowball_queries = []
                     
-                    if new_count > 0:
-                        logger.info(f"Added {new_count} new results from snowball")
+                    if is_large_series:
+                        logger.info(f"Large series detected ({len(missing_eps)} missing, max {max_ep}). Using partitioned search.")
+                        
+                        # Phase 1: Partition by single digit (0-9) to check buckets
+                        # "Naruto Tap 1" finds 1, 10-19, 100-199
+                        for i in range(10):
+                            q = f"{base_pattern} {i}"
+                            
+                            # Execute partition search
+                            logger.info(f"Partition search: '{q}'")
+                            p_results = client.search(q, limit=100, extensions=('.mkv', '.mp4'))
+                            
+                            # If saturated, we might need to drill down
+                            if len(p_results) >= 95:
+                                logger.info(f"Bucket '{q}' saturated ({len(p_results)}). Drilling down...")
+                                for j in range(10):
+                                    sub_q = f"{base_pattern} {i}{j}"
+                                    snowball_queries.append(sub_q)
+                            else:
+                                # Add valid results from this bucket immediately
+                                for sr in p_results:
+                                    if sr.url not in seen_urls:
+                                        results.append(sr)
+                                        seen_urls.add(sr.url)
+                    else:
+                        # Small series - just search the base pattern
+                        snowball_queries.append(base_pattern)
+
+                    # Execute collected queries (Drill-down or Simple)
+                    for query in snowball_queries:
+                        logger.info(f"Snowball query: '{query}'")
+                        snowball_results = client.search(query, limit=100, extensions=('.mkv', '.mp4'))
+                        logger.info(f"Query returned {len(snowball_results)} results")
+                        
+                        # Add only new results
+                        new_count = 0
+                        for sr in snowball_results:
+                            if sr.url not in seen_urls:
+                                results.append(sr)
+                                seen_urls.add(sr.url)
+                                new_count += 1
+                        
+                        if new_count > 0:
+                            logger.info(f"Added {new_count} new results")
                 
                 logger.info(f"Total results after smart snowball: {len(results)}")
         
