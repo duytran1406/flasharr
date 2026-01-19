@@ -1032,13 +1032,23 @@ async def smart_search(request: web.Request) -> web.Response:
         logger.info(f"Primary search returned {len(results)} results")
         
         # Dual-search: Also search with Vietnamese alias if available and different
-        from ..utils.title_matcher import is_vietnamese_title
+        from ..utils.title_matcher import is_vietnamese_title, normalize_vietnamese
         vn_alias = next((a for a in aliases if is_vietnamese_title(a)), None)
         
         if vn_alias and vn_alias.lower() != official_title.lower():
+            # Search with original Vietnamese (with diacritics)
             logger.info(f"Performing secondary search with Vietnamese alias: '{vn_alias}'")
             vn_results = client.search(vn_alias, limit=30, extensions=('.mkv', '.mp4'))
             logger.info(f"Vietnamese alias search returned {len(vn_results)} results")
+            
+            # ALSO search with normalized Vietnamese (without diacritics)
+            # Files are often named "Bo Bo Kinh Tam" instead of "Bộ Bộ Kinh Tâm"
+            vn_normalized = normalize_vietnamese(vn_alias)
+            if vn_normalized != vn_alias.lower():
+                logger.info(f"Performing normalized search: '{vn_normalized}'")
+                vn_norm_results = client.search(vn_normalized, limit=30, extensions=('.mkv', '.mp4'))
+                logger.info(f"Normalized search returned {len(vn_norm_results)} results")
+                vn_results.extend(vn_norm_results)
             
             # Merge results, avoiding duplicates
             seen_urls = {r.url for r in results}
