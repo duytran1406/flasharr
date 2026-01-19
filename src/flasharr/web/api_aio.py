@@ -1072,6 +1072,47 @@ async def smart_search(request: web.Request) -> web.Response:
             
             logger.info(f"Total results after merge: {len(results)}")
         
+        # ================================================================
+        # SNOWBALL SEARCH (TV Series Enhancement)
+        # Find release groups from initial results and re-search
+        # ================================================================
+        if media_type == 'tv' and len(results) > 0:
+            # Extract release group patterns from filenames
+            release_patterns = set()
+            for r in results:
+                name = r.name
+                # Look for [Group Name] pattern
+                group_match = re.search(r'\[([^\]]+)\]', name)
+                if group_match:
+                    group = group_match.group(1)
+                    # Skip common non-group brackets like resolution
+                    if not re.match(r'^\d+p$', group) and len(group) > 2:
+                        release_patterns.add(group)
+            
+            # Perform snowball search for each unique release pattern
+            if release_patterns:
+                logger.info(f"Snowball search: found {len(release_patterns)} release patterns: {list(release_patterns)[:3]}")
+                
+                for pattern in list(release_patterns)[:3]:  # Limit to 3 patterns
+                    # Build snowball query: [Pattern] + normalized alias
+                    if aliases:
+                        from ..utils.title_matcher import normalize_vietnamese
+                        vn_alias = next((a for a in aliases if is_vietnamese_title(a)), None)
+                        if vn_alias:
+                            snowball_query = f"[{pattern}] {normalize_vietnamese(vn_alias)}"
+                            logger.info(f"Snowball search: '{snowball_query}'")
+                            
+                            snowball_results = client.search(snowball_query, limit=100, extensions=('.mkv', '.mp4'))
+                            logger.info(f"Snowball search returned {len(snowball_results)} results")
+                            
+                            # Merge new results
+                            for sr in snowball_results:
+                                if sr.url not in seen_urls:
+                                    results.append(sr)
+                                    seen_urls.add(sr.url)
+                
+                logger.info(f"Total results after snowball: {len(results)}")
+        
         # Process results
         valid_results = []
         for r in results:
