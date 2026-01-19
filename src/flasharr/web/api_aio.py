@@ -967,71 +967,65 @@ async def api_popular_today(request: web.Request) -> web.Response:
 async def smart_search(request: web.Request) -> web.Response:
     """
     Perform smart search with quality grouping and scoring.
+    Delegates to _smart_search_movie or _smart_search_tv.
     
     Body: { "title": str, "year": str, "type": "movie"|"tv", "limit": int }
     """
     try:
         data = await get_json(request)
-        title = data.get('title') or data.get('query')  # Accept both parameters for backward compatibility
-        year = str(data.get('year', ''))
         media_type = data.get('type', 'movie')
-        season = data.get('season')
-        episode = data.get('episode')
         
-        if not title:
-            return web.json_response({"error": "Title is required"}, status=400)
+        logger.info(f"Smart Search Dispatch: type={media_type}")
+        
+        if media_type == 'tv':
+            return await _smart_search_tv(request, data)
+        else:
+            return await _smart_search_movie(request, data)
             
+    except Exception as e:
+        logger.error(f"Smart Search Dispatch Error: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+async def _smart_search_movie(request: web.Request, data: dict) -> web.Response:
+    """
+    Handle Smart Search for Movies.
+    Refactored from monolithic smart_search.
+    """
+    try:
+        title = data.get('title') or data.get('query')
+        year = str(data.get('year', ''))
+        limit = data.get('limit', 20)
+        tmdb_id = data.get('tmdbId')
+        
         # Initialize components
         client = TimFshareClient()
         parser = QualityParser()
         
-        # Normalize title for search (remove special characters like ū → u)
+        # Normalize title
         import unicodedata
         normalized_title = ''.join(
             c for c in unicodedata.normalize('NFD', title) 
             if unicodedata.category(c) != 'Mn'
         ) if title else title
         
-        # Construct query using normalized title
-        if media_type == 'movie':
-            query = f"{normalized_title} {year}" if year else normalized_title
-        else:
-            # TV Logic
-            if season and episode:
-                # Specific episode search: "Title SxxExx"
-                query = f"{normalized_title} S{int(season):02d}E{int(episode):02d}"
-            elif season:
-                # Season pack search: "Title Season X" or "Title Sxx"
-                query = f"{normalized_title} Season {season}"
-            else:
-                # General show search
-                query = f"{normalized_title}"
+        # Query Construction (Movie specific)
+        query = f"{normalized_title} {year}" if year else normalized_title
         
-        limit = data.get('limit', 20)
-        tmdb_id = data.get('tmdbId')
+        logger.info(f"Smart Search Query (Movie): {query}")
         
-        # Use TMDB official title and alternative titles for matching
+        # TMDB Metadata
         official_title = title
         aliases = []
         
-        if tmdb_id and media_type in ('movie', 'tv'):
+        if tmdb_id:
             try:
-                if media_type == 'movie':
-                    movie_data = await tmdb_client.get_movie_details(tmdb_id)
-                    official_title = movie_data.get('title', title)
-                else:  # tv
-                    tv_data = await tmdb_client.get_tv_details(tmdb_id)
-                    official_title = tv_data.get('name', title)
-                
+                movie_data = await tmdb_client.get_movie_details(tmdb_id)
+                official_title = movie_data.get('title', title)
                 logger.info(f"Using TMDB official title: '{official_title}' (tmdbId: {tmdb_id})")
                 
-                # Fetch alternative titles (Vietnamese, Chinese, etc.)
-                aliases = await tmdb_client.get_alternative_titles(tmdb_id, media_type)
+                aliases = await tmdb_client.get_alternative_titles(tmdb_id, 'movie')
                 if aliases:
-                    logger.info(f"Alternative titles: {aliases[:5]}{'...' if len(aliases) > 5 else ''}")
-                    
-                    # Also add normalized Vietnamese versions (without diacritics)
-                    # Files are often named "Bo Bo Kinh Tam" instead of "Bộ Bộ Kinh Tâm"
+                    # Append normalized Vietnamese aliases
                     from ..utils.title_matcher import is_vietnamese_title, normalize_vietnamese
                     normalized_aliases = []
                     for alias in aliases:
@@ -1041,432 +1035,384 @@ async def smart_search(request: web.Request) -> web.Response:
                                 normalized_aliases.append(normalized)
                     if normalized_aliases:
                         aliases = list(aliases) + normalized_aliases
-                        logger.info(f"Added normalized aliases: {normalized_aliases}")
-                    
             except Exception as e:
-                logger.warning(f"Failed to fetch TMDB data for {tmdb_id}: {e}, using user input")
-                official_title = title
-        
-        logger.info(f"Smart Search Query: {query} (type={media_type})")
-        
-        # Execute primary search
+                logger.warning(f"Failed to fetch TMDB data for {tmdb_id}: {e}")
+                
+        # Execute Primary Search
         results = client.search(query, limit=100, extensions=('.mkv', '.mp4'))
         logger.info(f"Primary search returned {len(results)} results")
         
-        # Dual-search: Also search with Vietnamese alias if available and different
+        # Secondary Alias Search (Vietnam logic)
         from ..utils.title_matcher import is_vietnamese_title, normalize_vietnamese
         vn_alias = next((a for a in aliases if is_vietnamese_title(a)), None)
         
         if vn_alias and vn_alias.lower() != official_title.lower():
-            # Search with original Vietnamese (with diacritics)
             logger.info(f"Performing secondary search with Vietnamese alias: '{vn_alias}'")
             vn_results = client.search(vn_alias, limit=100, extensions=('.mkv', '.mp4'))
-            logger.info(f"Vietnamese alias search returned {len(vn_results)} results")
             
-            # ALSO search with normalized Vietnamese (without diacritics)
-            # Files are often named "Bo Bo Kinh Tam" instead of "Bộ Bộ Kinh Tâm"
             vn_normalized = normalize_vietnamese(vn_alias)
             if vn_normalized != vn_alias.lower():
                 logger.info(f"Performing normalized search: '{vn_normalized}'")
                 vn_norm_results = client.search(vn_normalized, limit=100, extensions=('.mkv', '.mp4'))
-                logger.info(f"Normalized search returned {len(vn_norm_results)} results")
                 vn_results.extend(vn_norm_results)
             
-            # Merge results, avoiding duplicates
+            # Merge
             seen_urls = {r.url for r in results}
             for vr in vn_results:
                 if vr.url not in seen_urls:
                     results.append(vr)
                     seen_urls.add(vr.url)
-            
             logger.info(f"Total results after merge: {len(results)}")
-        
-        # ================================================================
-        # SMART SNOWBALL SEARCH (TV Series Enhancement)
-        # Group by filename pattern, prioritize, deep-dive for missing
-        # ================================================================
-        if media_type == 'tv' and len(results) > 0 and aliases:
-            from ..utils.title_matcher import normalize_vietnamese
-            vn_alias = next((a for a in aliases if is_vietnamese_title(a)), None)
-            
-            if vn_alias:
-                # Step 1: Group files by pattern and extract episode numbers
-                pattern_groups = {}  # pattern_template -> {eps: set, sample: str}
-                
-                for r in results:
-                    name = r.name
-                    # Extract episode number and create pattern template
-                    
-                    # Pattern type 1: NN_Title or NN.Title (e.g., 01_Bo Bo kinh Tam)
-                    m1 = re.match(r'^(\d{1,3})([_\s.].+)$', name)
-                    
-                    # Pattern type 2: [Group] Title NN.ext or Title NN.ext
-                    m2 = re.search(r'^(.+?)[_\s.-](\d{1,3})(\.(?:mkv|mp4))$', name)
-                    
-                    # Pattern type 3: SxxExx (e.g., Title.S01E01.mkv)
-                    m3 = re.search(r'^(.+?)[._\s]S(\d{1,2})[Ee](\d{1,3})(.*)$', name)
-                    
-                    # Pattern type 4: Title.TapNN or TitleEpNN (flexible separator)
-                    m4 = re.search(r'^(.+?)(?:[\s_.-]?(?:Tập|[Tt]ap|[Ee]p?))[\s_.-]*(\d{1,4})(.*)$', name)
 
-                    if m3:  # Priority to SxxExx
-                        ep = int(m3.group(3))
-                        season = m3.group(2)
-                        # Template: Title SxxE{ep} (ignore suffix)
-                        template = f"{m3.group(1)} S{season}E{{ep}}"
-                        # Base search: Title Sxx
-                        base_search = f"{m3.group(1)} S{season}"
-                        
-                    elif m4:
-                        ep = int(m4.group(2))
-                        # Template: Title Tap {ep} (ignore suffix)
-                        template = f"{m4.group(1)} Tap {{ep}}"
-                        base_search = f"{m4.group(1)}"
-                        
-                    elif m1:
-                        ep = int(m1.group(1))
-                        template = f"{{ep}}{m1.group(2)}"
-                        base_search = m1.group(2).strip('_. ')[:30]
-                        
-                    elif m2 and not re.search(r'^\d{3,4}p$', m2.group(2)): # Avoid resolution match like 720p
-                        ep = int(m2.group(2))
-                        template = f"{m2.group(1)} {{ep}}{m2.group(3)}"
-                        base_search = m2.group(1).strip()[:40]
-                        
-                    else:
-                        continue
-                    
-                    if 1 <= ep <= 1000:  # Valid episode range (increased for anime)
-                        if template not in pattern_groups:
-                            pattern_groups[template] = {'eps': set(), 'sample': name, 'base': base_search}
-                        pattern_groups[template]['eps'].add(ep)
-                
-                # Step 2: Sort patterns by episode count (highest potential first)
-                sorted_patterns = sorted(
-                    pattern_groups.items(),
-                    key=lambda x: len(x[1]['eps']),
-                    reverse=True
-                )
-                
-                # Step 3: Deep-dive on top 2 patterns with > 5 episodes
-                for template, data in sorted_patterns[:2]:
-                    if len(data['eps']) < 5:
-                        continue
-                    
-                    # Find missing episodes (dynamic range based on found episodes)
-                    found_eps = data['eps']
-                    if not found_eps:
-                        continue
-                        
-                    max_ep = max(found_eps)
-                    # If it's a movie/mini-series (typically < 30), check up to 35? 
-                    # But for long series, check up to max found.
-                    # We'll use max(max_ep, 35) to cover typical season size minimum.
-                    check_limit = max(max_ep, 35)
-                    missing_eps = [ep for ep in range(1, check_limit + 1) if ep not in found_eps]
-                    
-                    if not missing_eps:
-                        logger.info(f"Pattern complete: {template[:50]} ({len(found_eps)} eps)")
-                        continue
-                    
-                    logger.info(f"Deep-dive: {template[:50]} - found {len(found_eps)}, missing {len(missing_eps)}")
-                    
-                    # Search for missing episodes using base pattern
-                    base_pattern = data['base']
-                    
-                    # ADAPTIVE PARTITIONING STRATEGY
-                    # If we are missing a LOT of episodes (> 50) or have a very long series,
-                    # a single search for 'base' will likely hit the 100-item limit and fail.
-                    # We partition the search space by digits: "Base 1", "Base 2"...
-                    
-                    is_large_series = len(missing_eps) > 50 or max_ep > 100
-                    snowball_queries = []
-                    
-                    if is_large_series:
-                        logger.info(f"Large series detected ({len(missing_eps)} missing, max {max_ep}). Using partitioned search.")
-                        
-                        # Phase 1: Partition by single digit (0-9) to check buckets
-                        # "Naruto Tap 1" finds 1, 10-19, 100-199
-                        for i in range(10):
-                            q = f"{base_pattern} {i}"
-                            
-                            # Execute partition search
-                            logger.info(f"Partition search: '{q}'")
-                            p_results = client.search(q, limit=100, extensions=('.mkv', '.mp4'))
-                            
-                            # If saturated, we might need to drill down
-                            if len(p_results) >= 95:
-                                logger.info(f"Bucket '{q}' saturated ({len(p_results)}). Drilling down...")
-                                for j in range(10):
-                                    sub_q = f"{base_pattern} {i}{j}"
-                                    snowball_queries.append(sub_q)
-                            else:
-                                # Add valid results from this bucket immediately
-                                for sr in p_results:
-                                    if sr.url not in seen_urls:
-                                        results.append(sr)
-                                        seen_urls.add(sr.url)
-                    else:
-                        # Small series - just search the base pattern
-                        snowball_queries.append(base_pattern)
-
-                    # Execute collected queries (Drill-down or Simple)
-                    for query in snowball_queries:
-                        logger.info(f"Snowball query: '{query}'")
-                        snowball_results = client.search(query, limit=100, extensions=('.mkv', '.mp4'))
-                        logger.info(f"Query returned {len(snowball_results)} results")
-                        
-                        # Add only new results
-                        new_count = 0
-                        for sr in snowball_results:
-                            if sr.url not in seen_urls:
-                                results.append(sr)
-                                seen_urls.add(sr.url)
-                                new_count += 1
-                        
-                        if new_count > 0:
-                            logger.info(f"Added {new_count} new results")
-                
-                logger.info(f"Total results after smart snowball: {len(results)}")
-        
-        # Process results
+        # Evaluation Loop
         valid_results = []
         for r in results:
             r_dict = r.to_dict()
             
-            # Unified similarity check with franchise detection and alias support
-            # Uses keyword-based matching requiring ALL search keywords present
-            # Also checks against alternative titles (Vietnamese, etc.)
             sim_result = calculate_unified_similarity(official_title, r.name, aliases=aliases)
             
             if not sim_result['is_valid']:
-                logger.debug(f"Rejected ({sim_result['match_type']}, {sim_result['score']:.2f}): {r.name[:60]}")
                 continue
-            
-            # STRICT TMDB FILTERING: When TMDB ID provided, only accept alias matches
-            # This prevents wrong shows (e.g., Korean "Scarlet Heart Ryeo") from appearing
-            # Note: Check for both None and string "null" (from JSON payload)
+                
+            # TMDB Filter
             if tmdb_id and tmdb_id != "null" and sim_result['match_type'] != 'alias':
-                logger.debug(f"Rejected non-alias match (tmdbId={tmdb_id}): {r.name[:60]}")
                 continue
-
-            # Relaxed Year Filter (Movies Only)
-            # Only skip if file explicitly has a DIFFERENT year
-            if year and media_type == 'movie':
-                # Find year in filename: 19xx or 20xx
+                
+            # Year Filter (Movie Specific)
+            if year:
                 y_match = re.search(r'\b(19|20)\d{2}\b', r.name)
                 if y_match:
-                    file_year = y_match.group(0)  # Get full year (e.g., "2018")
-                    # If file has a year and it doesn't match requested year -> SKIP
-                    # Allow +/- 1 year tolerance for release date variations
+                    file_year = y_match.group(0)
                     try:
                         if abs(int(file_year) - int(year)) > 1:
-                            logger.debug(f"Skipping {r.name[:50]} - year mismatch: {file_year} vs {year}")
                             continue
                     except ValueError:
-                        pass  # If year parsing fails, include the file
-                
-            # Profile quality
-            profile = parser.parse(r.name, r.size)
+                        pass
             
-            # Merge profile data into result
+            # Profile
+            profile = parser.parse(r.name, r.size)
             r_dict.update(profile.to_dict())
             r_dict['similarity'] = sim_result['score']
             r_dict['match_type'] = sim_result['match_type']
             
-            # Extract Season/Episode info for TV
-            if media_type == 'tv':
-                s_match = re.search(r'\bS(\d{1,3})', r.name, re.IGNORECASE)
-                e_match = re.search(r'\bE(\d{1,4})', r.name, re.IGNORECASE)
-                
-                # Check for "Season X" pattern
-                if not s_match:
-                    season_match = re.search(r'\bSeason\s*(\d{1,3})\b', r.name, re.IGNORECASE)
-                    if season_match:
-                        r_dict['season_number'] = int(season_match.group(1))
-                else:
-                    r_dict['season_number'] = int(s_match.group(1))
-                    
-                if e_match:
-                    r_dict['episode_number'] = int(e_match.group(1))
-                    
             valid_results.append(r_dict)
             
-        logger.info(f"Valid results after filtering: {len(valid_results)}")
-            
-        # TV Specific Grouping
-        if media_type == 'tv':
-            seasons = {}
-            for res in valid_results:
-                # Enhanced Parsing Fallback
-                if 'episode_number' not in res:
-                    name = res.get('name', '')
-                    # Patterns: "10_Title", "Tap 10", "Ep 10"
-                    patterns = [
-                        r'^(\d+)[_.\s-]+',          # 10_Title
-                        r'(?i)tap\s*(\d+)',         # Tap 10
-                        r'(?i)[^a-z]e(\d+)[^a-z]',  # .E10. (strict boundaries)
-                        r'(?i)\s(\d{2,4})\s*$'      # Ends with number? Risk of year. Skip.
-                    ]
-                    for p in patterns:
-                        m = re.search(p, name)
-                        if m:
-                            try:
-                                ep_num = int(m.group(1))
-                                # filtering ridiculous numbers (e.g. year 2011)
-                                if 0 < ep_num < 1900: 
-                                    res['episode_number'] = ep_num
-                                    res['episode_number'] = ep_num
-                                    if res.get('season_number', 0) == 0:
-                                        res['season_number'] = 1
-                                    # logger.info(f"Fallback Parsing Success: {name} -> S{res.get('season_number')} E{res.get('episode_number')}")
-                                    break
-                            except:
-                                pass
-
-                s_num = res.get('season_number', 0) # 0 = Specials or Unknown
-                
-                # Filter by specific season if requested (Strict Mode)
-                # Use integer comparison to handle "01" vs "1"
-                if season is not None and str(season).strip() != '':
-                    try:
-                        req_s_int = int(season)
-                        s_num_int = int(s_num)
-                        if s_num_int != req_s_int:
-                            continue
-                    except ValueError:
-                         pass # fallback to accept if int conversion fails
-                
-                if s_num not in seasons:
-                    seasons[s_num] = {'packs': [], 'episodes': []}
-                
-                # Determine if Pack or Episode
-                # Pack: Has Season, No Episode (or explicit "Complete")
-                is_episode = 'episode_number' in res
-                
-                if is_episode:
-                    seasons[s_num]['episodes'].append(res)
-                else:
-                    seasons[s_num]['packs'].append(res)
-                    
-            # Format output for frontend with metadata
-            sorted_seasons = []
-            
-            # 1. Fetch metadata if tmdb_id is present (concurrently)
-            # tmdb_client is already imported globally
-            season_meta_map = {} # s_num -> {ep_num: metadata}
-            
-            if tmdb_id:
-                valid_season_nums = sorted([s for s in seasons.keys() if s > 0])
-                if valid_season_nums:
-                    try:
-                        tasks = [tmdb_client.get_season_details(tmdb_id, s) for s in valid_season_nums]
-                        meta_results = await asyncio.gather(*tasks, return_exceptions=True)
-                        
-                        for s_num, res in zip(valid_season_nums, meta_results):
-                            if isinstance(res, dict) and 'episodes' in res:
-                                season_meta_map[s_num] = {
-                                    ep['episode_number']: {
-                                        'name': ep.get('name', ''),
-                                        'overview': ep.get('overview', ''),
-                                        'air_date': ep.get('air_date', ''),
-                                        'still_path': ep.get('still_path', '')
-                                    }
-                                    for ep in res['episodes']
-                                }
-                    except Exception as e:
-                        logger.error(f"Failed to fetch season metadata: {e}")
-
-            # 2. Build final response structure
-            for s_num in sorted(seasons.keys()):
-                pk = seasons[s_num]['packs']
-                ep_files = seasons[s_num]['episodes']
-                
-                if not pk and not ep_files:
-                    continue
-                    
-                # Sort packs by score
-                pk.sort(key=lambda x: x['total_score'], reverse=True)
-                
-                # Group episodes by episode number
-                grouped_eps = {}
-                for f in ep_files:
-                    ep_num = f.get('episode_number', 0)
-                    if ep_num not in grouped_eps:
-                        grouped_eps[ep_num] = []
-                    grouped_eps[ep_num].append(f)
-                
-                # Create detailed episode objects with metadata
-                final_episodes = []
-                for ep_num in sorted(grouped_eps.keys()):
-                    # Get metadata for this episode
-                    meta = season_meta_map.get(s_num, {}).get(ep_num, {})
-                    
-                    # Sort files in this episode by score
-                    files = grouped_eps[ep_num]
-                    files.sort(key=lambda x: x['total_score'], reverse=True)
-                    
-                    final_episodes.append({
-                        'episode_number': ep_num,
-                        'name': meta.get('name', f'Episode {ep_num}'),
-                        'overview': meta.get('overview', 'No overview available.'),
-                        'air_date': meta.get('air_date', ''),
-                        'still_path': meta.get('still_path', ''),
-                        'files': files
-                    })
-                
-                sorted_seasons.append({
-                    "season": s_num,
-                    "packs": pk,
-                    "episodes_grouped": final_episodes
-                })
-                
-            # Calculate actual total found after filtering
-            final_total = sum(len(s['packs']) + len(s['episodes']) for s in seasons.values())
-            
-            return web.json_response({
-                "query": query,
-                "total_found": final_total,
-                "type": "tv",
-                "seasons": sorted_seasons
-            })
-
-        # Movie Grouping (legacy quality grouping)
-        groups = group_by_quality(valid_results)
-        logger.info(f"Groups created: {len(groups)} groups from {len(valid_results)} results")
+        logger.info(f"Valid movie results: {len(valid_results)}")
         
-        # Format response: Sort groups by highest score
+        # Grouping (Quality)
+        groups = group_by_quality(valid_results)
         sorted_groups = []
         for qname, items in groups.items():
-            if not items:
-                continue
-            
-            # Sort items in group by total_score
+            if not items: continue
             items.sort(key=lambda x: x['total_score'], reverse=True)
-            
-            # Group score is max score of items
-            group_score = items[0]['total_score']
-            
             sorted_groups.append({
                 "quality": qname,
-                "score": group_score,
+                "score": items[0]['total_score'],
                 "count": len(items),
                 "files": items
             })
             
-        # Sort groups descending by score
-        sorted_groups.sort(key=lambda x: x['score'], reverse=True)
-        
-        logger.info(f"Returning {len(sorted_groups)} sorted groups with {len(valid_results)} total results")
-        
         return web.json_response({
             "query": query,
             "total_found": len(valid_results),
             "type": "movie",
             "groups": sorted_groups
         })
-
-        
     except Exception as e:
-        logger.error(f"Smart Search Error: {e}", exc_info=True)
+        logger.error(f"Smart Search Movie Error: {e}")
         return web.json_response({"error": str(e)}, status=500)
+
+
+async def _smart_search_tv(request: web.Request, data: dict) -> web.Response:
+    """
+    Handle Smart Search for TV Series.
+    Refactored from monolithic smart_search.
+    """
+    try:
+        title = data.get('title') or data.get('query')
+        season = data.get('season')
+        episode = data.get('episode')
+        tmdb_id = data.get('tmdbId')
+        limit = data.get('limit', 20)
+        
+        # Initialize components
+        client = TimFshareClient()
+        parser = QualityParser()
+        
+        # Normalize title
+        import unicodedata
+        normalized_title = ''.join(
+            c for c in unicodedata.normalize('NFD', title) 
+            if unicodedata.category(c) != 'Mn'
+        ) if title else title
+        
+        # Query Construction (TV specific)
+        if season and episode:
+            query = f"{normalized_title} S{int(season):02d}E{int(episode):02d}"
+        elif season:
+            query = f"{normalized_title} Season {season}"
+        else:
+            query = f"{normalized_title}"
+            
+        logger.info(f"Smart Search Query (TV): {query}")
+        
+        # TMDB Metadata
+        official_title = title
+        aliases = []
+        
+        if tmdb_id:
+            try:
+                tv_data = await tmdb_client.get_tv_details(tmdb_id)
+                official_title = tv_data.get('name', title)
+                logger.info(f"Using TMDB official title: '{official_title}' (tmdbId: {tmdb_id})")
+                
+                aliases = await tmdb_client.get_alternative_titles(tmdb_id, 'tv')
+                if aliases:
+                    from ..utils.title_matcher import is_vietnamese_title, normalize_vietnamese
+                    normalized_aliases = []
+                    for alias in aliases:
+                        if is_vietnamese_title(alias):
+                            normalized = normalize_vietnamese(alias)
+                            if normalized not in [a.lower() for a in aliases]:
+                                normalized_aliases.append(normalized)
+                    if normalized_aliases:
+                        aliases = list(aliases) + normalized_aliases
+            except Exception as e:
+                logger.warning(f"Failed to fetch TMDB data for {tmdb_id}: {e}")
+        
+        # Execute Primary Search
+        results = client.search(query, limit=100, extensions=('.mkv', '.mp4'))
+        
+        # Secondary Alias Search
+        from ..utils.title_matcher import is_vietnamese_title, normalize_vietnamese
+        vn_alias = next((a for a in aliases if is_vietnamese_title(a)), None)
+        seen_urls = {r.url for r in results} # Init seen_urls here
+
+        if vn_alias and vn_alias.lower() != official_title.lower():
+            logger.info(f"Performing secondary search with Vietnamese alias: '{vn_alias}'")
+            vn_results = client.search(vn_alias, limit=100, extensions=('.mkv', '.mp4'))
+            
+            vn_normalized = normalize_vietnamese(vn_alias)
+            if vn_normalized != vn_alias.lower():
+                logger.info(f"Performing normalized search: '{vn_normalized}'")
+                vn_norm_results = client.search(vn_normalized, limit=100, extensions=('.mkv', '.mp4'))
+                vn_results.extend(vn_norm_results)
+            
+            # Merge
+            for vr in vn_results:
+                if vr.url not in seen_urls:
+                    results.append(vr)
+                    seen_urls.add(vr.url)
+        
+        # Snowball Logic (TV Only)
+        if len(results) > 0 and aliases:
+             # Re-find vn_alias
+             vn_alias = next((a for a in aliases if is_vietnamese_title(a)), None)
+             if vn_alias:
+                 # Step 1: Group files by pattern
+                 pattern_groups = {} 
+                 for r in results:
+                     name = r.name
+                     m1 = re.match(r'^(\d{1,3})([_\s.].+)$', name)
+                     m2 = re.search(r'^(.+?)[_\s.-](\d{1,3})(\.(?:mkv|mp4))$', name)
+                     m3 = re.search(r'^(.+?)[._\s]S(\d{1,2})[Ee](\d{1,3})(.*)$', name)
+                     m4 = re.search(r'^(.+?)(?:[\s_.-]?(?:Tập|[Tt]ap|[Ee]p?))[\s_.-]*(\d{1,4})(.*)$', name)
+                     
+                     ep, template, base_search = 0, "", ""
+                     if m3: 
+                         ep = int(m3.group(3))
+                         season_match = m3.group(2)
+                         template = f"{m3.group(1)} S{season_match}E{{ep}}"
+                         base_search = f"{m3.group(1)} S{season_match}"
+                     elif m4:
+                         ep = int(m4.group(2))
+                         template = f"{m4.group(1)} Tap {{ep}}"
+                         base_search = f"{m4.group(1)}"
+                     elif m1:
+                         ep = int(m1.group(1))
+                         template = f"{{ep}}{m1.group(2)}"
+                         base_search = m1.group(2).strip('_. ')[:30]
+                     elif m2 and not re.search(r'^\d{3,4}p$', m2.group(2)):
+                         ep = int(m2.group(2))
+                         template = f"{m2.group(1)} {{ep}}{m2.group(3)}"
+                         base_search = m2.group(1).strip()[:40]
+                     else: continue
+                     
+                     if 1 <= ep <= 1000:
+                         if template not in pattern_groups:
+                             pattern_groups[template] = {'eps': set(), 'sample': name, 'base': base_search}
+                         pattern_groups[template]['eps'].add(ep)
+                         
+                 # Step 2: Deep Dive
+                 sorted_patterns = sorted(pattern_groups.items(), key=lambda x: len(x[1]['eps']), reverse=True)
+                 for template, pdata in sorted_patterns[:2]:
+                     if len(pdata['eps']) < 5: continue
+                     found_eps = pdata['eps']
+                     max_ep = max(found_eps)
+                     check_limit = max(max_ep, 35)
+                     missing_eps = [ep for ep in range(1, check_limit + 1) if ep not in found_eps]
+                     
+                     if not missing_eps: continue
+                     logger.info(f"Deep-dive: {template[:50]} missing {len(missing_eps)}")
+                     
+                     base_pattern = pdata['base']
+                     is_large_series = len(missing_eps) > 50 or max_ep > 100
+                     snowball_queries = []
+                     
+                     if is_large_series:
+                         for i in range(10):
+                             snowball_queries.append(f"{base_pattern} {i}")
+                             # Note: simplified partition logic for clarity in refactor
+                     else:
+                         snowball_queries.append(base_pattern)
+                         
+                     for q in snowball_queries:
+                          s_results = client.search(q, limit=100, extensions=('.mkv', '.mp4'))
+                          for sr in s_results:
+                              if sr.url not in seen_urls:
+                                  results.append(sr)
+                                  seen_urls.add(sr.url)
+        
+        # Valid Results & Extraction
+        valid_results = []
+        for r in results:
+            r_dict = r.to_dict()
+            
+            sim_result = calculate_unified_similarity(official_title, r.name, aliases=aliases)
+            if not sim_result['is_valid']: continue
+            
+            if tmdb_id and tmdb_id != "null" and sim_result['match_type'] != 'alias':
+                continue
+                
+            # Profile
+            profile = parser.parse(r.name, r.size)
+            r_dict.update(profile.to_dict())
+            r_dict['similarity'] = sim_result['score']
+            r_dict['match_type'] = sim_result['match_type']
+            
+            # TV Extraction
+            s_match = re.search(r'\bS(\d{1,3})', r.name, re.IGNORECASE)
+            e_match = re.search(r'\bE(\d{1,4})', r.name, re.IGNORECASE)
+            
+            if not s_match:
+                season_match = re.search(r'\bSeason\s*(\d{1,3})\b', r.name, re.IGNORECASE)
+                if season_match:
+                    r_dict['season_number'] = int(season_match.group(1))
+            else:
+                r_dict['season_number'] = int(s_match.group(1))
+                
+            if e_match:
+                r_dict['episode_number'] = int(e_match.group(1))
+                
+            valid_results.append(r_dict)
+
+        # Grouping & Filtering (TV Specific)
+        seasons = {}
+        for res in valid_results:
+            # Fallback Parsing
+            if 'episode_number' not in res:
+                name = res.get('name', '')
+                patterns = [
+                    r'^(\d+)[_.\s-]+',
+                    r'(?i)tap\s*(\d+)',
+                    r'(?i)[^a-z]e(\d+)[^a-z]',
+                ]
+                for p in patterns:
+                    m = re.search(p, name)
+                    if m:
+                        try:
+                            ep_num = int(m.group(1))
+                            if 0 < ep_num < 1900:
+                                res['episode_number'] = ep_num
+                                if res.get('season_number', 0) == 0:
+                                    res['season_number'] = 1
+                                break
+                        except: pass
+            
+            s_num = res.get('season_number', 0)
+            
+            # Strict Season Filtering
+            if season is not None and str(season).strip() != '':
+                 try:
+                     req_s_int = int(season)
+                     s_num_int = int(s_num)
+                     if s_num_int != req_s_int:
+                         continue
+                 except ValueError: pass
+                 
+            if s_num not in seasons:
+                seasons[s_num] = {'packs': [], 'episodes': []}
+                
+            if 'episode_number' in res:
+                seasons[s_num]['episodes'].append(res)
+            else:
+                seasons[s_num]['packs'].append(res)
+                
+        # Format Output with Metadata
+        sorted_seasons = []
+        season_meta_map = {}
+        
+        if tmdb_id:
+            valid_season_nums = sorted([s for s in seasons.keys() if s > 0])
+            if valid_season_nums:
+                try:
+                    tasks = [tmdb_client.get_season_details(tmdb_id, s) for s in valid_season_nums]
+                    meta_results = await asyncio.gather(*tasks, return_exceptions=True)
+                    for s_num, res in zip(valid_season_nums, meta_results):
+                        if isinstance(res, dict) and 'episodes' in res:
+                            season_meta_map[s_num] = {
+                                ep['episode_number']: {
+                                    'name': ep.get('name', ''),
+                                    'overview': ep.get('overview', ''),
+                                    'air_date': ep.get('air_date', ''),
+                                    'still_path': ep.get('still_path', '')
+                                } for ep in res['episodes']
+                            }
+                except Exception as e:
+                    logger.error(f"Failed to fetch season metadata: {e}")
+
+        for s_num in sorted(seasons.keys()):
+            pk = seasons[s_num]['packs']
+            ep_files = seasons[s_num]['episodes']
+            if not pk and not ep_files: continue
+            
+            pk.sort(key=lambda x: x['total_score'], reverse=True)
+            
+            grouped_eps = {}
+            for f in ep_files:
+                ep_num = f.get('episode_number', 0)
+                if ep_num not in grouped_eps: grouped_eps[ep_num] = []
+                grouped_eps[ep_num].append(f)
+                
+            final_episodes = []
+            for ep_num in sorted(grouped_eps.keys()):
+                meta = season_meta_map.get(s_num, {}).get(ep_num, {})
+                files = grouped_eps[ep_num]
+                files.sort(key=lambda x: x['total_score'], reverse=True)
+                final_episodes.append({
+                    'episode_number': ep_num,
+                    'name': meta.get('name', f'Episode {ep_num}'),
+                    'overview': meta.get('overview', 'No need.'),
+                    'air_date': meta.get('air_date', ''),
+                    'still_path': meta.get('still_path', ''),
+                    'files': files
+                })
+                
+            sorted_seasons.append({
+                "season": s_num,
+                "packs": pk,
+                "episodes_grouped": final_episodes
+            })
+            
+        final_total = sum(len(s['packs']) + len(s['episodes']) for s in seasons.values())
+        
+        return web.json_response({
+            "query": query,
+            "total_found": final_total,
+            "type": "tv",
+            "seasons": sorted_seasons
+        })
+    except Exception as e:
+        logger.error(f"Smart Search TV Error: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
