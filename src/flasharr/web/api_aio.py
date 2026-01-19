@@ -1073,45 +1073,95 @@ async def smart_search(request: web.Request) -> web.Response:
             logger.info(f"Total results after merge: {len(results)}")
         
         # ================================================================
-        # SNOWBALL SEARCH (TV Series Enhancement)
-        # Find release groups from initial results and re-search
+        # SMART SNOWBALL SEARCH (TV Series Enhancement)
+        # Group by filename pattern, prioritize, deep-dive for missing
         # ================================================================
-        if media_type == 'tv' and len(results) > 0:
-            # Extract release group patterns from filenames
-            release_patterns = set()
-            for r in results:
-                name = r.name
-                # Look for [Group Name] pattern
-                group_match = re.search(r'\[([^\]]+)\]', name)
-                if group_match:
-                    group = group_match.group(1)
-                    # Skip common non-group brackets like resolution
-                    if not re.match(r'^\d+p$', group) and len(group) > 2:
-                        release_patterns.add(group)
+        if media_type == 'tv' and len(results) > 0 and aliases:
+            from ..utils.title_matcher import normalize_vietnamese
+            vn_alias = next((a for a in aliases if is_vietnamese_title(a)), None)
             
-            # Perform snowball search for each unique release pattern
-            if release_patterns:
-                logger.info(f"Snowball search: found {len(release_patterns)} release patterns: {list(release_patterns)[:3]}")
+            if vn_alias:
+                # Step 1: Group files by pattern and extract episode numbers
+                pattern_groups = {}  # pattern_template -> {eps: set, sample: str}
                 
-                for pattern in list(release_patterns)[:3]:  # Limit to 3 patterns
-                    # Build snowball query: [Pattern] + normalized alias
-                    if aliases:
-                        from ..utils.title_matcher import normalize_vietnamese
-                        vn_alias = next((a for a in aliases if is_vietnamese_title(a)), None)
-                        if vn_alias:
-                            snowball_query = f"[{pattern}] {normalize_vietnamese(vn_alias)}"
-                            logger.info(f"Snowball search: '{snowball_query}'")
-                            
-                            snowball_results = client.search(snowball_query, limit=100, extensions=('.mkv', '.mp4'))
-                            logger.info(f"Snowball search returned {len(snowball_results)} results")
-                            
-                            # Merge new results
-                            for sr in snowball_results:
-                                if sr.url not in seen_urls:
-                                    results.append(sr)
-                                    seen_urls.add(sr.url)
+                for r in results:
+                    name = r.name
+                    # Extract episode number and create pattern template
+                    
+                    # Pattern type 1: NN_Title (e.g., 01_Bo Bo kinh Tam)
+                    m1 = re.match(r'^(\d{1,2})([_\s].+)$', name)
+                    if m1:
+                        ep = int(m1.group(1))
+                        template = f"{{ep}}{m1.group(2)}"
+                        base_search = m1.group(2).strip('_. ')[:30]
+                    # Pattern type 2: [Group] Title NN.ext
+                    elif re.search(r'\[\w+.*?\].*\d{1,2}\.(?:mkv|mp4)$', name):
+                        m2 = re.search(r'^(.+?)(\d{1,2})(\.(?:mkv|mp4))$', name)
+                        if m2:
+                            ep = int(m2.group(2))
+                            template = f"{m2.group(1)}{{ep}}{m2.group(3)}"
+                            base_search = m2.group(1).strip()[:40]
+                        else:
+                            continue
+                    # Pattern type 3: Title.TapNN or TitleEpNN
+                    elif re.search(r'(?:Tap|[Ee]p?)(\d{1,2})', name):
+                        m3 = re.search(r'^(.+?)(?:Tap|[Ee]p?)(\d{1,2})(.*)$', name)
+                        if m3:
+                            ep = int(m3.group(2))
+                            template = f"{m3.group(1)}Tap{{ep}}{m3.group(3)}"
+                            base_search = m3.group(1).strip('._')[:30]
+                        else:
+                            continue
+                    else:
+                        continue
+                    
+                    if 1 <= ep <= 50:  # Valid episode range
+                        if template not in pattern_groups:
+                            pattern_groups[template] = {'eps': set(), 'sample': name, 'base': base_search}
+                        pattern_groups[template]['eps'].add(ep)
                 
-                logger.info(f"Total results after snowball: {len(results)}")
+                # Step 2: Sort patterns by episode count (highest potential first)
+                sorted_patterns = sorted(
+                    pattern_groups.items(),
+                    key=lambda x: len(x[1]['eps']),
+                    reverse=True
+                )
+                
+                # Step 3: Deep-dive on top 2 patterns with > 5 episodes
+                for template, data in sorted_patterns[:2]:
+                    if len(data['eps']) < 5:
+                        continue
+                    
+                    # Find missing episodes (assume 35 for now, could use TMDB)
+                    found_eps = data['eps']
+                    missing_eps = [ep for ep in range(1, 36) if ep not in found_eps]
+                    
+                    if not missing_eps:
+                        logger.info(f"Pattern complete: {template[:50]} ({len(found_eps)} eps)")
+                        continue
+                    
+                    logger.info(f"Deep-dive: {template[:50]} - found {len(found_eps)}, missing {len(missing_eps)}")
+                    
+                    # Search for missing episodes using base pattern
+                    base = data['base']
+                    snowball_query = f"{base}"
+                    logger.info(f"Snowball search for missing: '{snowball_query}'")
+                    
+                    snowball_results = client.search(snowball_query, limit=100, extensions=('.mkv', '.mp4'))
+                    logger.info(f"Snowball returned {len(snowball_results)} results")
+                    
+                    # Add only new results
+                    new_count = 0
+                    for sr in snowball_results:
+                        if sr.url not in seen_urls:
+                            results.append(sr)
+                            seen_urls.add(sr.url)
+                            new_count += 1
+                    
+                    if new_count > 0:
+                        logger.info(f"Added {new_count} new results from snowball")
+                
+                logger.info(f"Total results after smart snowball: {len(results)}")
         
         # Process results
         valid_results = []
