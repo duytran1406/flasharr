@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flasharr Frontend Unit Tests</title>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, sans-serif;
+            margin: 0;
+            padding: 2rem;
+            background: #1a1a2e;
+            color: #eee;
+        }
+
+        h1 {
+            color: #00f3ff;
+            margin-bottom: 0.5rem;
+        }
+
+        .subtitle {
+            color: #888;
+            margin-bottom: 2rem;
+        }
+
+        .test-suite {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .test-suite h2 {
+            margin: 0 0 1rem 0;
+            font-size: 1rem;
+            color: #00ffa3;
+            border-bottom: 1px solid #333;
+            padding-bottom: 0.5rem;
+        }
+
+        .test-case {
+            display: flex;
+            align-items: center;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #222;
+        }
+
+        .test-case:last-child {
+            border-bottom: none;
+        }
+
+        .test-status {
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            margin-right: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+
+        .test-status.pass {
+            background: #00ffa3;
+            color: #000;
+        }
+
+        .test-status.fail {
+            background: #ff5252;
+            color: #fff;
+        }
+
+        .test-name {
+            flex: 1;
+        }
+
+        .test-error {
+            color: #ff5252;
+            font-size: 0.85rem;
+            margin-left: 2.5rem;
+            font-family: monospace;
+        }
+
+        .summary {
+            margin-top: 2rem;
+            padding: 1rem;
+            border-radius: 8px;
+            font-weight: bold;
+        }
+
+        .summary.all-pass {
+            background: rgba(0, 255, 163, 0.2);
+            color: #00ffa3;
+        }
+
+        .summary.has-fail {
+            background: rgba(255, 82, 82, 0.2);
+            color: #ff5252;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🧪 Flasharr Frontend Unit Tests</h1>
+    <p class="subtitle">Testing utils/ and core/ modules</p>
+
+    <div id="results"></div>
+    <div id="summary"></div>
+
+    <script type="module">
+        // Simple test framework
+        const results = [];
+
+        function describe(suiteName, fn) {
+            const suite = { name: suiteName, tests: [] };
+            window.currentSuite = suite;
+            fn();
+            results.push(suite);
+        }
+
+        function it(testName, fn) {
+            const test = { name: testName, passed: false, error: null };
+            try {
+                fn();
+                test.passed = true;
+            } catch (e) {
+                test.error = e.message;
+            }
+            window.currentSuite.tests.push(test);
+        }
+
+        function expect(actual) {
+            return {
+                toBe(expected) {
+                    if (actual !== expected) {
+                        throw new Error(`Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+                    }
+                },
+                toEqual(expected) {
+                    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+                        throw new Error(`Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+                    }
+                },
+                toContain(substring) {
+                    if (!actual.includes(substring)) {
+                        throw new Error(`Expected "${actual}" to contain "${substring}"`);
+                    }
+                },
+                toBeTruthy() {
+                    if (!actual) {
+                        throw new Error(`Expected truthy value, got ${JSON.stringify(actual)}`);
+                    }
+                },
+                toBeFalsy() {
+                    if (actual) {
+                        throw new Error(`Expected falsy value, got ${JSON.stringify(actual)}`);
+                    }
+                },
+                toBeGreaterThan(expected) {
+                    if (actual <= expected) {
+                        throw new Error(`Expected ${actual} to be greater than ${expected}`);
+                    }
+                },
+                toThrow() {
+                    try {
+                        actual();
+                        throw new Error('Expected function to throw');
+                    } catch (e) {
+                        // Expected
+                    }
+                }
+            };
+        }
+
+        // Import modules
+        import * as sanitize from '../src/flasharr/static/js/utils/sanitize.js';
+        import * as format from '../src/flasharr/static/js/utils/format.js';
+        import * as dom from '../src/flasharr/static/js/utils/dom.js';
+        import { state } from '../src/flasharr/static/js/core/state.js';
+
+        // =====================================================================
+        // SANITIZE.JS TESTS
+        // =====================================================================
+
+        describe('sanitize.js - escapeHtml', () => {
+            it('escapes < and > characters', () => {
+                const result = sanitize.escapeHtml('<script>alert("xss")</script>');
+    expect(result).toContain('&lt;');
+    expect(result).toContain('&gt;');
+    });
+
+    it('escapes quotes', () => {
+    const result = sanitize.escapeHtml('Hello "world"');
+    expect(result).toContain('&quot;');
+    });
+
+    it('escapes ampersands', () => {
+    const result = sanitize.escapeHtml('Tom & Jerry');
+    expect(result).toContain('&amp;');
+    });
+
+    it('handles null and undefined', () => {
+    expect(sanitize.escapeHtml(null)).toBe('');
+    expect(sanitize.escapeHtml(undefined)).toBe('');
+    });
+
+    it('converts non-strings to strings', () => {
+    expect(sanitize.escapeHtml(123)).toBe('123');
+    });
+    });
+
+    describe('sanitize.js - escapeAttr', () => {
+    it('escapes attribute-specific characters', () => {
+    const result = sanitize.escapeAttr('onclick="alert(1)"');
+    expect(result).toContain('&quot;');
+    });
+
+    it('escapes newlines', () => {
+    const result = sanitize.escapeAttr('line1\nline2');
+    expect(result).toContain('&#10;');
+    });
+    });
+
+    describe('sanitize.js - sanitizeUrl', () => {
+    it('blocks javascript: protocol', () => {
+    const result = sanitize.sanitizeUrl('javascript:alert(1)');
+    expect(result).toBe('');
+    });
+
+    it('blocks data: protocol', () => {
+    const result = sanitize.sanitizeUrl('data:text/html,
+    <script>');
+                expect(result).toBe('');
+            });
+
+            it('allows http/https URLs', () => {
+                expect(sanitize.sanitizeUrl('https://example.com')).toBe('https://example.com');
+                expect(sanitize.sanitizeUrl('/relative/path')).toBe('/relative/path');
+            });
+        });
+
+        describe('sanitize.js - html template literal', () => {
+            it('escapes interpolated values', () => {
+                const userInput = '<script>bad</script>';
+    const result = sanitize.html`<div>${userInput}</div>`;
+    expect(result).toContain('&lt;script&gt;');
+    });
+    });
+
+    // =====================================================================
+    // FORMAT.JS TESTS
+    // =====================================================================
+
+    describe('format.js - formatBytes', () => {
+    it('formats bytes correctly', () => {
+    expect(format.formatBytes(0)).toBe('0 B');
+    expect(format.formatBytes(1024)).toBe('1 KB');
+    expect(format.formatBytes(1048576)).toBe('1 MB');
+    expect(format.formatBytes(1073741824)).toBe('1 GB');
+    });
+
+    it('handles decimals', () => {
+    expect(format.formatBytes(1536, 1)).toBe('1.5 KB');
+    });
+
+    it('handles null/undefined', () => {
+    expect(format.formatBytes(null)).toBe('0 B');
+    expect(format.formatBytes(undefined)).toBe('0 B');
+    });
+    });
+
+    describe('format.js - formatSpeed', () => {
+    it('formats speed correctly', () => {
+    expect(format.formatSpeed(1048576)).toBe('1 MB/s');
+    });
+
+    it('handles zero speed', () => {
+    expect(format.formatSpeed(0)).toBe('0 B/s');
+    });
+    });
+
+    describe('format.js - formatDuration', () => {
+    it('formats seconds', () => {
+    expect(format.formatDuration(45)).toBe('45s');
+    });
+
+    it('formats minutes and seconds', () => {
+    expect(format.formatDuration(125)).toBe('2m 5s');
+    });
+
+    it('formats hours and minutes', () => {
+    expect(format.formatDuration(3725)).toBe('1h 2m');
+    });
+
+    it('formats days for long durations', () => {
+    expect(format.formatDuration(90000)).toContain('d');
+    });
+
+    it('handles zero/negative', () => {
+    expect(format.formatDuration(0)).toBe('--');
+    expect(format.formatDuration(-10)).toBe('--');
+    });
+    });
+
+    describe('format.js - formatPercent', () => {
+    it('formats percentages', () => {
+    expect(format.formatPercent(50)).toBe('50.0%');
+    expect(format.formatPercent(99.99, 2)).toBe('99.99%');
+    });
+    });
+
+    describe('format.js - truncate', () => {
+    it('truncates long strings', () => {
+    expect(format.truncate('Hello World', 8)).toBe('Hello...');
+    });
+
+    it('returns short strings unchanged', () => {
+    expect(format.truncate('Hi', 10)).toBe('Hi');
+    });
+    });
+
+    describe('format.js - capitalize', () => {
+    it('capitalizes first letter', () => {
+    expect(format.capitalize('hello')).toBe('Hello');
+    });
+    });
+
+    // =====================================================================
+    // DOM.JS TESTS
+    // =====================================================================
+
+    describe('dom.js - debounce', () => {
+    it('returns a function', () => {
+    const fn = dom.debounce(() => {}, 100);
+    expect(typeof fn).toBe('function');
+    });
+    });
+
+    describe('dom.js - throttle', () => {
+    it('returns a function', () => {
+    const fn = dom.throttle(() => {}, 100);
+    expect(typeof fn).toBe('function');
+    });
+    });
+
+    // =====================================================================
+    // STATE.JS TESTS
+    // =====================================================================
+
+    describe('state.js - get/set', () => {
+    it('sets and gets values', () => {
+    state.set('testValue', 42);
+    expect(state.get('testValue')).toBe(42);
+    });
+
+    it('supports dot notation', () => {
+    state.set('nested.deep.value', 'hello');
+    expect(state.get('nested.deep.value')).toBe('hello');
+    });
+    });
+
+    describe('state.js - subscribe', () => {
+    it('notifies subscribers on change', () => {
+    let notified = false;
+    state.subscribe('subscribeTest', () => { notified = true; });
+    state.set('subscribeTest', 'new value');
+    expect(notified).toBe(true);
+    });
+
+    it('returns unsubscribe function', () => {
+    let count = 0;
+    const unsub = state.subscribe('unsubTest', () => { count++; });
+    state.set('unsubTest', 1);
+    unsub();
+    state.set('unsubTest', 2);
+    expect(count).toBe(1);
+    });
+    });
+
+    describe('state.js - discover state', () => {
+    it('has correct default values', () => {
+    expect(state.discover.type).toBe('movie');
+    expect(state.discover.page).toBe(1);
+    });
+
+    it('isDefaultDiscoverState returns true for defaults', () => {
+    state.resetDiscover();
+    expect(state.isDefaultDiscoverState()).toBe(true);
+    });
+    });
+
+    // =====================================================================
+    // RENDER RESULTS
+    // =====================================================================
+
+    function renderResults() {
+    const container = document.getElementById('results');
+    let totalTests = 0;
+    let totalPassed = 0;
+
+    results.forEach(suite => {
+    const suiteDiv = document.createElement('div');
+    suiteDiv.className = 'test-suite';
+
+    const suiteTitle = document.createElement('h2');
+    suiteTitle.textContent = suite.name;
+    suiteDiv.appendChild(suiteTitle);
+
+    suite.tests.forEach(test => {
+    totalTests++;
+    if (test.passed) totalPassed++;
+
+    const testDiv = document.createElement('div');
+    testDiv.className = 'test-case';
+
+    const status = document.createElement('div');
+    status.className = `test-status ${test.passed ? 'pass' : 'fail'}`;
+    status.textContent = test.passed ? '✓' : '✕';
+
+    const name = document.createElement('div');
+    name.className = 'test-name';
+    name.textContent = test.name;
+
+    testDiv.appendChild(status);
+    testDiv.appendChild(name);
+    suiteDiv.appendChild(testDiv);
+
+    if (test.error) {
+    const error = document.createElement('div');
+    error.className = 'test-error';
+    error.textContent = test.error;
+    suiteDiv.appendChild(error);
+    }
+    });
+
+    container.appendChild(suiteDiv);
+    });
+
+    const summary = document.getElementById('summary');
+    summary.className = `summary ${totalPassed === totalTests ? 'all-pass' : 'has-fail'}`;
+    summary.textContent = `${totalPassed} / ${totalTests} tests passed`;
+    }
+
+    renderResults();
+    </script>
+</body>
+
+</html>

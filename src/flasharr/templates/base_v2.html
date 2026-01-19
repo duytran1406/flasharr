@@ -17,7 +17,9 @@
 
     <!-- Core Styles -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style_v2.css') }}?v={{ now() }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/mobile-v2.css') }}?v={{ now() }}">
 </head>
+
 
 <body class="theme-oceanholic">
     <div class="app-shell">
@@ -188,7 +190,27 @@
     <!-- Scripts -->
     <!-- Load Chart.js from CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- App Logic -->
+
+    <!-- Preload modular utilities for enhanced XSS protection -->
+    <script type="module">
+        // Import utility modules for global availability
+        import { escapeHtml, sanitizeUrl, html } from '/static/js/utils/sanitize.js';
+        import { formatBytes, formatSpeed, formatDuration } from '/static/js/utils/format.js';
+        import { state } from '/static/js/core/state.js';
+
+        // Expose to window for gradual migration
+        window.FlasharrUtils = {
+            escapeHtml,
+            sanitizeUrl,
+            html,
+            formatBytes,
+            formatSpeed,
+            formatDuration,
+            state
+        };
+    </script>
+
+    <!-- App Logic (current implementation) -->
     <script type="module" src="{{ url_for('static', filename='js/app_v2.js') }}?v={{ now() }}"></script>
 </body>
 
