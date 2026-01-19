@@ -1088,34 +1088,46 @@ async def smart_search(request: web.Request) -> web.Response:
                     name = r.name
                     # Extract episode number and create pattern template
                     
-                    # Pattern type 1: NN_Title (e.g., 01_Bo Bo kinh Tam)
-                    m1 = re.match(r'^(\d{1,2})([_\s].+)$', name)
-                    if m1:
+                    # Pattern type 1: NN_Title or NN.Title (e.g., 01_Bo Bo kinh Tam)
+                    m1 = re.match(r'^(\d{1,3})([_\s.].+)$', name)
+                    
+                    # Pattern type 2: [Group] Title NN.ext or Title NN.ext
+                    m2 = re.search(r'^(.+?)[_\s.-](\d{1,3})(\.(?:mkv|mp4))$', name)
+                    
+                    # Pattern type 3: SxxExx (e.g., Title.S01E01.mkv)
+                    m3 = re.search(r'^(.+?)[._\s]S(\d{1,2})[Ee](\d{1,3})(.*)$', name)
+                    
+                    # Pattern type 4: Title.TapNN or TitleEpNN (flexible separator)
+                    m4 = re.search(r'^(.+?)(?:[\s_.-]?(?:Tập|[Tt]ap|[Ee]p?))[\s_.-]*(\d{1,4})(.*)$', name)
+
+                    if m3:  # Priority to SxxExx
+                        ep = int(m3.group(3))
+                        season = m3.group(2)
+                        # Template: Title SxxE{ep} (ignore suffix)
+                        template = f"{m3.group(1)} S{season}E{{ep}}"
+                        # Base search: Title Sxx
+                        base_search = f"{m3.group(1)} S{season}"
+                        
+                    elif m4:
+                        ep = int(m4.group(2))
+                        # Template: Title Tap {ep} (ignore suffix)
+                        template = f"{m4.group(1)} Tap {{ep}}"
+                        base_search = f"{m4.group(1)}"
+                        
+                    elif m1:
                         ep = int(m1.group(1))
                         template = f"{{ep}}{m1.group(2)}"
                         base_search = m1.group(2).strip('_. ')[:30]
-                    # Pattern type 2: [Group] Title NN.ext
-                    elif re.search(r'\[\w+.*?\].*\d{1,2}\.(?:mkv|mp4)$', name):
-                        m2 = re.search(r'^(.+?)(\d{1,2})(\.(?:mkv|mp4))$', name)
-                        if m2:
-                            ep = int(m2.group(2))
-                            template = f"{m2.group(1)}{{ep}}{m2.group(3)}"
-                            base_search = m2.group(1).strip()[:40]
-                        else:
-                            continue
-                    # Pattern type 3: Title.TapNN or TitleEpNN
-                    elif re.search(r'(?:Tap|[Ee]p?)(\d{1,2})', name):
-                        m3 = re.search(r'^(.+?)(?:Tap|[Ee]p?)(\d{1,2})(.*)$', name)
-                        if m3:
-                            ep = int(m3.group(2))
-                            template = f"{m3.group(1)}Tap{{ep}}{m3.group(3)}"
-                            base_search = m3.group(1).strip('._')[:30]
-                        else:
-                            continue
+                        
+                    elif m2 and not re.search(r'^\d{3,4}p$', m2.group(2)): # Avoid resolution match like 720p
+                        ep = int(m2.group(2))
+                        template = f"{m2.group(1)} {{ep}}{m2.group(3)}"
+                        base_search = m2.group(1).strip()[:40]
+                        
                     else:
                         continue
                     
-                    if 1 <= ep <= 50:  # Valid episode range
+                    if 1 <= ep <= 1000:  # Valid episode range (increased for anime)
                         if template not in pattern_groups:
                             pattern_groups[template] = {'eps': set(), 'sample': name, 'base': base_search}
                         pattern_groups[template]['eps'].add(ep)
