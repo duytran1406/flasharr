@@ -2440,9 +2440,9 @@ class Router {
                     <!-- System Traffic -->
                     <div class="box-section" style="border-color: rgba(255,255,255,0.1); height: 100%;">
                          <div class="box-label" style="color: var(--text-primary);">
-                            <span class="material-icons">insights</span>
-                            System Traffic
-                        </div>
+                             <span class="material-icons">insights</span>
+                             Netflow Statistic
+                         </div>
                         
                         <div id="traffic-chart-container" style="flex: 1; position: relative; padding-top: 0.5rem; min-height: 0;">
                             <canvas id="trafficChart"></canvas>
@@ -2775,6 +2775,7 @@ class Router {
                     x: { display: false },
                     y: {
                         display: true,
+                        min: 0,
                         grid: { color: 'rgba(255,255,255,0.03)', drawBorder: false },
                         ticks: { color: 'rgba(255,255,255,0.2)', font: { size: 9, family: 'Roboto Mono' }, callback: (v) => v + ' MB/s' }
                     }

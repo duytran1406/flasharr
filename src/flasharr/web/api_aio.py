@@ -1295,10 +1295,22 @@ async def _smart_search_tv(request: web.Request, data: dict) -> web.Response:
             r_dict['match_type'] = sim_result['match_type']
             
             # TV Extraction - Use combined SxxExx first to avoid false matches
-            se_combined = re.search(r'(?i)S(\d{1,3})E(\d{1,4})', r.name)
+            # Wider digit match (1,6) to catch mashed resolutions like E011080p
+            se_combined = re.search(r'(?i)S(\d{1,3})E(\d{1,6})', r.name)
             if se_combined:
-                r_dict['season_number'] = int(se_combined.group(1))
-                r_dict['episode_number'] = int(se_combined.group(2))
+                s_val = int(se_combined.group(1))
+                e_str = se_combined.group(2)
+                
+                # Mashed resolution stripping (e.g., E061080p -> 06)
+                for res in ['2160', '1080', '720', '480']:
+                    if res in e_str:
+                        parts = e_str.split(res)
+                        if parts[0]: # Must have digits before the resolution
+                             e_str = parts[0]
+                             break
+                
+                r_dict['season_number'] = s_val
+                r_dict['episode_number'] = int(e_str)
             else:
                 # Separate patterns as fallback
                 s_match = re.search(r'\bS(\d{1,3})', r.name, re.IGNORECASE)
@@ -1310,9 +1322,14 @@ async def _smart_search_tv(request: web.Request, data: dict) -> web.Response:
                     r_dict['season_number'] = int(s_match.group(1))
                 
                 # For standalone E, require separators to avoid hex checksums
-                e_match = re.search(r'(?i)(?:^|[\s.\-_])E(\d{1,4})(?:[\s.\-_]|$)', r.name)
+                e_match = re.search(r'(?i)(?:^|[\s.\-_])E(\d{1,6})(?:[\s.\-_]|$)', r.name)
                 if e_match:
-                    r_dict['episode_number'] = int(e_match.group(1))
+                    e_str = e_match.group(1)
+                    for res in ['2160', '1080', '720', '480']:
+                        if res in e_str:
+                            parts = e_str.split(res)
+                            if parts[0]: e_str = parts[0]; break
+                    r_dict['episode_number'] = int(e_str)
                 
             valid_results.append(r_dict)
 
@@ -1397,6 +1414,14 @@ async def _smart_search_tv(request: web.Request, data: dict) -> web.Response:
             final_episodes = []
             for ep_num in sorted(grouped_eps.keys()):
                 meta = season_meta_map.get(s_num, {}).get(ep_num, {})
+                
+                # Ghost Episode Filtering: 
+                # If metadata for this season exists but does NOT contain this episode, skip it.
+                # This prevents files like "E061080p" from creating "Episode 610" if it's not a real episode.
+                if tmdb_id and season_meta_map.get(s_num) and not meta:
+                    logger.warning(f"Discarding ghost episode {ep_num} for season {s_num} (not in TMDB)")
+                    continue
+                    
                 files = grouped_eps[ep_num]
                 files.sort(key=lambda x: x['total_score'], reverse=True)
                 final_episodes.append({
