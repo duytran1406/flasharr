@@ -157,6 +157,75 @@ class TMDBClient:
             return ""
         return f"https://image.tmdb.org/t/p/{size}{path}"
 
+    async def get_movie_alternative_titles(self, tmdb_id: int) -> Dict[str, Any]:
+        """
+        Get alternative titles for a movie in all available languages.
+        
+        TMDB API: /movie/{movie_id}/alternative_titles
+        
+        Returns titles including Vietnamese (VN), Chinese (CN), etc.
+        """
+        return await self._request('GET', f'/movie/{tmdb_id}/alternative_titles')
+    
+    async def get_tv_alternative_titles(self, tmdb_id: int) -> Dict[str, Any]:
+        """
+        Get alternative titles for a TV show in all available languages.
+        
+        TMDB API: /tv/{series_id}/alternative_titles
+        
+        Returns titles including Vietnamese (VN), Chinese (CN), etc.
+        """
+        return await self._request('GET', f'/tv/{tmdb_id}/alternative_titles')
+    
+    async def get_alternative_titles(self, tmdb_id: int, media_type: str) -> List[str]:
+        """
+        Unified method to get all alternative titles for a movie or TV show.
+        
+        Prioritizes Vietnamese titles (VN) for local content matching.
+        
+        Args:
+            tmdb_id: TMDB ID of the movie/TV show
+            media_type: 'movie' or 'tv'
+            
+        Returns:
+            List of alternative titles, Vietnamese titles first
+        """
+        try:
+            if media_type == 'movie':
+                data = await self.get_movie_alternative_titles(tmdb_id)
+                titles_key = 'titles'
+            else:
+                data = await self.get_tv_alternative_titles(tmdb_id)
+                titles_key = 'results'
+            
+            titles = []
+            vn_titles = []
+            
+            for item in data.get(titles_key, []):
+                iso = item.get('iso_3166_1', '')
+                title = item.get('title', '') or item.get('name', '')
+                
+                if not title:
+                    continue
+                
+                # Prioritize Vietnamese titles
+                if iso == 'VN':
+                    vn_titles.append(title)
+                else:
+                    titles.append(title)
+            
+            # Vietnamese titles first, then others
+            result = vn_titles + titles
+            
+            if result:
+                logger.info(f"Found {len(result)} alternative titles for {media_type}/{tmdb_id} (VN: {len(vn_titles)})")
+            
+            return result
+            
+        except Exception as e:
+            logger.warning(f"Failed to get alternative titles for {media_type}/{tmdb_id}: {e}")
+            return []
+
     async def get_genres(self, media_type: str = 'movie') -> Dict[str, Any]:
         """Fetch genres for movies or TV shows."""
         return await self._request('GET', f'/genre/{media_type}/list')

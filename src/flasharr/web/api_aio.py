@@ -1001,8 +1001,10 @@ async def smart_search(request: web.Request) -> web.Response:
         limit = data.get('limit', 20)
         tmdb_id = data.get('tmdbId')
         
-        # Use TMDB official title if available for more accurate matching
+        # Use TMDB official title and alternative titles for matching
         official_title = title
+        aliases = []
+        
         if tmdb_id and media_type in ('movie', 'tv'):
             try:
                 if media_type == 'movie':
@@ -1013,24 +1015,49 @@ async def smart_search(request: web.Request) -> web.Response:
                     official_title = tv_data.get('name', title)
                 
                 logger.info(f"Using TMDB official title: '{official_title}' (tmdbId: {tmdb_id})")
+                
+                # Fetch alternative titles (Vietnamese, Chinese, etc.)
+                aliases = await tmdb_client.get_alternative_titles(tmdb_id, media_type)
+                if aliases:
+                    logger.info(f"Alternative titles: {aliases[:5]}{'...' if len(aliases) > 5 else ''}")
+                    
             except Exception as e:
-                logger.warning(f"Failed to fetch TMDB title for {tmdb_id}: {e}, using user input")
+                logger.warning(f"Failed to fetch TMDB data for {tmdb_id}: {e}, using user input")
                 official_title = title
         
         logger.info(f"Smart Search Query: {query} (type={media_type})")
         
-        # Execute search
+        # Execute primary search
         results = client.search(query, limit=50, extensions=('.mkv', '.mp4'))
-        logger.info(f"TimFshare client returned {len(results)} results")
+        logger.info(f"Primary search returned {len(results)} results")
+        
+        # Dual-search: Also search with Vietnamese alias if available and different
+        from ..utils.title_matcher import is_vietnamese_title
+        vn_alias = next((a for a in aliases if is_vietnamese_title(a)), None)
+        
+        if vn_alias and vn_alias.lower() != official_title.lower():
+            logger.info(f"Performing secondary search with Vietnamese alias: '{vn_alias}'")
+            vn_results = client.search(vn_alias, limit=30, extensions=('.mkv', '.mp4'))
+            logger.info(f"Vietnamese alias search returned {len(vn_results)} results")
+            
+            # Merge results, avoiding duplicates
+            seen_urls = {r.url for r in results}
+            for vr in vn_results:
+                if vr.url not in seen_urls:
+                    results.append(vr)
+                    seen_urls.add(vr.url)
+            
+            logger.info(f"Total results after merge: {len(results)}")
         
         # Process results
         valid_results = []
         for r in results:
             r_dict = r.to_dict()
             
-            # Unified similarity check with franchise detection
+            # Unified similarity check with franchise detection and alias support
             # Uses keyword-based matching requiring ALL search keywords present
-            sim_result = calculate_unified_similarity(official_title, r.name)
+            # Also checks against alternative titles (Vietnamese, etc.)
+            sim_result = calculate_unified_similarity(official_title, r.name, aliases=aliases)
             
             if not sim_result['is_valid']:
                 logger.debug(f"Rejected ({sim_result['match_type']}, {sim_result['score']:.2f}): {r.name[:60]}")
