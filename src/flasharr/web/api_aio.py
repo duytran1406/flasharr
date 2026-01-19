@@ -1316,8 +1316,10 @@ async def smart_search(request: web.Request) -> web.Response:
                                 # filtering ridiculous numbers (e.g. year 2011)
                                 if 0 < ep_num < 1900: 
                                     res['episode_number'] = ep_num
+                                    res['episode_number'] = ep_num
                                     if res.get('season_number', 0) == 0:
                                         res['season_number'] = 1
+                                    # logger.info(f"Fallback Parsing Success: {name} -> S{res.get('season_number')} E{res.get('episode_number')}")
                                     break
                             except:
                                 pass
@@ -1325,14 +1327,15 @@ async def smart_search(request: web.Request) -> web.Response:
                 s_num = res.get('season_number', 0) # 0 = Specials or Unknown
                 
                 # Filter by specific season if requested (Strict Mode)
+                # Use integer comparison to handle "01" vs "1"
                 if season is not None and str(season).strip() != '':
-                    req_s = str(season).strip()
-                    # LOGGING FOR DEBUG
-                    if len(seasons) == 0: # Log first few mismatches
-                         logger.info(f"FILTER DEBUG: s_num={s_num} (type {type(s_num)}) req={req_s}")
-                    
-                    if str(s_num) != req_s:
-                        continue
+                    try:
+                        req_s_int = int(season)
+                        s_num_int = int(s_num)
+                        if s_num_int != req_s_int:
+                            continue
+                    except ValueError:
+                         pass # fallback to accept if int conversion fails
                 
                 if s_num not in seasons:
                     seasons[s_num] = {'packs': [], 'episodes': []}
