@@ -1144,9 +1144,17 @@ async def smart_search(request: web.Request) -> web.Response:
                     if len(data['eps']) < 5:
                         continue
                     
-                    # Find missing episodes (assume 35 for now, could use TMDB)
+                    # Find missing episodes (dynamic range based on found episodes)
                     found_eps = data['eps']
-                    missing_eps = [ep for ep in range(1, 36) if ep not in found_eps]
+                    if not found_eps:
+                        continue
+                        
+                    max_ep = max(found_eps)
+                    # If it's a movie/mini-series (typically < 30), check up to 35? 
+                    # But for long series, check up to max found.
+                    # We'll use max(max_ep, 35) to cover typical season size minimum.
+                    check_limit = max(max_ep, 35)
+                    missing_eps = [ep for ep in range(1, check_limit + 1) if ep not in found_eps]
                     
                     if not missing_eps:
                         logger.info(f"Pattern complete: {template[:50]} ({len(found_eps)} eps)")
