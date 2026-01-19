@@ -22,7 +22,7 @@ from ..services.smart_search import get_smart_search_service
 from ..clients.timfshare import TimFshareClient
 from ..utils.quality_profile import QualityParser, group_by_quality
 from ..utils.normalizer import normalize_filename
-from ..utils.title_matcher import calculate_smart_similarity
+from ..utils.title_matcher import calculate_unified_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -1028,11 +1028,12 @@ async def smart_search(request: web.Request) -> web.Response:
         for r in results:
             r_dict = r.to_dict()
             
-            # Smart similarity check using keyword-based matching
-            # Use official TMDB title if available for better accuracy
-            sim = calculate_smart_similarity(official_title, r.name)
-            if sim < 0.55:  # Balanced threshold with TMDB official title
-                logger.debug(f"Low similarity ({sim:.2f}): {r.name[:60]}")
+            # Unified similarity check with franchise detection
+            # Uses keyword-based matching requiring ALL search keywords present
+            sim_result = calculate_unified_similarity(official_title, r.name)
+            
+            if not sim_result['is_valid']:
+                logger.debug(f"Rejected ({sim_result['match_type']}, {sim_result['score']:.2f}): {r.name[:60]}")
                 continue
 
             # Relaxed Year Filter (Movies Only)
@@ -1056,7 +1057,8 @@ async def smart_search(request: web.Request) -> web.Response:
             
             # Merge profile data into result
             r_dict.update(profile.to_dict())
-            r_dict['similarity'] = sim
+            r_dict['similarity'] = sim_result['score']
+            r_dict['match_type'] = sim_result['match_type']
             
             # Extract Season/Episode info for TV
             if media_type == 'tv':

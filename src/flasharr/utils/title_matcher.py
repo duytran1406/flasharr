@@ -1,14 +1,78 @@
 """
-Title Matching Utilities for Smart Search
+Title Matching Utilities for Smart Search - Phase 1 Implementation
 
-Provides intelligent title extraction and matching to improve search relevance.
-Filters out irrelevant results by comparing core titles and keywords.
+Provides intelligent title extraction and matching with:
+- Unified similarity algorithm
+- Franchise conflict detection
+- Vietnamese title support (Phase 2 preparation)
+- Keyword-based strict matching
 """
 
 import re
 import difflib
-from typing import Set, List
+from typing import Set, List, Dict, Tuple, Optional
 
+
+# ============================================================================
+# FRANCHISE CONFLICT DETECTION
+# ============================================================================
+
+FRANCHISE_CONFLICTS = {
+    # Format: "franchise_keyword": ["different_movie_indicators"]
+    "predator": ["killer of killers", "prey", "dark ages", "alien vs", "requiem"],
+    "alien": ["romulus", "resurrection", "covenant", "prometheus", "vs predator"],
+    "terminator": ["genisys", "dark fate", "salvation", "rise of the machines"],
+    "matrix": ["resurrections", "reloaded", "revolutions"],
+    "star wars": ["rogue one", "solo", "mandalorian", "andor", "clone wars"],
+    "jurassic": ["world", "dominion", "fallen kingdom"],
+    "fast": ["furious", "hobbs", "shaw"],
+    "mission impossible": ["dead reckoning", "fallout", "rogue nation", "ghost protocol"],
+    "john wick": ["chapter 2", "chapter 3", "chapter 4", "parabellum"],
+    "spider-man": ["homecoming", "far from home", "no way home", "into the verse"],
+    "avengers": ["ultron", "infinity war", "endgame"],
+    "batman": ["begins", "dark knight", "rises", "forever", "robin"],
+    "transformers": ["revenge", "dark of the moon", "age of extinction", "last knight"],
+    "pirates": ["dead man", "world's end", "stranger tides", "dead men"],
+    "harry potter": ["chamber", "prisoner", "goblet", "phoenix", "prince", "hallows"],
+    "lord of the rings": ["two towers", "return of the king", "fellowship"],
+    "hobbit": ["unexpected", "desolation", "five armies"],
+    "hunger games": ["catching fire", "mockingjay", "ballad"],
+    "twilight": ["new moon", "eclipse", "breaking dawn"],
+}
+
+
+def is_different_franchise_entry(search_title: str, filename: str) -> bool:
+    """
+    Detect if filename is a DIFFERENT movie in the same franchise.
+    
+    Example:
+        search: "Predator: Badlands"
+        filename: "Predator.Killer.of.Killers.2025.mkv"
+        result: True (different movie)
+    
+    Args:
+        search_title: The title being searched for
+        filename: The filename to check
+        
+    Returns:
+        True if filename is likely a different franchise entry
+    """
+    search_lower = search_title.lower()
+    file_lower = filename.lower()
+    
+    for franchise, conflicts in FRANCHISE_CONFLICTS.items():
+        # Check if search is for this franchise
+        if franchise in search_lower:
+            for conflict in conflicts:
+                # If conflict term is in filename but NOT in search title
+                if conflict in file_lower and conflict not in search_lower:
+                    return True
+    return False
+
+
+# ============================================================================
+# TITLE EXTRACTION & KEYWORDS
+# ============================================================================
 
 def extract_core_title(text: str) -> str:
     """
@@ -40,6 +104,7 @@ def extract_core_title(text: str) -> str:
         r'\b(DTS|AAC|AC3|TrueHD|Atmos|DD5\.1|DD7\.1)\b',
         r'\b(HDR|HDR10|HDR10\+|DV|Dolby\.?Vision|SDR)\b',
         r'\b(PROPER|REPACK|EXTENDED|UNRATED|DIRECTORS?\.?CUT)\b',
+        r'\b(Vietsub|Thuyet\.?Minh|Long\.?Tieng|Sub\.?Viet)\b',
     ]
     for pattern in quality_patterns:
         name = re.sub(pattern, '', name, flags=re.I)
@@ -75,42 +140,91 @@ def get_title_keywords(title: str) -> Set[str]:
     stop_words = {
         'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 
         'to', 'for', 'of', 'with', 'by', 'from', 'as', 'is', 'was',
-        'are', 'were', 'be', 'been', 'being', 'have', 'has', 'had'
+        'are', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
+        'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x'  # Roman numerals handled separately
     }
     
     words = set(core.split()) - stop_words
     
     # Filter out very short words (likely not meaningful)
-    words = {w for w in words if len(w) > 2}
+    words = {w for w in words if len(w) > 1}
     
     return words
 
 
-def calculate_smart_similarity(search_title: str, filename: str) -> float:
+# ============================================================================
+# UNIFIED SIMILARITY ALGORITHM
+# ============================================================================
+
+def calculate_unified_similarity(
+    search_title: str, 
+    filename: str,
+    aliases: Optional[List[str]] = None
+) -> Dict:
     """
-    Calculate intelligent similarity between search title and filename.
+    Unified similarity calculation with alias support.
     
-    Uses keyword-based matching to ensure all important words from the
-    search title are present in the filename.
+    This is the SINGLE source of truth for similarity matching.
+    Replaces the dual-algorithm system.
     
     Args:
-        search_title: The title being searched for
+        search_title: The primary title being searched for
         filename: The filename to compare against
+        aliases: Optional list of alternative titles (e.g., Vietnamese)
         
     Returns:
-        Score from 0.0 to 1.0, where:
-        - 1.0 = Perfect match (all keywords, exact order)
-        - 0.9 = Excellent match (all keywords present)
-        - 0.7-0.8 = Good match (most keywords present)
-        - 0.5-0.6 = Partial match (some keywords)
-        - < 0.5 = Poor match (few or no keywords)
+        Dictionary with:
+        - score: float (0.0-1.0)
+        - is_valid: bool (True if should be included in results)
+        - matched_title: str (which title matched)
+        - match_type: str ('exact', 'all_keywords', 'partial', 'alias')
+    """
+    # Try primary title first
+    result = _match_against_title(search_title, filename)
+    
+    if result['is_valid']:
+        result['matched_title'] = search_title
+        return result
+    
+    # If no match and aliases provided, try each alias
+    if aliases:
+        for alias in aliases:
+            alias_result = _match_against_title(alias, filename)
+            if alias_result['is_valid']:
+                alias_result['matched_title'] = alias
+                alias_result['match_type'] = 'alias'
+                return alias_result
+    
+    # No match found
+    result['matched_title'] = search_title
+    return result
+
+
+def _match_against_title(search_title: str, filename: str) -> Dict:
+    """
+    Internal matching function for a single title.
+    
+    Returns:
+        Dictionary with score, is_valid, match_type
     """
     search_core = extract_core_title(search_title)
     file_core = extract_core_title(filename)
     
+    # Check for franchise conflicts FIRST
+    if is_different_franchise_entry(search_title, filename):
+        return {
+            'score': 0.0,
+            'is_valid': False,
+            'match_type': 'franchise_conflict'
+        }
+    
     # Exact match
     if search_core == file_core:
-        return 1.0
+        return {
+            'score': 1.0,
+            'is_valid': True,
+            'match_type': 'exact'
+        }
     
     # Get keywords
     search_words = get_title_keywords(search_title)
@@ -118,57 +232,127 @@ def calculate_smart_similarity(search_title: str, filename: str) -> float:
     
     if not search_words:
         # Fallback to basic similarity if no keywords
-        return difflib.SequenceMatcher(None, search_core, file_core).ratio()
+        score = difflib.SequenceMatcher(None, search_core, file_core).ratio()
+        return {
+            'score': score,
+            'is_valid': score >= 0.7,
+            'match_type': 'fuzzy'
+        }
     
-    # Check keyword overlap
+    # Calculate keyword overlap
     common_words = search_words & file_words
+    missing_words = search_words - file_words
+    extra_words = file_words - search_words
     
-    if not common_words:
-        return 0.0  # No common keywords = not a match
-    
-    # Calculate keyword match ratio
-    keyword_match_ratio = len(common_words) / len(search_words)
-    
-    # All search keywords present in file
-    if search_words.issubset(file_words):
-        # Calculate how much extra content is in the file
-        extra_words = len(file_words - search_words)
+    # CRITICAL: ALL search keywords must be present
+    if missing_words:
+        # Partial match - calculate how many are missing
+        match_ratio = len(common_words) / len(search_words)
         
-        if extra_words == 0:
-            # Perfect keyword match
-            return 0.95
-        elif extra_words <= 2:
-            # Very close match (e.g., "Predator" vs "Predator Extended")
-            return 0.85
-        elif extra_words <= 4:
-            # Good match but has some extra content
-            return 0.75
-        else:
-            # Has many extra words - might be different movie
-            # (e.g., "Predator" vs "Predator Killer Of Killers")
-            return 0.60
+        # Only accept if 1 keyword missing AND it's not a short title
+        if len(missing_words) == 1 and len(search_words) >= 3:
+            return {
+                'score': 0.65,
+                'is_valid': True,
+                'match_type': 'partial'
+            }
+        
+        # Too many keywords missing
+        return {
+            'score': match_ratio * 0.5,
+            'is_valid': False,
+            'match_type': 'missing_keywords'
+        }
     
-    # Partial keyword match
-    # Penalize if file has many extra keywords (likely different movie)
-    extra_ratio = len(file_words - search_words) / max(len(file_words), 1)
-    penalty = extra_ratio * 0.3
+    # All search keywords present - good match!
+    # Calculate score based on extra words (fewer extras = better match)
+    if len(extra_words) == 0:
+        score = 0.95  # Perfect keyword match
+    elif len(extra_words) <= 1:
+        score = 0.90  # Very close (e.g., "Extended" version)
+    elif len(extra_words) <= 2:
+        score = 0.85  # Good match
+    elif len(extra_words) <= 3:
+        score = 0.75  # Acceptable
+    else:
+        score = 0.65  # Many extra words
     
-    base_score = keyword_match_ratio * 0.7
-    
-    return max(0.0, base_score - penalty)
+    return {
+        'score': score,
+        'is_valid': True,
+        'match_type': 'all_keywords'
+    }
 
 
-def is_likely_different_movie(search_title: str, filename: str, threshold: float = 0.6) -> bool:
+# ============================================================================
+# LEGACY COMPATIBILITY
+# ============================================================================
+
+def calculate_smart_similarity(search_title: str, filename: str) -> float:
     """
-    Determine if a filename likely represents a different movie than the search title.
+    Legacy compatibility function.
+    
+    Use calculate_unified_similarity() for new code.
+    This wrapper maintains backward compatibility with existing code.
+    """
+    result = calculate_unified_similarity(search_title, filename)
+    return result['score']
+
+
+def is_likely_different_movie(search_title: str, filename: str, threshold: float = 0.65) -> bool:
+    """
+    Determine if a filename likely represents a different movie.
     
     Args:
         search_title: The title being searched for
         filename: The filename to check
-        threshold: Similarity threshold (default 0.6)
+        threshold: Score threshold (default 0.65)
         
     Returns:
         True if likely a different movie, False otherwise
     """
-    similarity = calculate_smart_similarity(search_title, filename)
-    return similarity < threshold
+    result = calculate_unified_similarity(search_title, filename)
+    return not result['is_valid']
+
+
+# ============================================================================
+# VIETNAMESE SUPPORT (Phase 2 Preparation)
+# ============================================================================
+
+VIETNAMESE_CHARS = set('ăâđêôơưáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ')
+
+def is_vietnamese_title(text: str) -> bool:
+    """
+    Detect if text contains Vietnamese characters.
+    
+    Vietnamese has unique diacritics: ă, â, đ, ê, ô, ơ, ư, and tone marks.
+    """
+    return any(c in VIETNAMESE_CHARS for c in text.lower())
+
+
+def normalize_vietnamese(text: str) -> str:
+    """
+    Normalize Vietnamese text by removing tone marks.
+    
+    Useful for fuzzy matching: "Bộ Bộ Kinh Tâm" → "bo bo kinh tam"
+    """
+    viet_to_ascii = {
+        'à': 'a', 'á': 'a', 'ả': 'a', 'ã': 'a', 'ạ': 'a',
+        'ă': 'a', 'ằ': 'a', 'ắ': 'a', 'ẳ': 'a', 'ẵ': 'a', 'ặ': 'a',
+        'â': 'a', 'ầ': 'a', 'ấ': 'a', 'ẩ': 'a', 'ẫ': 'a', 'ậ': 'a',
+        'đ': 'd',
+        'è': 'e', 'é': 'e', 'ẻ': 'e', 'ẽ': 'e', 'ẹ': 'e',
+        'ê': 'e', 'ề': 'e', 'ế': 'e', 'ể': 'e', 'ễ': 'e', 'ệ': 'e',
+        'ì': 'i', 'í': 'i', 'ỉ': 'i', 'ĩ': 'i', 'ị': 'i',
+        'ò': 'o', 'ó': 'o', 'ỏ': 'o', 'õ': 'o', 'ọ': 'o',
+        'ô': 'o', 'ồ': 'o', 'ố': 'o', 'ổ': 'o', 'ỗ': 'o', 'ộ': 'o',
+        'ơ': 'o', 'ờ': 'o', 'ớ': 'o', 'ở': 'o', 'ỡ': 'o', 'ợ': 'o',
+        'ù': 'u', 'ú': 'u', 'ủ': 'u', 'ũ': 'u', 'ụ': 'u',
+        'ư': 'u', 'ừ': 'u', 'ứ': 'u', 'ử': 'u', 'ữ': 'u', 'ự': 'u',
+        'ỳ': 'y', 'ý': 'y', 'ỷ': 'y', 'ỹ': 'y', 'ỵ': 'y',
+    }
+    
+    result = text.lower()
+    for viet, ascii_char in viet_to_ascii.items():
+        result = result.replace(viet, ascii_char)
+    return result
