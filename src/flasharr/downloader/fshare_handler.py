@@ -112,9 +112,8 @@ class FshareDownloadHandler:
         if not fcode:
             raise InvalidURLError(f"Could not extract file code from: {url}")
         
-        # Ensure authentication ONCE before all operations
-        if not self.client.ensure_authenticated():
-            raise DownloadError("Failed to authenticate with Fshare")
+        # NOTE: Authentication should be ensured by SABnzbd.add_url() before calling this
+        # Do NOT call ensure_authenticated here to avoid duplicate logins
         
         try:
             # Get file info (no auth needed, already authenticated above)

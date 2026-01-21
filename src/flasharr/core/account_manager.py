@@ -242,7 +242,7 @@ class AccountManager:
     
     def refresh_account(self, email: str) -> Dict:
         """
-        Refresh account info by re-logging in.
+        Refresh account info by validating/refreshing session.
         
         Args:
             email: Account email
@@ -254,24 +254,34 @@ class AccountManager:
         if not account:
             raise ValueError(f"Account {email} not found")
         
-        # 1. Init client with existing credentials
-        config = FshareConfig(email=email, password=account['password'])
-        client = FshareClient.from_config(config)
-
-        # 2. Restore session if available
-        if account.get('cookies'):
-            client.set_cookies(account['cookies'])
-            client._token = "web_session"
-            # Restore token expiry if available
-            if account.get('token_expires'):
-                try:
-                    client._token_expires = datetime.fromtimestamp(account['token_expires'])
-                except Exception as e:
-                    logger.warning(f"Failed to restore token_expires: {e}") 
+        # USE CACHED CLIENT to ensure same lock is used across all auth calls
+        # This prevents multiple login sessions when refresh_account and add_download run concurrently
+        if email == self.primary_email and email in self._client_cache:
+            client = self._client_cache[email]
+            logger.info(f"♻️ refresh_account: Using cached client for {email}")
+        else:
+            # Create new client if not cached (first time or non-primary)
+            logger.info(f"🔧 refresh_account: Creating new client for {email}")
+            config = FshareConfig(email=email, password=account['password'])
+            client = FshareClient.from_config(config)
+            client._on_session_update = self._handle_session_update
+            
+            # Restore session if available
+            if account.get('cookies'):
+                client.set_cookies(account['cookies'])
+                client._token = "web_session"
+                if account.get('token_expires'):
+                    try:
+                        client._token_expires = datetime.fromtimestamp(account['token_expires'])
+                    except Exception as e:
+                        logger.warning(f"Failed to restore token_expires: {e}")
+            
+            # Cache this client
+            self._client_cache[email] = client
         
-        # 3. Use ensure_authenticated which handles everything:
+        # Use ensure_authenticated which handles everything:
         #    - Calls validate_session() to check if session is valid
-        #    - If session invalid, calls login() ONCE
+        #    - If session invalid, calls login() ONCE (protected by lock)
         #    - validate_session() also parses profile as side effect
         if not client.ensure_authenticated():
             raise AuthenticationError(f"Failed to authenticate account {email}")

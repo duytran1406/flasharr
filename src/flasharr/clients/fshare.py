@@ -698,9 +698,9 @@ class FshareClient:
             logger.info(f"Loading file page: {url}")
             page_response = self.session.get(url, timeout=self.timeout)
             
-            # Handle session expiry
-            page_response = self._handle_session_expiry(page_response, url)
-            if not page_response:
+            # Check if redirected to login - caller should have authenticated
+            if "site/login" in page_response.url:
+                logger.error("❌ Session expired during get_download_link - caller should ensure authentication")
                 return None
 
             if page_response.status_code != 200:
