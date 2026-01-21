@@ -5,6 +5,21 @@
  */
 
 if (typeof window.Socket === 'undefined') {
+    // Event type code mapping (backend uses short codes for bandwidth efficiency)
+    const EVENT_MAP = {
+        'tu': 'task_updated',
+        'ta': 'task_added',
+        'tr': 'task_removed',
+        'sa': 'sync_all',
+        'es': 'engine_stats',
+        'as': 'account_status',
+        'lm': 'log_message',
+        'hb': 'heartbeat',
+        'cn': 'connected',
+        'sb': 'subscribed',
+        'er': 'error'
+    };
+
     window.Socket = class Socket {
         constructor(url) {
             this.url = url;
@@ -17,8 +32,23 @@ if (typeof window.Socket === 'undefined') {
                 if (this.events['open']) this.events['open'].forEach(cb => cb());
             };
             this.ws.onmessage = (e) => {
-                const data = JSON.parse(e.data);
-                if (this.events[data.type]) this.events[data.type].forEach(cb => cb(data.data));
+                const msg = JSON.parse(e.data);
+
+                // Handle minified format: {t: "tu", d: {...}}
+                // Also handle full format: {type: "task_updated", data: {...}}
+                const shortCode = msg.t;
+                const eventType = shortCode ? (EVENT_MAP[shortCode] || shortCode) : msg.type;
+                const eventData = msg.d !== undefined ? msg.d : msg.data;
+
+                // Emit to mapped event name (e.g., 'task_updated')
+                if (eventType && this.events[eventType]) {
+                    this.events[eventType].forEach(cb => cb(eventData));
+                }
+
+                // Also emit to short code for direct listeners (e.g., 'lm' for logs)
+                if (shortCode && shortCode !== eventType && this.events[shortCode]) {
+                    this.events[shortCode].forEach(cb => cb(eventData));
+                }
             };
             this.ws.onclose = () => {
                 if (this.events['close']) this.events['close'].forEach(cb => cb());
