@@ -112,13 +112,17 @@ class FshareDownloadHandler:
         if not fcode:
             raise InvalidURLError(f"Could not extract file code from: {url}")
         
+        # Ensure authentication ONCE before all operations
+        if not self.client.ensure_authenticated():
+            raise DownloadError("Failed to authenticate with Fshare")
+        
         try:
-            # Get file info
+            # Get file info (no auth needed, already authenticated above)
             file_info = self.client.get_file_info(url)
             if not file_info:
                 raise DownloadError(f"Failed to get file info for: {url}")
             
-            # Get direct download link
+            # Get direct download link (no auth needed, already authenticated above)
             direct_url = self.client.get_download_link(fcode)
             if not direct_url:
                 raise DownloadError(f"Failed to get download link for: {url}")

@@ -251,37 +251,12 @@ class AccountManager:
             # Set a dummy token to pass basic auth checks, effectively trusting cookies
             client._token = "web_session" 
         
-        # 3. Try to fetch profile/quota (validates session)
-        # If this returns data, session is valid. If None, we need to login.
-        # 3. Try to fetch profile/quota (validates session)
-        # We attempt to populate data. If it fails due to auth, we try to login.
-        try:
-            # client.get_daily_quota() returns None if parsing fails or auth fails in a way it detects
-            # Only trigger login if we are sure it's an Auth failure, or if we want to be robust.
-            # User request: "The login function should just called if the cookies is expired"
-            
-            quota = client.get_daily_quota()
-            
-            if quota is None:
-                 # Session likely invalid
-                 logger.warning(f"Session check failed for {account['email']}, attempting auto-login")
-                 if not client.login():
-                     raise AuthenticationError("Auto-login failed")
-                 logger.info(f"Auto-login successful for {account['email']}")
-            else:
-                 logger.info("Session valid, updating account info")
-                 
-        except Exception as e:
-            # If get_daily_quota raised an exception or we failed login above
-            logger.warning(f"Refresh failed initially: {e}. Attempting full login recovery.")
-            # Last ditch effort: Force login
-            try:
-                if client.login():
-                    logger.info(f"Recovery login successful for {account['email']}")
-                else:
-                    raise AuthenticationError("Recovery login failed")
-            except Exception as login_err:
-                raise AuthenticationError(f"Session expired and login failed: {login_err}")
+        # 3. Use ensure_authenticated which handles everything:
+        #    - Calls validate_session() to check if session is valid
+        #    - If session invalid, calls login() ONCE
+        #    - validate_session() also parses profile as side effect
+        if not client.ensure_authenticated():
+            raise AuthenticationError(f"Failed to authenticate account {email}")
 
         # Update info from client state
         # Note: If we reused session, client might not have all 'premium' fields populated 

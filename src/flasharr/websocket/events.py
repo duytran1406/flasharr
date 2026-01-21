@@ -26,6 +26,7 @@ class EventType(str, Enum):
     ACCOUNT_STATUS = "as"       # Account status changed
     
     # System events
+    LOG_MESSAGE = "lm"          # Log message
     HEARTBEAT = "hb"            # Keep-alive ping
     ERROR = "er"                # Error message
     CONNECTED = "cn"            # Client connected
@@ -79,6 +80,17 @@ class AccountEvent:
     t: Optional[str] = None     # traffic_left (e.g. "50 GB / 100 GB")
     q: bool = False             # quota exceeded
 
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class LogEvent:
+    """Minimal log message."""
+    t: str                      # timestamp
+    l: str                      # level (info, warning, error, debug)
+    m: str                      # message
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -275,5 +287,18 @@ def create_account_event(
         x=expiry,
         t=traffic_left,
         q=quota_exceeded
+    )
+
+
+def create_log_event(
+    timestamp: str,
+    level: str,
+    message: str
+) -> LogEvent:
+    """Helper to create log event."""
+    return LogEvent(
+        t=timestamp,
+        l=level,
+        m=message
     )
 

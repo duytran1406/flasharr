@@ -22,8 +22,8 @@ except ImportError:
 
 from .events import (
     EventType, WebSocketMessage, EventBatcher, DeltaCompressor,
-    TaskEvent, EngineStatsEvent, AccountEvent,
-    create_task_event, create_engine_stats_event, create_account_event
+    TaskEvent, EngineStatsEvent, AccountEvent, LogEvent,
+    create_task_event, create_engine_stats_event, create_account_event, create_log_event
 )
 from ..downloader.engine import DownloadState
 
@@ -84,9 +84,14 @@ class WebSocketServer:
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._flush_task: Optional[asyncio.Task] = None
         self._stats_task: Optional[asyncio.Task] = None
+        self._log_task: Optional[asyncio.Task] = None
         
         # Track previous states for delta compression
         self._previous_engine_stats: Optional[Dict] = None
+        
+        # Log streaming state
+        self._log_file_position: int = 0
+        self._log_file_path: Optional[Path] = None
         
         logger.info("WebSocket server initialized")
     
@@ -105,6 +110,9 @@ class WebSocketServer:
         
         # Start stats loop (every 2 seconds)
         self._stats_task = asyncio.create_task(self._stats_loop())
+        
+        # Start log streaming task (every 500ms)
+        self._log_task = asyncio.create_task(self._log_streaming_loop())
         
         # Hook into engine progress callback
         if hasattr(self.engine, 'progress_callback'):
@@ -131,6 +139,9 @@ class WebSocketServer:
             
         if (self._stats_task):
             self._stats_task.cancel()
+        
+        if (self._log_task):
+            self._log_task.cancel()
         
         # Close all client connections
         for client in list(self.clients.values()):
@@ -273,6 +284,84 @@ class WebSocketServer:
                 break
             except Exception as e:
                 logger.error(f"Stats loop error: {e}")
+    
+    async def _log_streaming_loop(self) -> None:
+        """Stream log file changes to clients."""
+        while self._running:
+            try:
+                await asyncio.sleep(0.5)  # Check every 500ms
+                
+                # Find log file if not set
+                if not self._log_file_path:
+                    from pathlib import Path
+                    possible_paths = [
+                        Path("data/flasharr.log"),
+                        Path("flasharr.log"),
+                        Path("/app/data/flasharr.log")
+                    ]
+                    for p in possible_paths:
+                        if p.exists():
+                            self._log_file_path = p
+                            logger.info(f"Log streaming: Found log file at {p}")
+                            break
+                
+                # If still no log file, skip
+                if not self._log_file_path or not self._log_file_path.exists():
+                    continue
+                
+                # Read new lines from log file
+                try:
+                    with open(self._log_file_path, 'r') as f:
+                        # Seek to last position
+                        f.seek(self._log_file_position)
+                        
+                        # Read new lines
+                        new_lines = f.readlines()
+                        
+                        # Update position
+                        self._log_file_position = f.tell()
+                        
+                        # Broadcast new log lines
+                        for line in new_lines:
+                            await self._parse_and_broadcast_log(line.strip())
+                
+                except Exception as e:
+                    logger.error(f"Error reading log file: {e}")
+            
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Log streaming loop error: {e}")
+    
+    async def _parse_and_broadcast_log(self, line: str) -> None:
+        """Parse log line and broadcast to clients."""
+        if not line or not self.clients:
+            return
+        
+        try:
+            # Parse log format: "YYYY-MM-DD HH:MM:SS,mmm - module - LEVEL - message"
+            parts = line.split(" - ", 3)
+            
+            if len(parts) >= 4:
+                timestamp = parts[0]
+                # module = parts[1]  # Not used for now
+                level = parts[2].lower()
+                message = parts[3]
+            else:
+                # Fallback for unparseable lines
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                level = "info"
+                message = line
+            
+            # Create and broadcast log event
+            event = create_log_event(timestamp, level, message)
+            
+            for client in list(self.clients.values()):
+                if client.is_subscribed(EventType.LOG_MESSAGE.value):
+                    await client.send(WebSocketMessage(EventType.LOG_MESSAGE, event))
+        
+        except Exception as e:
+            logger.error(f"Error parsing log line: {e}")
     
     async def broadcast_task_update(self, task) -> None:
         """

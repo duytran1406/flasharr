@@ -252,6 +252,9 @@ class Router {
                 statusEl.classList.remove('disconnected');
                 statusEl.querySelector('.status-text').innerText = 'Connected';
             }
+
+            // Subscribe to log messages when connected
+            console.log('🔌 WebSocket connected, subscribing to events');
         });
 
         this.ws.on('close', () => {
@@ -270,6 +273,11 @@ class Router {
         this.ws.on('account_status', (status) => {
             if (status.t) this.updateQuota(status.t);
             // Update other account info if needed
+        });
+
+        this.ws.on('lm', (log) => {
+            // Handle log message event
+            this.handleLogMessage(log);
         });
     }
 
@@ -3442,24 +3450,63 @@ class Router {
     }
 
     pollLogs() {
-        const fetchL = async () => {
+        // Initial fetch via HTTP for historical logs
+        const fetchInitialLogs = async () => {
             const el = document.getElementById('log-stream');
             if (!el) return;
+
             try {
-                const res = await fetch('/api/logs');
-                const logs = await res.json();
-                if (logs.length > 0) {
-                    el.innerHTML = logs.map(l => `<div style="margin-bottom: 6px;"><span style="color: var(--text-muted);">[${l.time}]</span> <span style="color: ${l.level === 'error' ? '#FF5252' : (l.level === 'warning' ? '#FFD700' : '#00f3ff')}; font-weight: 800;">[${l.level.toUpperCase()}]</span> ${l.message}</div>`).join('');
+                const res = await fetch('/api/logs?limit=50');
+                const data = await res.json();
+
+                if (data.status === 'ok' && data.logs && data.logs.length > 0) {
+                    el.innerHTML = data.logs.map(l => this.formatLogEntry(l)).join('');
                     el.scrollTop = el.scrollHeight;
                 }
-            } catch (e) { }
+            } catch (e) {
+                console.error('Failed to fetch initial logs:', e);
+            }
         };
-        fetchL();
-        if (this.logInterval) clearInterval(this.logInterval);
-        this.logInterval = setInterval(() => {
-            if (document.getElementById('log-stream')) fetchL();
-            else clearInterval(this.logInterval);
-        }, 2000);
+
+        // Fetch initial logs once
+        fetchInitialLogs();
+
+        // Real-time updates will come via WebSocket (handleLogMessage)
+        // No more polling interval needed!
+    }
+
+    handleLogMessage(log) {
+        // Handle incoming log message from WebSocket
+        const el = document.getElementById('log-stream');
+        if (!el) return;
+
+        // Append new log entry
+        const logHtml = this.formatLogEntry(log);
+        el.insertAdjacentHTML('beforeend', logHtml);
+
+        // Auto-scroll to bottom
+        el.scrollTop = el.scrollHeight;
+
+        // Limit to last 100 entries to prevent memory issues
+        const entries = el.children;
+        if (entries.length > 100) {
+            entries[0].remove();
+        }
+    }
+
+    formatLogEntry(l) {
+        const levelColors = {
+            'error': '#FF5252',
+            'warning': '#FFD700',
+            'info': '#00f3ff',
+            'debug': '#a6accd'
+        };
+        const color = levelColors[l.l || l.level] || '#00f3ff';
+        const time = l.t || l.time || 'NOW';
+        const level = (l.l || l.level || 'info').toUpperCase();
+        const message = l.m || l.message || '';
+
+        return `<div style="margin-bottom: 6px;"><span style="color: var(--text-muted);">[${time}]</span> <span style="color: ${color}; font-weight: 800;">[${level}]</span> ${message}</div>`;
     }
 
     closeContextMenu() {

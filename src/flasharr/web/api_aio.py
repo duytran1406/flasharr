@@ -636,9 +636,8 @@ async def verify_account(request: web.Request) -> web.Response:
                  "message": "No account login."
              }, status=401)
 
-        # Refresh triggers internal re-login if needed
-        # We should run this off the main loop if it does heavy I/O
-        # But for now straightforward call
+        # refresh_account already handles session validation and auto-login if needed
+        # No need to call ensure_authenticated separately
         account = mgr.refresh_account(primary['email'])
         
         is_valid = account is not None and 'email' in account
@@ -727,40 +726,69 @@ async def get_version(request: web.Request) -> web.Response:
 
 @routes.get("/api/logs")
 async def get_logs(request: web.Request) -> web.Response:
+    """Get recent log entries."""
     try:
+        # Get limit from query params (default 50)
+        limit = int(request.query.get('limit', 50))
+        
         logs = []
         log_file = Path("data/flasharr.log")
+        
+        # Try alternative paths if primary doesn't exist
         if not log_file.exists():
-             alt_paths = [Path("flasharr.log"), Path("/app/data/flasharr.log")]
-             for p in alt_paths:
-                 if p.exists():
-                     log_file = p
-                     break
+            alt_paths = [Path("flasharr.log"), Path("/app/data/flasharr.log")]
+            for p in alt_paths:
+                if p.exists():
+                    log_file = p
+                    break
         
         if log_file.exists():
-            with open(log_file, "r") as f:
-                lines = f.readlines()[-50:]
-                for line in lines:
-                    parts = line.split(" - ")
-                    if len(parts) >= 4:
-                        logs.append({
-                            "time": parts[0],
-                            "level": parts[2].lower(),
-                            "message": " - ".join(parts[3:]).strip()
-                        })
-                    else:
-                        logs.append({
-                            "time": "NOW",
-                            "level": "info",
-                            "message": line.strip()
-                        })
+            try:
+                with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+                    # Read all lines and get the last N
+                    all_lines = f.readlines()
+                    lines = all_lines[-limit:] if len(all_lines) > limit else all_lines
+                    
+                    for line in lines:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        # Parse log format: "YYYY-MM-DD HH:MM:SS,mmm - module - LEVEL - message"
+                        parts = line.split(" - ", 3)
+                        
+                        if len(parts) >= 4:
+                            logs.append({
+                                "time": parts[0],
+                                "level": parts[2].lower(),
+                                "message": parts[3]
+                            })
+                        else:
+                            # Fallback for unparseable lines
+                            logs.append({
+                                "time": "NOW",
+                                "level": "info",
+                                "message": line
+                            })
+            except Exception as e:
+                logger.error(f"Error reading log file {log_file}: {e}")
+                return web.json_response({
+                    "status": "error",
+                    "message": f"Failed to read log file: {str(e)}"
+                }, status=500)
         
+        # If no logs found, return default message
         if not logs:
-             logs = [{"time": "NOW", "level": "info", "message": "System init."}]
-             
+            logs = [{"time": "NOW", "level": "info", "message": "System initialized. No logs yet."}]
+        
         return web.json_response({"status": "ok", "logs": logs})
+        
     except Exception as e:
-        return web.json_response({"status": "error", "message": str(e)}, status=500)
+        logger.error(f"Error in /api/logs: {e}")
+        return web.json_response({
+            "status": "error",
+            "message": str(e)
+        }, status=500)
 @routes.get("/api/tmdb/discover/{media_type}")
 async def api_tmdb_discover(request: web.Request) -> web.Response:
     media_type = request.match_info['media_type']

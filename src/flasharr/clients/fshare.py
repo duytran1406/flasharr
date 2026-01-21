@@ -674,8 +674,8 @@ class FshareClient:
         Get direct download link for a file.
         Accepts either a link code (linkcode) or a full Fshare URL.
         
-        Note: Authentication is checked automatically when needed.
-        If session expires, it will re-authenticate and retry.
+        Note: Authentication should be ensured by caller (e.g., get_file_info).
+        Session expiry is still handled via _handle_session_expiry during the request.
         """
         url = self._normalize_file_url(fcode_or_url)
 
@@ -772,9 +772,9 @@ class FshareClient:
     def get_file_info(self, url: str) -> Optional[FshareFile]:
         """
         Get file information from Fshare URL.
-        """
-        self.ensure_authenticated()
         
+        Note: Caller should ensure authentication before calling this method.
+        """
         fcode = url.split("/file/")[-1].split("?")[0]
         
         # Try V3 API (internal web API) first
