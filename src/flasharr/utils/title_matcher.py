@@ -115,8 +115,12 @@ def extract_core_title(text: str) -> str:
     # Remove common separators and brackets
     name = re.sub(r'[\[\]()]', ' ', name)
     
+    # Handle possessives BEFORE removing apostrophes
+    # "Shadow's" -> "Shadow", "Grey's" -> "Grey"
+    name = re.sub(r"'s\b", '', name, flags=re.I)
+    
     # Remove colons and other punctuation (important for titles like "Predator: Badlands")
-    name = re.sub(r'[:\'"!?,;]', ' ', name)
+    name = re.sub(r'[:\'\"!?,;]', ' ', name)
     
     # Replace dots, underscores, dashes with spaces
     name = re.sub(r'[._-]+', ' ', name)
@@ -242,12 +246,32 @@ def _match_against_title(search_title: str, filename: str) -> Dict:
             'match_type': 'fuzzy'
         }
     
-    # Calculate keyword overlap
+    # Calculate keyword overlap with singular/plural handling
     common_words = search_words & file_words
     missing_words = search_words - file_words
     extra_words = file_words - search_words
     
-    # CRITICAL: ALL search keywords must be present
+    # Handle singular/plural variations for missing words
+    if missing_words:
+        still_missing = set()
+        for word in missing_words:
+            # Check if plural form exists in file
+            if word + 's' in file_words or word + 'es' in file_words:
+                common_words.add(word)  # Count as matched
+                continue
+            # Check if singular form exists (if search word is plural)
+            if word.endswith('s') and word[:-1] in file_words:
+                common_words.add(word)  # Count as matched
+                continue
+            if word.endswith('es') and word[:-2] in file_words:
+                common_words.add(word)  # Count as matched
+                continue
+            # Still missing after plural/singular check
+            still_missing.add(word)
+        
+        missing_words = still_missing
+    
+    # CRITICAL: ALL search keywords must be present (after plural/singular normalization)
     if missing_words:
         # Partial match - calculate how many are missing
         match_ratio = len(common_words) / len(search_words)

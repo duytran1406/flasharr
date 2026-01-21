@@ -105,9 +105,12 @@ class BuiltinDownloadClient:
             True if added successfully
         """
         try:
+            original_fshare_url = None
+            
             # Check if this is a Fshare URL that needs resolution
             if not skip_resolve and self.fshare_handler.is_fshare_url(url):
                 logger.info(f"Resolving Fshare URL: {url}")
+                original_fshare_url = url  # Save original URL
                 
                 # Resolve to direct download link (Offload to thread to avoid blocking loop)
                 resolved = await asyncio.to_thread(self.fshare_handler.resolve_url, url)
@@ -127,7 +130,7 @@ class BuiltinDownloadClient:
             logger.info(f"✅ Download URL: {download_url}")
             
             try:
-                await self.engine.add_download(
+                task = await self.engine.add_download(
                     download_url,
                     filename or "download",
                     destination=self.download_dir,
@@ -135,6 +138,14 @@ class BuiltinDownloadClient:
                     category=category,
                     package_name=package_name,
                 )
+                
+                # Set original URL for link refresh
+                if original_fshare_url and task:
+                    task.original_url = original_fshare_url
+                    # Update in DB
+                    if self.engine.queue_manager:
+                        self.engine.queue_manager.update_task(task)
+                
                 logger.info(f"✅ Download added: {filename}")
                 return True
                 
@@ -209,7 +220,7 @@ class BuiltinDownloadClient:
     async def delete_download(self, task_id: str) -> bool:
         """Delete/Cancel a download."""
         return self.engine.cancel_task(task_id)
-
+    
     async def pause_download(self, task_id: str) -> bool:
         """Pause a download."""
         return self.engine.pause_task(task_id)
@@ -225,5 +236,66 @@ class BuiltinDownloadClient:
         }
 
     async def resume_download(self, task_id: str) -> bool:
-        """Resume a download."""
+        """Resume a download, refreshing URL if needed."""
+        task = self.engine.get_task(task_id)
+        if not task:
+            return False
+        
+        # Check if URL needs refresh (if it's a Fshare direct link and we have original URL)
+        if task.original_url and task.state in [DownloadState.FAILED, DownloadState.PAUSED]:
+            logger.info(f"Checking if URL refresh needed for task {task_id}")
+            refreshed = await self.refresh_download_url(task)
+            if refreshed:
+                logger.info(f"URL refreshed successfully for task {task_id}")
+        
         return self.engine.resume_task(task_id)
+    
+    async def refresh_download_url(self, task: DownloadTask) -> bool:
+        """
+        Refresh expired direct download URL from original Fshare URL.
+        
+        Args:
+            task: Download task to refresh
+            
+        Returns:
+            True if URL was refreshed successfully
+        """
+        if not task.original_url:
+            logger.warning(f"Cannot refresh URL for task {task.id}: No original URL saved")
+            return False
+        
+        try:
+            logger.info(f"Refreshing download URL from: {task.original_url}")
+            
+            # Resolve original URL to new direct link
+            resolved = await asyncio.to_thread(
+                self.fshare_handler.resolve_url,
+                task.original_url
+            )
+            
+            if not resolved:
+                error_msg = "Failed to refresh download URL: Could not resolve original Fshare link"
+                logger.error(error_msg)
+                task.error_message = error_msg
+                if self.engine.queue_manager:
+                    self.engine.queue_manager.update_task(task)
+                return False
+            
+            # Update task with new direct URL
+            task.url = resolved.direct_url
+            task.error_message = None  # Clear previous error
+            
+            # Persist to database
+            if self.engine.queue_manager:
+                self.engine.queue_manager.update_task(task)
+            
+            logger.info(f"✅ URL refreshed successfully for task {task.id}")
+            return True
+            
+        except Exception as e:
+            error_msg = f"Failed to refresh download URL: {str(e)}"
+            logger.error(error_msg)
+            task.error_message = error_msg
+            if self.engine.queue_manager:
+                self.engine.queue_manager.update_task(task)
+            return False

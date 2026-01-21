@@ -281,10 +281,14 @@ class SABnzbdEmulator:
             logger.info(f"Adding URL: {url}")
             
             # Get file info from Fshare (Sync API, wrap in thread)
+            logger.info(f"Fetching file info from Fshare for: {url}")
             file_info = await asyncio.to_thread(self.fshare.get_file_info, url)
             if not file_info:
-                logger.error("Failed to get file info from Fshare")
+                logger.error(f"❌ Failed to get file info from Fshare for URL: {url}")
+                logger.error(f"   Possible reasons: Invalid URL, file deleted, or Fshare account not authenticated")
                 return None
+            
+            logger.info(f"✓ Got file info: {file_info.name} ({file_info.size} bytes)")
             
             # Parse and normalize filename (file_info is now a FshareFile object)
             original_name = file_info.name
@@ -293,10 +297,14 @@ class SABnzbdEmulator:
             
             # Get direct download link (Sync API, wrap in thread)
             fcode = file_info.fcode
+            logger.info(f"Fetching download link for fcode: {fcode}")
             download_url = await asyncio.to_thread(self.fshare.get_download_link, fcode)
             if not download_url:
-                logger.error("Failed to get download link from Fshare")
+                logger.error(f"❌ Failed to get download link from Fshare for fcode: {fcode}")
+                logger.error(f"   Possible reasons: Premium account required, quota exceeded, or API error")
                 return None
+            
+            logger.info(f"✓ Got download link: {download_url[:50]}...")
             
             # Determine category
             resolved_category = self._resolve_category(category, parsed)
@@ -306,6 +314,7 @@ class SABnzbdEmulator:
             
             # Send to download client
             # Pass skip_resolve=True because we just resolved it manually above
+            logger.info(f"Adding to download client with NZO ID: {nzo_id}")
             success = await self.downloader.add_download(
                 download_url,
                 filename=normalized_filename,
@@ -316,14 +325,14 @@ class SABnzbdEmulator:
             )
             
             if not success:
-                logger.error("Failed to add download to client")
+                logger.error(f"❌ Failed to add download to client for NZO ID: {nzo_id}")
                 return None
             
             logger.info(f"✅ Download added via SABnzbd API with NZO ID: {nzo_id}")
             return nzo_id
             
         except Exception as e:
-            logger.error(f"Error adding URL: {e}", exc_info=True)
+            logger.error(f"❌ Exception in add_url: {e}", exc_info=True)
             return None
     
     def sync(self):

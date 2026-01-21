@@ -31,6 +31,72 @@
     --font-heading: 'Outfit', sans-serif;
     --font-body: 'Inter', sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
+
+    /* =========================================
+     Mobile-First Design System
+     ========================================= */
+
+    /* Touch Targets & Accessibility */
+    --touch-target-min: 48px;
+    --touch-target-comfortable: 56px;
+    --touch-spacing-min: 8px;
+    --touch-spacing-comfortable: 12px;
+
+    /* Responsive Breakpoints */
+    --bp-mobile-sm: 320px;
+    /* iPhone SE */
+    --bp-mobile: 375px;
+    /* iPhone 12/13 */
+    --bp-mobile-lg: 428px;
+    /* iPhone 14/15 Pro Max */
+    --bp-tablet: 768px;
+    /* iPad Portrait */
+    --bp-tablet-lg: 1024px;
+    /* iPad Landscape */
+    --bp-desktop: 1025px;
+    /* Desktop */
+    --bp-desktop-lg: 1440px;
+    /* Large Desktop */
+
+    /* Mobile Spacing Scale (8px base) */
+    --spacing-mobile-xs: 8px;
+    --spacing-mobile-sm: 12px;
+    --spacing-mobile-md: 16px;
+    --spacing-mobile-lg: 24px;
+    --spacing-mobile-xl: 32px;
+    --spacing-mobile-xxl: 48px;
+
+    /* Mobile Layout Dimensions */
+    --mobile-header-height: 56px;
+    --mobile-bottom-nav-height: 64px;
+    --mobile-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    --mobile-drawer-width: 280px;
+
+    /* Mobile Typography Scale */
+    --font-size-mobile-xs: 0.75rem;
+    /* 12px */
+    --font-size-mobile-sm: 0.875rem;
+    /* 14px */
+    --font-size-mobile-base: 1rem;
+    /* 16px */
+    --font-size-mobile-lg: 1.125rem;
+    /* 18px */
+    --font-size-mobile-xl: 1.25rem;
+    /* 20px */
+    --font-size-mobile-2xl: 1.5rem;
+    /* 24px */
+
+    /* Mobile Animation Durations */
+    --duration-fast: 150ms;
+    --duration-normal: 250ms;
+    --duration-slow: 350ms;
+
+    /* Mobile Z-Index Scale */
+    --z-mobile-drawer: 1000;
+    --z-mobile-overlay: 999;
+    --z-mobile-bottom-nav: 900;
+    --z-mobile-header: 800;
+    --z-mobile-modal: 1100;
 }
 
 /* Light Theme (Arctic) */
@@ -308,6 +374,7 @@ body.sidebar-collapsed .sidebar-collapse-btn {
     overflow: hidden;
 }
 
+
 /* Header */
 .glass-header {
     height: var(--header-height);
@@ -396,21 +463,93 @@ body.sidebar-collapsed .sidebar-collapse-btn {
 }
 
 .add-btn {
-    background: var(--color-primary);
-    color: #000;
-    border: none;
-    box-shadow: 0 4px 12px rgba(0, 243, 255, 0.2);
-    border-radius: 10px;
-    font-weight: 800;
-    letter-spacing: 0.05em;
-    transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+    /* Solid metallic base matching dl-btn-premium */
+    background: linear-gradient(135deg,
+            #0a0e1a 0%,
+            #1a2332 50%,
+            #0a0e1a 100%);
+    color: var(--color-primary);
+    border: 2px solid var(--color-primary);
+    padding: 8px 18px;
+    border-radius: 4px;
+    font-weight: 900;
+    font-size: 0.7rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    cursor: pointer;
+
+    /* Strong sci-fi shadows */
+    box-shadow:
+        0 0 20px rgba(0, 243, 255, 0.4),
+        0 0 40px rgba(0, 243, 255, 0.2),
+        inset 0 1px 0 rgba(0, 243, 255, 0.3),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    position: relative;
+    overflow: visible;
+
+    /* Tactical corners */
+    clip-path: polygon(4px 0%, calc(100% - 4px) 0%,
+            100% 4px, 100% calc(100% - 4px),
+            calc(100% - 4px) 100%, 4px 100%,
+            0% calc(100% - 4px), 0% 4px);
 }
 
+/* Holographic scan line for add-btn */
+.add-btn::before {
+    content: '';
+    position: absolute;
+    top: -2px;
+    left: -2px;
+    right: -2px;
+    bottom: -2px;
+    background: linear-gradient(90deg,
+            transparent 0%,
+            rgba(0, 243, 255, 0.1) 45%,
+            rgba(0, 243, 255, 0.3) 50%,
+            rgba(0, 243, 255, 0.1) 55%,
+            transparent 100%);
+    animation: holographic-scan 3s linear infinite;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+    clip-path: polygon(4px 0%, calc(100% - 4px) 0%,
+            100% 4px, 100% calc(100% - 4px),
+            calc(100% - 4px) 100%, 4px 100%,
+            0% calc(100% - 4px), 0% 4px);
+}
+
+.add-btn:hover::before {
+    opacity: 1;
+}
+
+/* Pulsing glow on hover */
 .add-btn:hover {
-    background: #fff;
-    transform: translateY(-2px);
-    box-shadow: 0 8px 25px rgba(255, 255, 255, 0.3), 0 0 15px rgba(0, 243, 255, 0.2);
-    color: var(--color-primary);
+    border-color: var(--color-secondary);
+    color: var(--color-secondary);
+    box-shadow:
+        0 0 30px rgba(0, 255, 163, 0.6),
+        0 0 60px rgba(0, 255, 163, 0.3),
+        inset 0 1px 0 rgba(0, 255, 163, 0.4),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+    transform: translateY(-1px);
+}
+
+.add-btn:active {
+    transform: translateY(0) scale(0.98);
+    box-shadow:
+        0 0 15px rgba(0, 243, 255, 0.5),
+        inset 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.add-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
 }
 
 /* View Container */
@@ -423,12 +562,33 @@ body.sidebar-collapsed .sidebar-collapse-btn {
     flex-direction: column;
 }
 
-.view-container[data-view="discover"],
+/* Dashboard and Downloads use internal scrolling for their grids */
 .view-container[data-view="dashboard"],
 .view-container[data-view="downloads"] {
     overflow: hidden;
     padding: 0;
 }
+
+/* Discover allows scrolling for poster grid and media detail */
+.view-container[data-view="discover"] {
+    padding: 0;
+    overflow-y: auto;
+}
+
+/* Media detail pages (movie/tv) and Collections also need no padding and scrolling */
+.view-container[data-view^="media/"],
+.view-container[data-view^="collection/"] {
+    padding: 0;
+    overflow-y: auto;
+    scroll-behavior: smooth;
+    /* Removed flex display - it was collapsing detail-hero to 2px */
+    /* Force scroll to top */
+    scroll-snap-type: y proximity;
+}
+
+/* Removed: min-height rule was collapsing detail-hero */
+
+
 
 /* Loaders */
 /* premium Modern Loading Icon: Neural Vortex */
@@ -672,18 +832,23 @@ select.glass-panel {
 /* Discover Sidebar Layout */
 .discover-layout {
     display: flex;
+    max-width: 100%;
     /* gap: 2rem; Removed to allow smooth sidebar collapse via margin */
-    max-width: 1600px;
-    margin: 0 auto;
-    padding: 1.5rem 2.5rem;
+    margin: 0;
+    padding: 1.5rem 0.5rem;
     height: calc(100vh - var(--header-height));
     overflow: hidden;
 }
 
+
+
+
+
 .discover-main {
-    flex: 1;
-    overflow: hidden;
-    /* Change from overflow-y: auto to hidden */
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+    overflow-y: auto;
+    /* Allow vertical scrolling for poster grid */
     padding-right: 1rem;
     display: flex;
     /* Enable flexbox */
@@ -691,12 +856,18 @@ select.glass-panel {
     /* Stack header and grid vertical */
 }
 
+
+
+
 .discover-sidebar {
-    width: 340px;
+    width: 360px;
     flex-shrink: 0;
-    margin-left: 2rem;
+    margin-left: 1.5rem;
     /* Replaces layout gap for animation support */
 }
+
+
+
 
 /* Tabs */
 .tab-container {
@@ -749,14 +920,16 @@ select.glass-panel {
 }
 
 .discover-sidebar.collapsed {
-    width: 0;
-    padding: 0;
-    margin: 0;
-    opacity: 0;
-    pointer-events: none;
-    overflow: hidden;
+    width: 0 !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
     border: none;
+    overflow: hidden;
 }
+
+
+
 
 /* --- Filter Inputs --- */
 .filter-input-group {
@@ -944,7 +1117,10 @@ input[type=range]::-webkit-slider-thumb:hover {
     color: var(--text-secondary);
     cursor: pointer;
     transition: all 0.2s;
+    white-space: nowrap;
+    flex-shrink: 0;
 }
+
 
 .genre-checkbox:checked+.genre-chip,
 .genre-chip.active {
@@ -1052,6 +1228,7 @@ input[type=range]::-webkit-slider-thumb:hover {
     background: var(--bg-glass-heavy);
     border: 1px solid var(--border-glass);
     box-shadow: var(--shadow-glass);
+    will-change: transform;
 }
 
 .modal-overlay.active .modal-container {
@@ -1123,28 +1300,108 @@ input[type=range]::-webkit-slider-thumb:hover {
 
 /* Helper for modal buttons */
 .modal-btn {
+    /* Solid metallic base matching dl-btn-premium */
+    background: linear-gradient(135deg,
+            #0a0e1a 0%,
+            #1a2332 50%,
+            #0a0e1a 100%);
+    color: var(--color-primary);
+    border: 2px solid var(--color-primary);
     padding: 0.75rem 1.5rem;
-    border-radius: 10px;
-    font-weight: 700;
+    border-radius: 4px;
+    font-weight: 900;
     cursor: pointer;
-    border: none;
-    transition: all 0.2s;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     font-family: var(--font-body);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    position: relative;
+    overflow: visible;
+
+    /* Strong sci-fi shadows */
+    box-shadow:
+        0 0 20px rgba(0, 243, 255, 0.4),
+        0 0 40px rgba(0, 243, 255, 0.2),
+        inset 0 1px 0 rgba(0, 243, 255, 0.3),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+
+    /* Tactical corners */
+    clip-path: polygon(4px 0%, calc(100% - 4px) 0%,
+            100% 4px, 100% calc(100% - 4px),
+            calc(100% - 4px) 100%, 4px 100%,
+            0% calc(100% - 4px), 0% 4px);
+}
+
+/* Holographic scan line for modal-btn */
+.modal-btn::before {
+    content: '';
+    position: absolute;
+    top: -2px;
+    left: -2px;
+    right: -2px;
+    bottom: -2px;
+    background: linear-gradient(90deg,
+            transparent 0%,
+            rgba(0, 243, 255, 0.1) 45%,
+            rgba(0, 243, 255, 0.3) 50%,
+            rgba(0, 243, 255, 0.1) 55%,
+            transparent 100%);
+    animation: holographic-scan 3s linear infinite;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+    clip-path: polygon(4px 0%, calc(100% - 4px) 0%,
+            100% 4px, 100% calc(100% - 4px),
+            calc(100% - 4px) 100%, 4px 100%,
+            0% calc(100% - 4px), 0% 4px);
 }
 
 .modal-btn.primary {
-    background: var(--color-primary);
-    color: #000;
+    border-color: var(--color-primary);
+    color: var(--color-primary);
 }
 
 .modal-btn.secondary {
-    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.3);
     color: var(--text-secondary);
+    box-shadow:
+        0 0 15px rgba(255, 255, 255, 0.1),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.5);
 }
 
 .modal-btn:hover {
-    transform: translateY(-2px);
-    filter: brightness(1.1);
+    transform: translateY(-1px);
+}
+
+.modal-btn:hover::before {
+    opacity: 1;
+}
+
+.modal-btn.primary:hover {
+    border-color: var(--color-secondary);
+    color: var(--color-secondary);
+    box-shadow:
+        0 0 30px rgba(0, 255, 163, 0.6),
+        0 0 60px rgba(0, 255, 163, 0.3),
+        inset 0 1px 0 rgba(0, 255, 163, 0.4),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+}
+
+.modal-btn.secondary:hover {
+    border-color: rgba(255, 255, 255, 0.5);
+    box-shadow:
+        0 0 20px rgba(255, 255, 255, 0.2),
+        inset 0 1px 0 rgba(255, 255, 255, 0.2),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+}
+
+.modal-btn:active {
+    transform: translateY(0) scale(0.98);
+    box-shadow:
+        0 0 15px rgba(0, 243, 255, 0.5),
+        inset 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
 /* =========================================
@@ -1588,8 +1845,10 @@ input[type=range]::-webkit-slider-thumb:hover {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     gap: 1.5rem;
-    padding: 10px 1rem 0 1rem;
+    padding: 10px 0.5rem 0 0.5rem;
 }
+
+
 
 /* Poster Card Revamp */
 .poster-card {
@@ -1861,32 +2120,109 @@ input[type=range]::-webkit-slider-thumb:hover {
 
 /* Premium Download Button */
 .dl-btn-premium {
-    background: linear-gradient(135deg, var(--color-primary) 0%, rgba(16, 185, 129, 0.8) 100%);
-    color: #000;
-    border: none;
-    padding: 6px 16px;
-    border-radius: 20px;
-    font-weight: 800;
-    font-size: 0.75rem;
-    display: flex;
+    /* Solid metallic base */
+    background: linear-gradient(135deg,
+            #0a0e1a 0%,
+            #1a2332 50%,
+            #0a0e1a 100%);
+    color: var(--color-primary);
+    border: 2px solid var(--color-primary);
+    padding: 8px 18px;
+    border-radius: 4px;
+    font-weight: 900;
+    font-size: 0.7rem;
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
+    justify-content: center;
+    gap: 8px;
     cursor: pointer;
-    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
-    transition: all 0.2s ease;
-    letter-spacing: 0.05em;
-    height: 32px;
+
+    /* Strong sci-fi shadows */
+    box-shadow:
+        0 0 20px rgba(0, 243, 255, 0.4),
+        0 0 40px rgba(0, 243, 255, 0.2),
+        inset 0 1px 0 rgba(0, 243, 255, 0.3),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    height: 34px;
+    min-width: 90px;
+    width: 90px;
+    position: relative;
+    overflow: visible;
+
+    /* Tactical corners */
+    clip-path: polygon(4px 0%, calc(100% - 4px) 0%,
+            100% 4px, 100% calc(100% - 4px),
+            calc(100% - 4px) 100%, 4px 100%,
+            0% calc(100% - 4px), 0% 4px);
 }
 
+/* Holographic scan line */
+.dl-btn-premium::before {
+    content: '';
+    position: absolute;
+    top: -2px;
+    left: -2px;
+    right: -2px;
+    bottom: -2px;
+    background: linear-gradient(90deg,
+            transparent 0%,
+            rgba(0, 243, 255, 0.1) 45%,
+            rgba(0, 243, 255, 0.3) 50%,
+            rgba(0, 243, 255, 0.1) 55%,
+            transparent 100%);
+    animation: holographic-scan 3s linear infinite;
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+    clip-path: polygon(4px 0%, calc(100% - 4px) 0%,
+            100% 4px, 100% calc(100% - 4px),
+            calc(100% - 4px) 100%, 4px 100%,
+            0% calc(100% - 4px), 0% 4px);
+}
+
+.dl-btn-premium:hover::before {
+    opacity: 1;
+}
+
+/* Pulsing glow on hover */
 .dl-btn-premium:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 16px rgba(16, 185, 129, 0.5);
-    filter: brightness(1.1);
+    border-color: var(--color-secondary);
+    color: var(--color-secondary);
+    box-shadow:
+        0 0 30px rgba(0, 255, 163, 0.6),
+        0 0 60px rgba(0, 255, 163, 0.3),
+        inset 0 1px 0 rgba(0, 255, 163, 0.4),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+    transform: translateY(-1px);
 }
 
 .dl-btn-premium:active {
-    transform: translateY(0);
+    transform: translateY(0) scale(0.98);
+    box-shadow:
+        0 0 15px rgba(0, 243, 255, 0.5),
+        inset 0 2px 4px rgba(0, 0, 0, 0.3);
 }
+
+.dl-btn-premium:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+
+/* Holographic scan animation */
+@keyframes holographic-scan {
+    0% {
+        transform: translateX(-100%);
+    }
+
+    100% {
+        transform: translateX(200%);
+    }
+}
+
 
 /* Smart Grab Button */
 .btn-smart-grab {
@@ -1969,4 +2305,243 @@ input[type=range]::-webkit-slider-thumb:hover {
 .btn-danger:hover {
     background: rgba(239, 68, 68, 0.25);
     box-shadow: 0 0 10px rgba(239, 68, 68, 0.2);
+}
+
+/* Toast Notifications */
+@keyframes slideInRight {
+    from {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideOutRight {
+    from {
+        transform: translateX(0);
+        opacity: 1;
+    }
+
+    to {
+        transform: translateX(400px);
+        opacity: 0;
+    }
+}
+
+/* =========================================
+   Mobile Navigation System
+   ========================================= */
+
+/* Bottom Navigation Bar */
+.bottom-nav {
+    display: none;
+    /* Hidden on desktop, shown on mobile via media query */
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: calc(var(--mobile-bottom-nav-height) + var(--mobile-safe-area-bottom));
+    padding-bottom: var(--mobile-safe-area-bottom);
+    background: var(--bg-glass-heavy);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border-top: 1px solid var(--border-glass);
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.3);
+    z-index: var(--z-mobile-bottom-nav);
+    justify-content: space-around;
+    align-items: center;
+    padding-left: var(--spacing-mobile-sm);
+    padding-right: var(--spacing-mobile-sm);
+}
+
+.bottom-nav-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    flex: 1;
+    max-width: 80px;
+    height: var(--touch-target-min);
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: all var(--duration-fast);
+    border-radius: 12px;
+    padding: var(--spacing-mobile-xs);
+    position: relative;
+}
+
+.bottom-nav-item .material-icons {
+    font-size: 24px;
+    transition: all var(--duration-fast);
+}
+
+.bottom-nav-item span:not(.material-icons) {
+    font-size: var(--font-size-mobile-xs);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.bottom-nav-item.active {
+    color: var(--color-primary);
+}
+
+.bottom-nav-item.active .material-icons {
+    transform: scale(1.1);
+}
+
+/* Active indicator */
+.bottom-nav-item.active::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 32px;
+    height: 3px;
+    background: var(--color-primary);
+    border-radius: 0 0 3px 3px;
+    box-shadow: var(--glow-primary);
+}
+
+.bottom-nav-item:active {
+    transform: scale(0.95);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+/* Mobile Drawer Overlay */
+.mobile-drawer-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    z-index: var(--z-mobile-overlay);
+    opacity: 0;
+    transition: opacity var(--duration-normal);
+}
+
+.mobile-drawer-overlay.show {
+    opacity: 1;
+}
+
+/* Mobile Drawer (Sidebar) */
+body.mobile-drawer-open .glass-sidebar {
+    transform: translateX(0);
+}
+
+body.mobile-drawer-open .mobile-drawer-overlay {
+    display: block;
+}
+
+/* Mobile Header */
+.mobile-header {
+    display: none;
+    /* Hidden on desktop */
+    position: sticky;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--mobile-header-height);
+    background: var(--bg-glass-heavy);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border-bottom: 1px solid var(--border-glass);
+    z-index: var(--z-mobile-header);
+    padding: 0 var(--spacing-mobile-md);
+    align-items: center;
+    justify-content: space-between;
+}
+
+.mobile-header-left,
+.mobile-header-right {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-mobile-sm);
+}
+
+.mobile-header-title {
+    font-size: var(--font-size-mobile-lg);
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+
+.mobile-menu-btn {
+    width: var(--touch-target-min);
+    height: var(--touch-target-min);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    cursor: pointer;
+    border-radius: 12px;
+    transition: all var(--duration-fast);
+}
+
+.mobile-menu-btn:active {
+    background: rgba(255, 255, 255, 0.1);
+    transform: scale(0.95);
+}
+
+.mobile-menu-btn .material-icons {
+    font-size: 24px;
+}
+
+/* Mobile Safe Area Support */
+@supports (padding: max(0px)) {
+    .bottom-nav {
+        padding-bottom: max(var(--mobile-safe-area-bottom), var(--spacing-mobile-sm));
+    }
+}
+
+/* Haptic Feedback Animation */
+@keyframes haptic-pulse {
+
+    0%,
+    100% {
+        transform: scale(1);
+    }
+
+    50% {
+        transform: scale(0.95);
+    }
+}
+
+.haptic-feedback {
+    animation: haptic-pulse var(--duration-fast) ease-out;
+}
+
+/* Touch Ripple Effect */
+.touch-ripple {
+    position: relative;
+    overflow: hidden;
+}
+
+.touch-ripple::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 0;
+    height: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.3);
+    transform: translate(-50%, -50%);
+    transition: width var(--duration-normal), height var(--duration-normal);
+}
+
+.touch-ripple:active::after {
+    width: 200px;
+    height: 200px;
 }

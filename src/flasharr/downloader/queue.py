@@ -36,6 +36,7 @@ class DownloadQueue:
     CREATE TABLE IF NOT EXISTS downloads (
         id TEXT PRIMARY KEY,
         url TEXT NOT NULL,
+        original_url TEXT,
         filename TEXT NOT NULL,
         destination TEXT NOT NULL,
         state TEXT DEFAULT 'Queued',
@@ -88,6 +89,13 @@ class DownloadQueue:
                     cursor.execute("ALTER TABLE downloads ADD COLUMN retry_count INTEGER DEFAULT 0")
                     cursor.execute("ALTER TABLE downloads ADD COLUMN plugin_name TEXT")
                     logger.info("Migrated database schema: Added extended state columns")
+                
+                # Check for original_url
+                try:
+                    cursor.execute("SELECT original_url FROM downloads LIMIT 1")
+                except sqlite3.OperationalError:
+                    cursor.execute("ALTER TABLE downloads ADD COLUMN original_url TEXT")
+                    logger.info("Migrated database schema: Added original_url column")
             except Exception as e:
                 logger.error(f"Migration failed: {e}")
     
@@ -117,13 +125,14 @@ class DownloadQueue:
             with self._get_connection() as conn:
                 conn.execute("""
                     INSERT OR REPLACE INTO downloads (
-                        id, url, filename, destination, state,
+                        id, url, original_url, filename, destination, state,
                         downloaded_bytes, total_bytes, category, package_name,
                         wait_until, retry_count, plugin_name
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     task.id,
                     task.url,
+                    task.original_url,
                     task.filename,
                     str(task.destination),
                     task.state.value,

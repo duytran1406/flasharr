@@ -62,6 +62,8 @@ class Router {
             // Advanced Filters
             dateFrom: '',
             dateTo: '',
+            yearFrom: '',
+            yearTo: '',
             language: '',
             certification: '',
             runtimeMin: 0,
@@ -142,7 +144,7 @@ class Router {
     }
 
     init() {
-        // Global navigation interceptor
+        // Global navigation interceptor for desktop sidebar
         this.navItems.forEach(item => {
             item.addEventListener('click', (e) => {
                 e.preventDefault();
@@ -155,6 +157,9 @@ class Router {
                 this.navigate(route);
             });
         });
+
+        // Mobile bottom navigation
+        this.initMobileNavigation();
 
         // Global Shortcut: / to focus search
         window.addEventListener('keydown', (e) => {
@@ -170,6 +175,68 @@ class Router {
                 this.navigate(e.state.view, false);
             }
         };
+    }
+
+    initMobileNavigation() {
+        // Bottom navigation items
+        const bottomNavItems = document.querySelectorAll('.bottom-nav-item');
+        bottomNavItems.forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.preventDefault();
+                const route = item.getAttribute('data-route');
+                this.navigate(route);
+                this.closeMobileDrawer(); // Close drawer if open
+            });
+        });
+
+        // Mobile drawer overlay
+        const overlay = document.getElementById('mobile-drawer-overlay');
+        if (overlay) {
+            overlay.addEventListener('click', () => {
+                this.closeMobileDrawer();
+            });
+        }
+
+        // Detect mobile viewport
+        this.updateMobileState();
+        window.addEventListener('resize', () => {
+            this.updateMobileState();
+        });
+    }
+
+    updateMobileState() {
+        this.isMobile = window.innerWidth <= 767;
+    }
+
+    openMobileDrawer() {
+        document.body.classList.add('mobile-drawer-open');
+        const overlay = document.getElementById('mobile-drawer-overlay');
+        if (overlay) {
+            overlay.classList.add('show');
+        }
+    }
+
+    closeMobileDrawer() {
+        document.body.classList.remove('mobile-drawer-open');
+        const overlay = document.getElementById('mobile-drawer-overlay');
+        if (overlay) {
+            overlay.classList.remove('show');
+        }
+    }
+
+    toggleMobileDrawer() {
+        if (document.body.classList.contains('mobile-drawer-open')) {
+            this.closeMobileDrawer();
+        } else {
+            this.openMobileDrawer();
+        }
+    }
+
+    updateBottomNavActive(route) {
+        const bottomNavItems = document.querySelectorAll('.bottom-nav-item');
+        bottomNavItems.forEach(item => {
+            item.classList.toggle('active', item.dataset.route === route);
+        });
     }
 
     connect() {
@@ -222,10 +289,13 @@ class Router {
         // Update Title
         document.title = `Flasharr - ${view.charAt(0).toUpperCase() + view.slice(1)}`;
 
-        // Update Sidebar UI
+        // Update Sidebar UI (Desktop)
         this.navItems.forEach(item => {
             item.classList.toggle('active', item.dataset.route === view);
         });
+
+        // Update Bottom Navigation (Mobile)
+        this.updateBottomNavActive(view);
 
         // Close any context menus
         this.closeContextMenu();
@@ -238,6 +308,28 @@ class Router {
 
         // Set view attribute for CSS targeting
         this.container.setAttribute('data-view', view);
+
+        // Reset scroll position for media detail pages - multiple attempts to ensure it sticks
+        if (view.startsWith('media/')) {
+            console.log('[DEBUG] Media page detected, resetting scroll');
+            console.log('[DEBUG] Initial scrollTop:', this.container.scrollTop);
+            this.container.scrollTop = 0;
+            console.log('[DEBUG] After reset scrollTop:', this.container.scrollTop);
+            setTimeout(() => {
+                console.log('[DEBUG] scrollTop at 0ms:', this.container.scrollTop);
+                this.container.scrollTop = 0;
+            }, 0);
+            setTimeout(() => {
+                console.log('[DEBUG] scrollTop at 100ms:', this.container.scrollTop);
+                this.container.scrollTop = 0;
+            }, 100);
+
+            // Log scroll events
+            const scrollListener = () => {
+                console.log('[DEBUG] Scroll event fired, scrollTop:', this.container.scrollTop);
+            };
+            this.container.addEventListener('scroll', scrollListener, { once: true });
+        }
 
         // Render Dynamic Header
         this.renderDynamicHeader(view);
@@ -644,16 +736,103 @@ class Router {
         `;
         this.downloadPage = 1;
         this.downloadLimit = 12;
+        this.downloadTasks = new Map(); // Store tasks by ID for efficient updates
         this.refreshDownloads();
-        this.startDownloadPolling();
+        this.setupDownloadWebSocket();
     }
 
-    startDownloadPolling() {
-        if (this.dlInterval) clearInterval(this.dlInterval);
-        this.dlInterval = setInterval(() => {
-            if (window.history.state && window.history.state.view === 'downloads') this.refreshDownloads(false);
-            else clearInterval(this.dlInterval);
-        }, 2000);
+    setupDownloadWebSocket() {
+        if (!this.ws) return;
+
+        // Subscribe to task updates
+        this.ws.on('task_updated', (data) => {
+            if (window.history.state && window.history.state.view === 'downloads') {
+                this.handleTaskUpdate(data);
+            }
+        });
+
+        this.ws.on('task_added', (data) => {
+            if (window.history.state && window.history.state.view === 'downloads') {
+                this.handleTaskAdded(data);
+            }
+        });
+
+        this.ws.on('task_removed', (data) => {
+            if (window.history.state && window.history.state.view === 'downloads') {
+                this.handleTaskRemoved(data);
+            }
+        });
+
+        this.ws.on('sync_all', (data) => {
+            // Full sync received from server
+            if (window.history.state && window.history.state.view === 'downloads') {
+                this.handleFullSync(data);
+            }
+        });
+    }
+
+    handleTaskUpdate(data) {
+        // Update task in local cache
+        const taskId = data.i;
+        const existing = this.downloadTasks.get(taskId);
+
+        if (existing) {
+            // Merge delta update
+            Object.assign(existing, {
+                id: data.i,
+                filename: data.n || existing.filename,
+                state: data.s || existing.state,
+                progress: data.p !== undefined ? data.p : existing.progress,
+                size: { total: data.t || existing.size?.total || 0 },
+                speed: { bytes_per_sec: data.sp || 0 },
+                eta: { seconds: data.e || 0 },
+                error_message: data.er || existing.error_message,  // Include error message
+            });
+            this.downloadTasks.set(taskId, existing);
+            this.renderDownloadList();
+        }
+    }
+
+    handleTaskAdded(data) {
+        // Add new task to cache
+        const task = {
+            id: data.i,
+            filename: data.n,
+            state: data.s,
+            progress: data.p || 0,
+            size: { total: data.t || 0 },
+            speed: { bytes_per_sec: 0 },
+            eta: { seconds: 0 },
+            added: new Date().toISOString()
+        };
+        this.downloadTasks.set(data.i, task);
+        this.renderDownloadList();
+    }
+
+    handleTaskRemoved(data) {
+        // Remove task from cache
+        this.downloadTasks.delete(data.i);
+        this.renderDownloadList();
+    }
+
+    handleFullSync(data) {
+        // Replace entire cache with server state
+        this.downloadTasks.clear();
+        if (Array.isArray(data)) {
+            data.forEach(task => {
+                this.downloadTasks.set(task.i, {
+                    id: task.i,
+                    filename: task.n,
+                    state: task.s,
+                    progress: task.p || 0,
+                    size: { total: task.t || 0 },
+                    speed: { bytes_per_sec: task.sp || 0 },
+                    eta: { seconds: task.e || 0 },
+                    added: task.a
+                });
+            });
+        }
+        this.renderDownloadList();
     }
 
     async refreshDownloads(showInitialLoading = true) {
@@ -661,49 +840,137 @@ class Router {
         if (!listEl) return;
 
         try {
+            // Only fetch once on initial load, then rely on WebSocket
             const res = await fetch('/api/downloads');
             const data = await res.json();
-            const tasks = (data.downloads || []).filter(t => {
-                if (!this.omniSearchQuery) return true;
-                const q = this.omniSearchQuery.toLowerCase();
-                return t.filename.toLowerCase().includes(q) || t.id.toLowerCase().includes(q);
-            }).sort((a, b) => {
-                const col = this.downloadSort.column;
-                const dir = this.downloadSort.direction === 'asc' ? 1 : -1;
 
-                let valA = a[col];
-                let valB = b[col];
-
-                // Handle derived fields from UI formatter output
-                if (col === 'size') {
-                    valA = a.size?.total || 0;
-                    valB = b.size?.total || 0;
-                } else if (col === 'speed') {
-                    valA = a.speed?.bytes_per_sec || 0;
-                    valB = b.speed?.bytes_per_sec || 0;
-                } else if (col === 'eta') {
-                    valA = a.eta?.seconds || 999999;
-                    valB = b.eta?.seconds || 999999;
-                }
-
-                if (typeof valA === 'string') {
-                    return valA.localeCompare(valB) * dir;
-                }
-                return (valA - valB) * dir;
+            // Populate local cache
+            this.downloadTasks.clear();
+            (data.downloads || []).forEach(task => {
+                this.downloadTasks.set(task.id, task);
             });
 
-            // Client-side pagination
-            const total = tasks.length;
-            const totalPages = Math.ceil(total / this.downloadLimit) || 1;
-            if (this.downloadPage > totalPages) this.downloadPage = totalPages;
-
-            const start = (this.downloadPage - 1) * this.downloadLimit;
-            const paginatedTasks = tasks.slice(start, start + this.downloadLimit);
-
-            this.renderDownloadList(paginatedTasks, listEl);
-            this.renderDownloadsPagination(this.downloadPage, totalPages, total);
+            this.renderDownloadList();
         } catch (e) {
-            listEl.innerHTML = `<tr><td colspan="8" style="padding: 2rem; color: #ff5252; text-align: center;">Telemetric link failure: ${e.message}</td></tr>`;
+            console.error('Failed to load downloads:', e);
+            listEl.innerHTML = `<div style="color: #FF5252; text-align: center; padding: 2rem;">Failed to load downloads</div>`;
+        }
+    }
+
+    renderDownloadList() {
+        const listEl = document.getElementById('download-list');
+        if (!listEl) return;
+
+        // Convert Map to array and apply filters
+        const tasks = Array.from(this.downloadTasks.values()).filter(t => {
+            if (!this.omniSearchQuery) return true;
+            const q = this.omniSearchQuery.toLowerCase();
+            return t.filename.toLowerCase().includes(q) || t.id.toLowerCase().includes(q);
+        }).sort((a, b) => {
+            const col = this.downloadSort.column;
+            const dir = this.downloadSort.direction === 'asc' ? 1 : -1;
+
+            let valA = a[col];
+            let valB = b[col];
+
+            // Handle derived fields from UI formatter output
+            if (col === 'size') {
+                valA = a.size?.total || 0;
+                valB = b.size?.total || 0;
+            } else if (col === 'speed') {
+                valA = a.speed?.bytes_per_sec || 0;
+                valB = b.speed?.bytes_per_sec || 0;
+            } else if (col === 'eta') {
+                valA = a.eta?.seconds || 999999;
+                valB = b.eta?.seconds || 999999;
+            }
+
+            if (typeof valA === 'string') {
+                return valA.localeCompare(valB) * dir;
+            }
+            return (valA - valB) * dir;
+        });
+
+        // Client-side pagination
+        const total = tasks.length;
+        const totalPages = Math.ceil(total / this.downloadLimit) || 1;
+        if (this.downloadPage > totalPages) this.downloadPage = totalPages;
+
+        const start = (this.downloadPage - 1) * this.downloadLimit;
+        const paginatedTasks = tasks.slice(start, start + this.downloadLimit);
+
+        this.renderDownloadRows(paginatedTasks, listEl);
+        this.renderDownloadsPagination(this.downloadPage, totalPages, total);
+    }
+
+    renderDownloadRows(paginatedTasks, listEl) {
+        if (!paginatedTasks || paginatedTasks.length === 0) {
+            listEl.innerHTML = `<tr><td colspan="8" style="padding: 4rem; text-align: center; color: var(--text-muted);">
+                <span class="material-icons" style="font-size: 48px; display: block; margin-bottom: 1rem; opacity: 0.2;">inbox</span>
+                No active downloads in queue.
+            </td></tr>`;
+            return;
+        }
+
+        try {
+            listEl.innerHTML = paginatedTasks.map(t => {
+                const state = t.state || 'Unknown';
+                const displayState = state.charAt(0).toUpperCase() + state.slice(1);
+                const isDownloading = state === 'Downloading' || state === 'Extracting' || state === 'Running' || state === 'Starting';
+                const isCompleted = state === 'Completed' || state === 'Finished';
+                const isError = state === 'Error' || state === 'Failed' || state === 'Offline';
+                const isQueued = state === 'Queued' || state === 'Waiting' || state === 'Pending';
+
+                // Color System
+                const color = isCompleted ? '#00ffa3' : (isError ? '#FF5252' : (isDownloading ? '#00f3ff' : (isQueued ? '#ffd700' : '#64748b')));
+                const icon = isCompleted ? 'check_circle' : (isError ? 'report_problem' : (isDownloading ? 'sync' : (isQueued ? 'hourglass_bottom' : 'pause_circle')));
+
+                let addedDate = t.added || '-';
+                if (typeof t.added === 'number' || (!isNaN(t.added) && t.added > 1000000)) {
+                    const d = new Date(parseInt(t.added) * 1000);
+                    addedDate = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                }
+
+                // Format size, speed, eta
+                const sizeFormatted = t.size?.formatted_total || (t.size?.total ? `${(t.size.total / (1024 * 1024 * 1024)).toFixed(2)} GB` : '-');
+                const speedFormatted = t.speed?.formatted || (t.speed?.bytes_per_sec ? `${(t.speed.bytes_per_sec / (1024 * 1024)).toFixed(1)} MB` : '0 B');
+                const etaFormatted = t.eta?.formatted || (t.eta?.seconds ? `${Math.floor(t.eta.seconds / 60)}m` : '--:--');
+                const progress = t.progress || 0;
+
+                return `
+                <tr class="transfer-row" data-id="${t.id}" style="transition: background 0.2s; cursor: pointer;">
+                    <td style="padding: 0.5rem 1.25rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600;" title="${t.filename}">
+                        ${t.filename}
+                    </td>
+                    <td style="padding: 0.5rem 0.5rem;">
+                        <span style="background: ${color}15; color: ${color}; padding: 2px 6px; border-radius: 4px; font-size: 0.55rem; font-weight: 800; border: 1px solid ${color}30; display: inline-flex; align-items: center; gap: 3px; text-transform: uppercase;" ${t.error_message ? `title="${t.error_message}"` : ''}>
+                            <span class="material-icons" style="font-size: 9px;">${icon}</span> ${displayState}
+                        </span>
+                        ${t.error_message ? `<div style="margin-top: 4px; font-size: 0.6rem; color: #FF5252; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${t.error_message}">⚠ ${t.error_message}</div>` : ''}
+                    </td>
+                    <td style="padding: 0.5rem 0.5rem; color: var(--text-secondary); font-size: 0.7rem;">${sizeFormatted}</td>
+                    <td style="padding: 0.5rem 0.5rem;">
+                        <div style="display: flex; justify-content: space-between; font-size: 0.55rem; margin-bottom: 2px; font-weight: 700; opacity: 0.8;">
+                            <span>${progress}%</span>
+                        </div>
+                        <div style="height: 3px; background: rgba(255,255,255,0.05); border-radius: 2px; overflow: hidden;">
+                            <div style="height: 100%; width: ${progress}%; background: ${color}; box-shadow: 0 0 6px ${color}80"></div>
+                        </div>
+                    </td>
+                    <td style="padding: 0.5rem 0.5rem; color: ${color}; font-family: var(--font-mono); font-size: 0.7rem; font-weight: 700;">${isDownloading ? speedFormatted + '/s' : '-'}</td>
+                    <td style="padding: 0.5rem 0.5rem; color: var(--text-secondary); font-size: 0.7rem;">${isDownloading ? etaFormatted : '-'}</td>
+                    <td style="padding: 0.5rem 0.5rem; color: var(--text-muted); font-size: 0.65rem;">${addedDate}</td>
+                    <td style="padding: 0.5rem 1.25rem; text-align: right;">
+                        <button class="icon-btn-tiny" onclick="event.stopPropagation(); window.router.showContextMenu(event, ${JSON.stringify(t).replace(/"/g, '&quot;')})">
+                            <span class="material-icons" style="font-size: 14px;">more_vert</span>
+                        </button>
+                    </td>
+                </tr>
+                `;
+            }).join('');
+        } catch (e) {
+            console.error('Error rendering download rows:', e);
+            listEl.innerHTML = `<tr><td colspan="8" style="padding: 2rem; color: #ff5252; text-align: center;">Error rendering downloads: ${e.message}</td></tr>`;
         }
     }
 
@@ -771,64 +1038,7 @@ class Router {
         }
     }
 
-    renderDownloadList(tasks, body) {
-        if (!tasks || tasks.length === 0) {
-            body.innerHTML = `<tr><td colspan="8" style="padding: 4rem; text-align: center; color: var(--text-muted);">
-                <span class="material-icons" style="font-size: 48px; display: block; margin-bottom: 1rem; opacity: 0.2;">inbox</span>
-                No active downloads in queue.
-            </td></tr>`;
-            return;
-        }
 
-        body.innerHTML = tasks.map(t => {
-            const state = t.state || 'Unknown';
-            const displayState = state.charAt(0).toUpperCase() + state.slice(1);
-            const isDownloading = state === 'Downloading' || state === 'Extracting' || state === 'Running' || state === 'Starting';
-            const isCompleted = state === 'Completed' || state === 'Finished';
-            const isError = state === 'Error' || state === 'Failed' || state === 'Offline';
-            const isQueued = state === 'Queued' || state === 'Waiting' || state === 'Pending';
-
-            // Color System
-            const color = isCompleted ? '#00ffa3' : (isError ? '#FF5252' : (isDownloading ? '#00f3ff' : (isQueued ? '#ffd700' : '#64748b')));
-            const icon = isCompleted ? 'check_circle' : (isError ? 'report_problem' : (isDownloading ? 'sync' : (isQueued ? 'hourglass_bottom' : 'pause_circle')));
-
-            let addedDate = t.added || '-';
-            if (typeof t.added === 'number' || (!isNaN(t.added) && t.added > 1000000)) {
-                const d = new Date(parseInt(t.added) * 1000);
-                addedDate = d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            }
-
-            return `
-            <tr class="transfer-row" data-id="${t.id}" oncontextmenu="event.preventDefault(); window.router.showContextMenu(event, ${JSON.stringify(t).replace(/"/g, '&quot;')})" style="transition: background 0.2s; cursor: pointer;">
-                <td style="padding: 0.5rem 1.25rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600;" title="${t.filename}" onclick="window.router.showTaskInfo(${JSON.stringify(t).replace(/"/g, '&quot;')})">
-                    ${t.filename}
-                </td>
-                <td style="padding: 0.5rem 0.5rem;">
-                    <span style="background: ${color}15; color: ${color}; padding: 2px 6px; border-radius: 4px; font-size: 0.55rem; font-weight: 800; border: 1px solid ${color}30; display: inline-flex; align-items: center; gap: 3px; text-transform: uppercase;">
-                        <span class="material-icons" style="font-size: 9px;">${icon}</span> ${displayState}
-                    </span>
-                </td>
-                <td style="padding: 0.5rem 0.5rem; color: var(--text-secondary); font-size: 0.7rem;">${t.size.formatted_total}</td>
-                <td style="padding: 0.5rem 0.5rem;">
-                    <div style="display: flex; justify-content: space-between; font-size: 0.55rem; margin-bottom: 2px; font-weight: 700; opacity: 0.8;">
-                        <span>${t.progress}%</span>
-                    </div>
-                    <div style="height: 3px; background: rgba(255,255,255,0.05); border-radius: 2px; overflow: hidden;">
-                        <div style="height: 100%; width: ${t.progress}%; background: ${color}; box-shadow: 0 0 6px ${color}80"></div>
-                    </div>
-                </td>
-                <td style="padding: 0.5rem 0.5rem; color: ${color}; font-family: var(--font-mono); font-size: 0.7rem; font-weight: 700;">${isDownloading ? t.speed.formatted + '/s' : '-'}</td>
-                <td style="padding: 0.5rem 0.5rem; color: var(--text-secondary); font-size: 0.7rem;">${isDownloading ? t.eta.formatted : '-'}</td>
-                <td style="padding: 0.5rem 0.5rem; color: var(--text-muted); font-size: 0.65rem;">${addedDate}</td>
-                <td style="padding: 0.5rem 1.25rem; text-align: right;">
-                    <button class="icon-btn-tiny" onclick="event.stopPropagation(); window.router.showContextMenu(event, ${JSON.stringify(t).replace(/"/g, '&quot;')})">
-                        <span class="material-icons" style="font-size: 14px;">more_vert</span>
-                    </button>
-                </td>
-            </tr>
-            `;
-        }).join('');
-    }
 
     async taskAction(id, action) {
         let url = `/api/downloads/${id}`;
@@ -1006,34 +1216,30 @@ class Router {
 
     renderSidebarContent() {
         const s = this.discoverState;
-        return `
-             <div class="filter-section">
-                <span class="filter-label">Media Identity</span>
-                <div class="glass-panel" style="display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: rgba(0,0,0,0.2);">
-                    <button class="btn-toggle ${s.type === 'movie' ? 'active' : ''}" onclick="window.router.loadDiscover('movie')" style="flex: 1;">Movies</button>
-                    <button class="btn-toggle ${s.type === 'tv' ? 'active' : ''}" onclick="window.router.loadDiscover('tv')" style="flex: 1;">TV Series</button>
-                </div>
-            </div>
+        const currentYear = new Date().getFullYear();
+        const years = [];
+        for (let y = currentYear; y >= 1900; y--) {
+            years.push(y);
+        }
 
+        return `
             <div class="filter-section">
-                <span class="filter-label">Release Date</span>
+                <span class="filter-label">Release Year</span>
                 <div class="filter-input-group">
-                    <input type="date" class="filter-input-date" placeholder="From" value="${s.dateFrom}" onchange="window.router.updateFilter('dateFrom', this.value)" onclick="try{this.showPicker()}catch(e){}">
-                    <input type="date" class="filter-input-date" placeholder="To" value="${s.dateTo}" onchange="window.router.updateFilter('dateTo', this.value)" onclick="try{this.showPicker()}catch(e){}">
+                    <select class="filter-input-date" onchange="window.router.updateFilter('yearFrom', this.value)">
+                        <option value="">From Year</option>
+                        ${years.map(y => `<option value="${y}" ${s.yearFrom == y ? 'selected' : ''}>${y}</option>`).join('')}
+                    </select>
+                    <select class="filter-input-date" onchange="window.router.updateFilter('yearTo', this.value)">
+                        <option value="">To Year</option>
+                        ${years.map(y => `<option value="${y}" ${s.yearTo == y ? 'selected' : ''}>${y}</option>`).join('')}
+                    </select>
                 </div>
             </div>
 
             <div class="filter-section">
                 <span class="filter-label">Genres</span>
                 <div id="genre-list" class="genre-list"></div>
-            </div>
-            
-            <div class="filter-section">
-                <span class="filter-label">Runtime</span>
-                <div class="filter-range-container">
-                    <input type="range" min="0" max="400" value="${s.runtimeMax}" onchange="window.router.updateFilter('runtimeMax', this.value)">
-                    <div style="font-size: 0.75rem; color: var(--text-muted); text-align: center;">0 - ${s.runtimeMax} minutes</div>
-                </div>
             </div>
 
              <div class="filter-section">
@@ -1053,7 +1259,18 @@ class Router {
     }
 
     updateFilter(key, value) {
+        console.log(`[Filter] ${key} = ${value}`);
         this.discoverState[key] = value;
+
+        // Log active filters
+        const activeFilters = {
+            genre: this.discoverState.genre,
+            yearFrom: this.discoverState.yearFrom,
+            yearTo: this.discoverState.yearTo,
+            scoreMin: this.discoverState.scoreMin
+        };
+        console.log('[Filter] Active filters:', activeFilters);
+
         // Re-render sidebar to reflect state (like active pills)
         const sidebar = document.getElementById('discover-sidebar');
         if (sidebar) sidebar.innerHTML = this.renderSidebarContent();
@@ -1067,7 +1284,7 @@ class Router {
 
     clearFilters() {
         Object.assign(this.discoverState, {
-            dateFrom: '', dateTo: '', language: '', certification: '',
+            dateFrom: '', dateTo: '', yearFrom: '', yearTo: '', language: '', certification: '',
             runtimeMin: 0, runtimeMax: 400, scoreMin: 0, scoreMax: 10, voteCountMin: 0, genre: '', year: ''
         });
         this.updateFilter('genre', ''); // Triggers refresh
@@ -1103,12 +1320,27 @@ class Router {
         const container = document.getElementById('genre-list');
         if (!container) return;
 
-        container.innerHTML = genres.map(g => `
-            <div class="genre-chip ${this.discoverState.genre == g.id ? 'active' : ''}" 
-                 onclick="window.router.updateFilter('genre', '${this.discoverState.genre == g.id ? '' : g.id}')">
+        // Color mapping for genres
+        const genreColors = {
+            'Action': '#ff6b6b', 'Adventure': '#4ecdc4', 'Animation': '#95e1d3',
+            'Comedy': '#ffd93d', 'Crime': '#6c5ce7', 'Documentary': '#a29bfe',
+            'Drama': '#fd79a8', 'Family': '#74b9ff', 'Fantasy': '#a29bfe',
+            'History': '#fab1a0', 'Horror': '#d63031', 'Music': '#00b894',
+            'Mystery': '#6c5ce7', 'Romance': '#fd79a8', 'Science Fiction': '#0984e3',
+            'TV Movie': '#fdcb6e', 'Thriller': '#2d3436', 'War': '#636e72',
+            'Western': '#d63031'
+        };
+
+        container.innerHTML = genres.map(g => {
+            const color = genreColors[g.name] || '#00f3ff';
+            const isActive = this.discoverState.genre == g.id;
+            return `
+            <div class="genre-chip ${isActive ? 'active' : ''}" 
+                 style="${!isActive ? `border-color: ${color}40; color: ${color};` : ''}"
+                 onclick="window.router.updateFilter('genre', '${isActive ? '' : g.id}')">
                 ${g.name}
             </div>
-        `).join('');
+        `}).join('');
     }
 
     async openSmartSearch(tmdbId, type, title, year, season = null, episode = null) {
@@ -1125,12 +1357,14 @@ class Router {
         const titleEl = document.getElementById('smart-search-title-movie');
         const resultsEl = document.getElementById('smart-search-results-movie');
 
+        // Set content BEFORE showing modal to prevent flicker
+        titleEl.innerText = `Searching: ${title} (${year})`;
+        resultsEl.innerHTML = '<div style="display: flex; justify-content: center; align-items: center; min-height: 300px; width: 100%;"><div class="loading-spinner"></div></div>';
+
+        // Now show modal with loading state already set
         modal.style.display = 'flex';
         void modal.offsetWidth;
         modal.classList.add('active');
-
-        titleEl.innerText = `Searching: ${title} (${year})`;
-        resultsEl.innerHTML = '<div style="display: flex; justify-content: center; align-items: center; min-height: 300px; width: 100%;"><div class="loading-spinner"></div></div>';
 
         try {
             const res = await fetch('/api/search/smart', {
@@ -1168,10 +1402,6 @@ class Router {
         // Hide smart grab until we confirm it's a season search
         if (smartGrabBtn) smartGrabBtn.style.display = 'none';
 
-        modal.style.display = 'flex';
-        void modal.offsetWidth;
-        modal.classList.add('active');
-
         let displayTitle = `Searching: ${title}`;
         if (season && episode) {
             displayTitle = `Searching: ${title} S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
@@ -1179,8 +1409,14 @@ class Router {
             displayTitle = `Searching: ${title} - Season ${season}`;
         }
 
+        // Set content BEFORE showing modal to prevent flicker
         titleEl.innerText = displayTitle;
         resultsEl.innerHTML = '<div style="display: flex; justify-content: center; align-items: center; min-height: 300px; width: 100%;"><div class="loading-spinner"></div></div>';
+
+        // Now show modal with loading state already set
+        modal.style.display = 'flex';
+        void modal.offsetWidth;
+        modal.classList.add('active');
 
         try {
             const res = await fetch('/api/search/smart', {
@@ -1205,24 +1441,26 @@ class Router {
 
             // EPISODE-SPECIFIC RESPONSE: Use Movie Modal
             if (data.type === 'episode') {
-                // Close TV modal, open Movie modal instead
-                modal.classList.remove('active');
-                modal.style.display = 'none';
-
                 const movieModal = document.getElementById('smart-search-modal-movie');
                 const movieTitleEl = document.getElementById('smart-search-title-movie');
+                const movieResultsEl = document.getElementById('smart-search-results-movie');
 
+                const epInfo = data.episode_info || {};
+                // Set content in movie modal BEFORE switching
+                movieTitleEl.innerText = `${title} - S${String(epInfo.season).padStart(2, '0')}E${String(epInfo.episode).padStart(2, '0')}`;
+                this.renderSmartSearchMovieResults(data);
+
+                // Show movie modal first
                 movieModal.style.display = 'flex';
                 void movieModal.offsetWidth;
                 movieModal.classList.add('active');
 
-                const epInfo = data.episode_info || {};
-                movieTitleEl.innerText = `${title} - S${String(epInfo.season).padStart(2, '0')}E${String(epInfo.episode).padStart(2, '0')}`;
-
-                // Tiny delay to ensure modal is visible before rendering
+                // Then hide TV modal (smooth transition, no flicker)
                 setTimeout(() => {
-                    this.renderSmartSearchMovieResults(data);
-                }, 10);
+                    modal.classList.remove('active');
+                    setTimeout(() => modal.style.display = 'none', 300);
+                }, 50);
+
                 return;
             }
 
@@ -1427,10 +1665,11 @@ class Router {
 
     async downloadItem(url) {
         try {
-            // Optimistic UI
+            // Optimistic UI with small waiting icon
             const btn = event.currentTarget;
             const originalHTML = btn.innerHTML;
-            btn.innerHTML = '<span class="material-icons spin">refresh</span>';
+            btn.innerHTML = '<span class="material-icons rotating" style="font-size: 18px;">hourglass_empty</span>';
+            btn.disabled = true;
 
             const res = await fetch('/api/downloads', {
                 method: 'POST',
@@ -1438,22 +1677,106 @@ class Router {
                 body: JSON.stringify({ url: url })
             });
 
-            if (res.ok) {
+            const data = await res.json();
+
+            // Check both HTTP status AND success field
+            if (res.ok && data.status === 'ok' && data.success === true) {
+                // Success - show check mark and keep disabled
                 btn.style.background = '#10b981'; // Green
                 btn.innerHTML = '<span class="material-icons">check</span>';
-                // Show toast?
+                btn.disabled = true; // Keep disabled on success
+                this.showToast('Download added to queue', 'success');
             } else {
+                // Failure - show error and re-enable after delay
                 btn.style.background = '#ef4444'; // Red
                 btn.innerHTML = '<span class="material-icons">error</span>';
+
+                // Show error message
+                const errorMsg = data.message || 'Failed to add download';
+                this.showToast(errorMsg, 'error');
+
+                // Reset button after 3 seconds
                 setTimeout(() => {
                     btn.style.background = 'var(--color-primary)';
                     btn.innerHTML = originalHTML;
-                }, 2000);
+                    btn.disabled = false;
+                }, 3000);
             }
         } catch (e) {
-            console.error(e);
+            console.error('Download error:', e);
+            const btn = event.currentTarget;
+            btn.style.background = '#ef4444';
+            btn.innerHTML = '<span class="material-icons">error</span>';
+            this.showToast('Network error: Failed to add download', 'error');
+
+            setTimeout(() => {
+                btn.style.background = 'var(--color-primary)';
+                btn.innerHTML = '<span class="material-icons">get_app</span> Get';
+                btn.disabled = false;
+            }, 3000);
         }
     }
+
+    showToast(message, type = 'info') {
+        // Create toast container if it doesn't exist
+        let container = document.getElementById('toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toast-container';
+            container.style.cssText = `
+                position: fixed;
+                bottom: 2rem;
+                right: 2rem;
+                z-index: 10000;
+                display: flex;
+                flex-direction: column;
+                gap: 0.5rem;
+                pointer-events: none;
+            `;
+            document.body.appendChild(container);
+        }
+
+        // Create toast element
+        const toast = document.createElement('div');
+        const bgColor = type === 'error' ? '#ef4444' : type === 'success' ? '#10b981' : '#3b82f6';
+        const icon = type === 'error' ? 'error' : type === 'success' ? 'check_circle' : 'info';
+
+        toast.style.cssText = `
+            background: ${bgColor};
+            color: white;
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+            pointer-events: auto;
+            animation: slideInRight 0.3s ease-out;
+            max-width: 400px;
+        `;
+
+        toast.innerHTML = `
+            <span class="material-icons" style="font-size: 20px;">${icon}</span>
+            <span>${message}</span>
+        `;
+
+        container.appendChild(toast);
+
+        // Auto-remove after 3 seconds
+        setTimeout(() => {
+            toast.style.animation = 'slideOutRight 0.3s ease-in';
+            setTimeout(() => {
+                container.removeChild(toast);
+                // Remove container if empty
+                if (container.children.length === 0) {
+                    document.body.removeChild(container);
+                }
+            }, 300);
+        }, 3000);
+    }
+
 
     async smartGrabSeason() {
         const btn = document.getElementById('btn-smart-grab');
@@ -1676,8 +1999,9 @@ class Router {
                     sort_by: s.sort,
                     genre: s.genre || '',
                     year: s.year || '',
-                    date_from: s.dateFrom,
-                    date_to: s.dateTo,
+                    // Convert yearFrom/yearTo to date_from/date_to for TMDB API
+                    date_from: s.yearFrom ? `${s.yearFrom}-01-01` : (s.dateFrom || ''),
+                    date_to: s.yearTo ? `${s.yearTo}-12-31` : (s.dateTo || ''),
                     language: s.language,
                     certification: s.certification,
                     runtime_min: s.runtimeMin,
@@ -1688,6 +2012,7 @@ class Router {
                 });
 
                 let endpoint = `/api/tmdb/discover/${s.type}?${params.toString()}`;
+                console.log(`[Discover] Fetching: ${endpoint}`);
                 if (s.sort === 'popular_today') {
                     endpoint = `/api/discovery/popular-today?page=${s.tmdbPage}`;
                 }
@@ -1815,21 +2140,22 @@ class Router {
             return String.fromCodePoint(...codePoints);
         };
 
+
         this.container.innerHTML = `
-            <div style="max-width: 1400px; margin: 0 auto; display: flex; flex-direction: column; gap: 0; min-height: calc(100vh - 80px); overflow: hidden; position: relative;">
-                <div id="detail-hero" style="height: 400px; background-size: cover; background-position: center; position: relative; border-radius: 0 0 24px 24px; overflow: hidden; border-bottom: 2px solid rgba(255,255,255,0.05);">
-                    <div style="position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(15,23,42,0.1) 0%, rgba(15,23,42,1) 101%);"></div>
+            <div style="width: 100%; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; min-height: calc(100vh - 80px); position: relative;">
+                <div id="detail-hero" style="height: 400px; flex-shrink: 0; background-image: url('/static/images/placeholder-banner.png'); background-size: cover; background-position: center; position: relative; border-radius: 0 0 24px 24px; overflow: hidden;">
+                    <div style="position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(15,23,42,0.1) 0%, rgba(15,23,42,1) 100%);"></div>
                     <div style="position: absolute; bottom: 2rem; left: 2rem; display: flex; gap: 2rem; align-items: flex-end; width: calc(100% - 4rem);">
                         <div class="glass-panel" style="width: 200px; height: 300px; border-radius: 12px; overflow: hidden; box-shadow: 0 20px 50px rgba(0,0,0,0.8); border: 2px solid rgba(255,255,255,0.1); flex-shrink: 0; background: #1e293b;">
-                             <img id="detail-poster" src="" style="width: 100%; height: 100%; object-fit: cover;">
+                             <img id="detail-poster" src="/static/images/placeholder-poster.svg" style="width: 100%; height: 100%; object-fit: cover;">
                         </div>
                         <div style="flex: 1; min-width: 0; margin-bottom: 1rem;">
-                            <div id="detail-tagline" style="font-size: 0.8rem; font-weight: 800; color: var(--color-primary); text-transform: uppercase; letter-spacing: 0.2rem; margin-bottom: 0.5rem; font-family: var(--font-mono);"></div>
-                            <h1 id="detail-title" style="font-size: 3rem; font-weight: 800; margin-bottom: 0.5rem; text-shadow: 0 2px 10px rgba(0,0,0,0.5); line-height: 1.1;"></h1>
-                            <div style="display: flex; align-items: center; gap: 1rem; color: var(--text-muted); font-size: 0.8rem; margin-bottom: 1.5rem; font-family: var(--font-mono); flex-wrap: wrap;">
+                            <div id="detail-tagline" style="font-size: 0.8rem; font-weight: 800; color: var(--color-primary); text-transform: uppercase; letter-spacing: 0.2rem; margin-bottom: 0.5rem; font-family: var(--font-mono); min-height: 1.2rem;"></div>
+                            <h1 id="detail-title" style="font-size: 3rem; font-weight: 800; margin-bottom: 0.5rem; text-shadow: 0 2px 10px rgba(0,0,0,0.5); line-height: 1.1; min-height: 3.6rem;">Loading...</h1>
+                            <div style="display: flex; align-items: center; gap: 1rem; color: var(--text-muted); font-size: 0.8rem; margin-bottom: 1.5rem; font-family: var(--font-mono); flex-wrap: wrap; min-height: 1.5rem;">
                                 <span id="detail-year"></span>
                                 <span>•</span>
-                                <span style="display: flex; align-items: center; gap: 4px; color: #ffd700;"><span class="material-icons" style="font-size: 14px;">star</span> <span id="detail-score"></span></span>
+                                <span style="display: flex; align-items: center; gap: 4px; color: #ffd700;"><span class="material-icons" style="font-size: 14px;">star</span> <span id="detail-score">0.0</span></span>
                                 <span>•</span>
                                 <span id="detail-runtime"></span>
                                 <span>•</span>
@@ -1965,8 +2291,15 @@ class Router {
             </style>
         `;
 
-        document.getElementById('detail-hero').style.backgroundImage = "url('/static/images/placeholder-banner.png')";
-        document.getElementById('detail-poster').src = '/static/images/placeholder-poster.svg';
+        // Aggressively force scroll to top - override browser scroll restoration
+        this.container.scrollTop = 0;
+
+        // Keep forcing scroll to top for first 500ms
+        const forceScroll = () => {
+            this.container.scrollTop = 0;
+        };
+        const intervals = [0, 10, 50, 100, 200, 300, 500];
+        intervals.forEach(delay => setTimeout(forceScroll, delay));
 
         try {
             const res = await fetch(`/api/tmdb/${type}/${id}`);
@@ -1980,8 +2313,11 @@ class Router {
             document.getElementById('detail-overview').innerText = data.overview;
 
             const release = (data.release_date || data.first_air_date || '');
-            document.getElementById('detail-year').innerText = release ? release.split('-')[0] : '';
-            document.getElementById('detail-score').innerText = (data.vote_average || 0).toFixed(1);
+            document.getElementById('detail-year').innerText = release ? release.split('-')[0] : 'N/A';
+
+            const hasVotes = data.vote_count && data.vote_count > 0;
+            const score = data.vote_average || 0;
+            document.getElementById('detail-score').innerText = hasVotes ? score.toFixed(1) : 'N/A';
 
             // Runtime
             let runtimeText = '';
@@ -1994,7 +2330,7 @@ class Router {
             } else if (type === 'tv' && data.number_of_seasons) {
                 runtimeText = `${data.number_of_seasons} ${data.number_of_seasons === 1 ? 'Season' : 'Seasons'}`;
             }
-            document.getElementById('detail-runtime').innerText = runtimeText;
+            document.getElementById('detail-runtime').innerText = runtimeText || 'N/A';
 
             // Genres
             const genresHtml = (data.genres || []).slice(0, 3).map(g => `
@@ -2019,15 +2355,22 @@ class Router {
             }
 
             // Ratings (Actual TMDB + Approximated IMDB/RT for aesthetic Seer look)
-            const rtCritics = Math.floor(Math.random() * 20) + 75;
-            const rtAudience = Math.floor(Math.random() * 20) + 75;
-            const imdbScore = (data.vote_average - 0.5 + (Math.random() * 1.0)).toFixed(1);
-            const tmdbScore = Math.round((data.vote_average || 0) * 10);
+            if (hasVotes || score > 0) {
+                const rtCritics = Math.floor(Math.random() * 20) + 75;
+                const rtAudience = Math.floor(Math.random() * 20) + 75;
+                const imdbScore = (score - 0.5 + (Math.random() * 1.0)).toFixed(1);
+                const tmdbScoreText = Math.round(score * 10);
 
-            document.getElementById('info-rt-critics').innerText = `${rtCritics}%`;
-            document.getElementById('info-rt-audience').innerText = `${rtAudience}%`;
-            document.getElementById('info-imdb-score').innerText = imdbScore;
-            document.getElementById('info-tmdb-score').innerText = `${tmdbScore}%`;
+                document.getElementById('info-rt-critics').innerText = `${rtCritics}%`;
+                document.getElementById('info-rt-audience').innerText = `${rtAudience}%`;
+                document.getElementById('info-imdb-score').innerText = imdbScore;
+                document.getElementById('info-tmdb-score').innerText = `${tmdbScoreText}%`;
+            } else {
+                document.getElementById('info-rt-critics').innerText = 'N/A';
+                document.getElementById('info-rt-audience').innerText = 'N/A';
+                document.getElementById('info-imdb-score').innerText = 'N/A';
+                document.getElementById('info-tmdb-score').innerText = 'N/A';
+            }
 
             // Sidebar Info
             document.getElementById('info-status').innerText = data.status || '-';
@@ -2148,26 +2491,25 @@ class Router {
             const data = await res.json();
 
             this.container.innerHTML = `
-                <div style="max-width: 1400px; margin: 0 auto; min-height: calc(100vh - 80px);">
-                    <div style="height: 400px; position: relative; border-radius: 0 0 24px 24px; overflow: hidden; margin-bottom: 2rem; border-bottom: 2px solid rgba(255,255,255,0.05);">
+                <div style="width: 100%; display: flex; flex-direction: column; min-height: calc(100vh - 80px);">
+                    <div id="detail-hero" style="height: 400px; position: relative; border-radius: 0 0 24px 24px; overflow: hidden; border-bottom: 2px solid rgba(255,255,255,0.05); flex-shrink: 0;">
                          <div style="position: absolute; inset: 0; background-image: url('${data.backdrop_path ? `https://image.tmdb.org/t/p/original${data.backdrop_path}` : '/static/images/placeholder-banner.png'}'); background-size: cover; background-position: center;"></div>
                          <div style="position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(15,23,42,0.1) 0%, rgba(15,23,42,1) 100%);"></div>
-                         <div style="position: absolute; bottom: 2rem; left: 2rem;">
-                              <h1 style="font-size: 3rem; font-weight: 800; margin-bottom: 0.5rem; text-shadow: 0 2px 10px rgba(0,0,0,0.5);">${data.name}</h1>
-                              <p style="max-width: 600px; color: var(--text-secondary); font-size: 1.1rem; line-height: 1.6;">${data.overview || ''}</p>
+                         <div style="position: absolute; bottom: 2.5rem; left: 2.5rem; right: 2.5rem;">
+                              <div style="font-size: 0.8rem; font-weight: 800; color: var(--color-primary); text-transform: uppercase; letter-spacing: 0.2rem; margin-bottom: 0.5rem; font-family: var(--font-mono);">MOVIE COLLECTION</div>
+                              <h1 style="font-size: 3.5rem; font-weight: 800; margin-bottom: 0.5rem; text-shadow: 0 2px 10px rgba(0,0,0,0.5); line-height: 1.1;">${data.name}</h1>
+                              <p style="max-width: 800px; color: var(--text-secondary); font-size: 1.1rem; line-height: 1.6; margin-top: 1rem;">${data.overview || ''}</p>
                          </div>
                     </div>
                     
-                    <div style="padding: 0 2rem 2rem;">
-                        <h3 style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; color: var(--color-primary); margin-bottom: 1.5rem; font-weight: 800;">Collection Parts</h3>
-                        <div id="collection-grid" class="discover-grid" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));"></div>
+                    <div style="padding: 3rem 2.5rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+                            <h3 style="text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.75rem; color: var(--color-primary); font-weight: 800;">Collection Parts (${data.parts ? data.parts.length : 0})</h3>
+                        </div>
+                        <div id="collection-grid" class="discover-grid" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));"></div>
                     </div>
                 </div>
             `;
-            if (this.discoverState.type === 'tv') {
-                const year = data.first_air_date ? data.first_air_date.split('-')[0] : '';
-                this.renderSeasonsSection(data.seasons, data.id, data.name, year);
-            }
 
             if (data.parts) {
                 const parts = data.parts.map(p => ({ ...p, media_type: 'movie' }));
@@ -2186,14 +2528,14 @@ class Router {
             const similarData = await similarRes.json();
             if (similarData.results) {
                 const grid = document.getElementById('similar-grid');
-                if (grid) this.renderDiscoverGrid(similarData.results.slice(0, 4), type, false, grid);
+                if (grid) this.renderDiscoverGrid(similarData.results.slice(0, 5), type, false, grid);
             }
 
             const recoRes = await fetch(`/api/tmdb/${type}/${id}/recommendations`);
             const recoData = await recoRes.json();
             if (recoData.results) {
                 const grid = document.getElementById('recommended-grid');
-                if (grid) this.renderDiscoverGrid(recoData.results.slice(0, 4), type, false, grid);
+                if (grid) this.renderDiscoverGrid(recoData.results.slice(0, 5), type, false, grid);
             }
         } catch (e) {
             console.error("Related Media Error", e);
@@ -2351,8 +2693,8 @@ class Router {
                         <button class="icon-btn-tiny" onclick="window.router.copyToClipboard('${item.url}')" title="Copy URL">
                             <span class="material-icons" style="font-size: 14px;">content_copy</span>
                         </button>
-                        <button class="icon-btn-tiny dl-btn" onclick="window.router.initiateExploreDownload(this, '${item.url}', '${item.name.replace(/'/g, "\\'")}')" style="background: var(--color-primary); color: #000; border-radius: 4px; padding: 4px 8px; width: auto; font-weight: 800; font-size: 0.65rem;">
-                            <span class="material-icons" style="font-size: 14px;">add</span> DOWNLOAD
+                        <button class="dl-btn-premium" onclick="window.router.initiateExploreDownload(this, '${item.url}', '${item.name.replace(/'/g, "\\'")}')" title="Download">
+                            <span class="material-icons" style="font-size: 16px;">download</span> GET
                         </button>
                     </div>
                 </div>

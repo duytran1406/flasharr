@@ -322,40 +322,14 @@ class AccountManager:
 
     def refresh_primary_quota(self, force: bool = False) -> Optional[Dict]:
         """
-        Lightweight quota refresh for the primary account.
-        Uses a 5-minute cooldown (TTL) unless forced.
+        Get primary account info (returns cached data).
+        
+        Note: Account data is kept fresh by validate_session() which is called
+        on every authentication check. No need for explicit refresh anymore.
         """
         if not self.primary_email:
             return None
-            
-        now = datetime.now().timestamp()
-        # 300 seconds = 5 minutes
-        if not force and (now - self._last_quota_sync < 300):
-            return self.get_primary()
-            
-        logger.info(f"Triggering proactive quota refresh for {self.primary_email}")
-        try:
-            client = self.get_primary_client()
-            if not client:
-                return None
-                
-            # get_daily_quota handles session validation and profile parsing
-            quota = client.get_daily_quota()
-            
-            # Update the stored account info
-            account = next((a for a in self.accounts if a['email'] == self.primary_email), None)
-            if account:
-                account['traffic_left'] = client.traffic_left
-                account['premium'] = client.is_premium
-                account['validuntil'] = client.premium_expiry
-                account['account_type'] = client.account_type
-                account['last_refresh'] = int(now)
-                self._last_quota_sync = now
-                self._save()
-                return self._sanitize_account(account)
-        except Exception as e:
-            logger.error(f"Proactive quota refresh failed: {e}")
-            
+        
         return self.get_primary()
 
     def _sanitize_account(self, account: Optional[Dict]) -> Optional[Dict]:

@@ -178,6 +178,7 @@ class DownloadTask:
     priority: Priority = Priority.NORMAL
     segments: int = 1  # Number of segments for this task (assigned at queue time)
     checksum: Optional[str] = None  # Expected checksum (MD5 or SHA256)
+    original_url: Optional[str] = None  # Original Fshare URL for link refresh
     
     # Internal state
     _cancel_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
@@ -1105,6 +1106,19 @@ class DownloadEngine:
                     task.progress.total_bytes,
                     elapsed,
                 )
+                
+                # DEBUG: Stop at 1% to save quota (set DEBUG_STOP_AT_1_PERCENT=true)
+                import os
+                if os.getenv("DEBUG_STOP_AT_1_PERCENT", "").lower() == "true":
+                    if task.progress.percentage >= 1.0:
+                        logger.warning(f"🛑 DEBUG: Stopping download at {task.progress.percentage:.2f}% to save quota")
+                        task.state = DownloadState.PAUSED
+                        task.error_message = "DEBUG: Auto-paused at 1% (DEBUG_STOP_AT_1_PERCENT enabled)"
+                        if self.queue_manager:
+                            self.queue_manager.update_task(task)
+                        if self.progress_callback:
+                            self.progress_callback(task)
+                        return  # Exit download loop
                 
                 # Log progress every 5 seconds
                 if current_time - last_log_time >= 5.0:

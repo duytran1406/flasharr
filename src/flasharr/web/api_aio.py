@@ -319,14 +319,28 @@ async def add_download(request: web.Request) -> web.Response:
         # Let's pass the calculated folder path as the 'filename' to add_url
         nzo_id = await sab.add_url(url, filename=folder_suffix, category=category)
         
+        if nzo_id is None:
+            error_msg = "Failed to add download. Possible reasons: Invalid Fshare URL, file not found, or Fshare API error."
+            logger.warning(f"Download failed for URL: {url}")
+            return web.json_response({
+                "status": "ok",
+                "success": False,
+                "nzo_id": None,
+                "message": error_msg
+            })
+        
         return web.json_response({
             "status": "ok",
-            "success": nzo_id is not None,
+            "success": True,
             "nzo_id": nzo_id
         })
     except Exception as e:
         logger.error(f"Error adding download: {e}")
-        return web.json_response({"status": "error", "message": str(e)}, status=500)
+        return web.json_response({
+            "status": "error", 
+            "success": False,
+            "message": str(e)
+        }, status=500)
 
 
 @routes.delete("/api/downloads/{task_id}")
@@ -990,12 +1004,60 @@ async def smart_search(request: web.Request) -> web.Response:
         data = await get_json(request)
         media_type = data.get('type', 'movie')
         
-        logger.info(f"Smart Search Dispatch: type={media_type}")
+        # Generate cache key
+        import hashlib
+        cache_parts = [
+            data.get('title', ''),
+            str(data.get('year', '')),
+            media_type,
+            str(data.get('tmdbId', '')),
+            str(data.get('season', '')),
+            str(data.get('episode', ''))
+        ]
+        cache_key = hashlib.md5('|'.join(cache_parts).encode()).hexdigest()
         
+        # Initialize cache in app if not exists
+        if 'search_cache' not in request.app:
+            request.app['search_cache'] = {}
+        
+        # Check cache (with TTL of 1 hour)
+        cache = request.app['search_cache']
+        current_time = time.time()
+        
+        if cache_key in cache:
+            cached_data, cached_time = cache[cache_key]
+            # Cache valid for 1 hour (3600 seconds)
+            if current_time - cached_time < 3600:
+                logger.info(f"Smart Search Cache HIT: {cache_key[:8]}... (age: {int(current_time - cached_time)}s)")
+                return web.json_response(cached_data)
+            else:
+                # Expired, remove it
+                del cache[cache_key]
+                logger.info(f"Smart Search Cache EXPIRED: {cache_key[:8]}...")
+        
+        logger.info(f"Smart Search Cache MISS: {cache_key[:8]}... Dispatch: type={media_type}")
+        
+        # Perform search
         if media_type == 'tv':
-            return await _smart_search_tv(request, data)
+            response = await _smart_search_tv(request, data)
         else:
-            return await _smart_search_movie(request, data)
+            response = await _smart_search_movie(request, data)
+        
+        # Cache the result if successful
+        if response.status == 200:
+            try:
+                result_data = json.loads(response.body.decode())
+                cache[cache_key] = (result_data, current_time)
+                
+                # Limit cache size (keep last 50 entries)
+                if len(cache) > 50:
+                    oldest_key = min(cache.keys(), key=lambda k: cache[k][1])
+                    del cache[oldest_key]
+                    logger.debug(f"Cache size limit reached, removed oldest entry")
+            except Exception as e:
+                logger.warning(f"Failed to cache search result: {e}")
+        
+        return response
             
     except Exception as e:
         logger.error(f"Smart Search Dispatch Error: {e}")

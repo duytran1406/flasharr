@@ -105,6 +105,11 @@ async def media_detail_page(request: web.Request) -> web.Response:
     # Route to SPA shell - Router will handle parsing URL
     return render_template(request, "base_v2.html")
 
+@routes.get("/collection/{id}")
+async def collection_page(request: web.Request) -> web.Response:
+    # Route to SPA shell
+    return render_template(request, "base_v2.html")
+
 
 @routes.get("/about")
 async def about_page(request: web.Request) -> web.Response:

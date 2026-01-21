@@ -135,12 +135,39 @@ def test_fshare_connection():
             success = client.login()
             
             if success:
+                # Update account data in account manager
+                try:
+                    from ..core.account_manager import get_account_manager
+                    account_mgr = get_account_manager()
+                    
+                    # Find account in manager
+                    accounts = account_mgr.list_accounts()
+                    account = next((acc for acc in accounts if acc['email'] == email), None)
+                    
+                    if account:
+                        # Update account info from client
+                        account['traffic_left'] = client.traffic_left
+                        account['premium'] = client.is_premium
+                        account['validuntil'] = client.premium_expiry
+                        account['account_type'] = client.account_type
+                        account['last_refresh'] = int(datetime.now().timestamp())
+                        
+                        # Save updated account
+                        account_mgr._save()
+                        logger.info(f"Updated account data for {email} after test login")
+                except Exception as e:
+                    logger.warning(f"Failed to update account data after test: {e}")
+                
                 return jsonify({
                     "status": "ok",
                     "message": "Connection successful",
                     "account": {
                         "email": email,
                         "authenticated": True,
+                        "account_type": client.account_type,
+                        "is_premium": client.is_premium,
+                        "traffic_left": client.traffic_left,
+                        "premium_expiry": client.premium_expiry,
                     },
                 })
             else:
