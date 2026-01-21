@@ -731,6 +731,19 @@ async def get_logs(request: web.Request) -> web.Response:
         # Get limit from query params (default 50)
         limit = int(request.query.get('limit', 50))
         
+        # Noise patterns to filter out
+        noise_patterns = [
+            'GET /health HTTP',
+            'GET /ws HTTP',
+            'GET /static/',
+            'GET /favicon.ico',
+            '"GET /',
+            '"POST /',
+            '"PUT /',
+            '"DELETE /',
+            'python-requests/',
+        ]
+        
         logs = []
         log_file = Path("data/flasharr.log")
         
@@ -745,13 +758,22 @@ async def get_logs(request: web.Request) -> web.Response:
         if log_file.exists():
             try:
                 with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
-                    # Read all lines and get the last N
+                    # Read all lines
                     all_lines = f.readlines()
-                    lines = all_lines[-limit:] if len(all_lines) > limit else all_lines
                     
-                    for line in lines:
+                    # Filter and parse lines
+                    for line in all_lines:
                         line = line.strip()
                         if not line:
+                            continue
+                        
+                        # Skip noisy logs
+                        skip = False
+                        for pattern in noise_patterns:
+                            if pattern in line:
+                                skip = True
+                                break
+                        if skip:
                             continue
                         
                         # Parse log format: "YYYY-MM-DD HH:MM:SS,mmm - module - LEVEL - message"
@@ -770,6 +792,10 @@ async def get_logs(request: web.Request) -> web.Response:
                                 "level": "info",
                                 "message": line
                             })
+                    
+                    # Get last N logs after filtering
+                    logs = logs[-limit:] if len(logs) > limit else logs
+                    
             except Exception as e:
                 logger.error(f"Error reading log file {log_file}: {e}")
                 return web.json_response({

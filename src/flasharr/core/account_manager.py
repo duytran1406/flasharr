@@ -248,8 +248,13 @@ class AccountManager:
         # 2. Restore session if available
         if account.get('cookies'):
             client.set_cookies(account['cookies'])
-            # Set a dummy token to pass basic auth checks, effectively trusting cookies
-            client._token = "web_session" 
+            client._token = "web_session"
+            # Restore token expiry if available
+            if account.get('token_expires'):
+                try:
+                    client._token_expires = datetime.fromtimestamp(account['token_expires'])
+                except Exception as e:
+                    logger.warning(f"Failed to restore token_expires: {e}") 
         
         # 3. Use ensure_authenticated which handles everything:
         #    - Calls validate_session() to check if session is valid

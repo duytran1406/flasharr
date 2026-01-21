@@ -338,6 +338,24 @@ class WebSocketServer:
         if not line or not self.clients:
             return
         
+        # Filter out noisy/meaningless logs
+        noise_patterns = [
+            'GET /health HTTP',           # Health check endpoints
+            'GET /ws HTTP',                # WebSocket upgrade requests
+            'GET /static/',                # Static file requests
+            'GET /favicon.ico',            # Favicon requests
+            '"GET /',                      # Generic HTTP GET logs (aiohttp access logs)
+            '"POST /',                     # Generic HTTP POST logs
+            '"PUT /',                      # Generic HTTP PUT logs
+            '"DELETE /',                   # Generic HTTP DELETE logs
+            'python-requests/',            # Health check user agents
+        ]
+        
+        # Skip if line matches any noise pattern
+        for pattern in noise_patterns:
+            if pattern in line:
+                return
+        
         try:
             # Parse log format: "YYYY-MM-DD HH:MM:SS,mmm - module - LEVEL - message"
             parts = line.split(" - ", 3)

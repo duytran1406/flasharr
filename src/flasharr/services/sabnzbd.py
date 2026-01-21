@@ -280,6 +280,14 @@ class SABnzbdEmulator:
         try:
             logger.info(f"Adding URL: {url}")
             
+            # Ensure authentication ONCE before all Fshare operations
+            logger.info("Ensuring Fshare authentication...")
+            auth_success = await asyncio.to_thread(self.fshare.ensure_authenticated)
+            if not auth_success:
+                logger.error("❌ Failed to authenticate with Fshare")
+                return None
+            logger.info("✓ Fshare authentication confirmed")
+            
             # Get file info from Fshare (Sync API, wrap in thread)
             logger.info(f"Fetching file info from Fshare for: {url}")
             file_info = await asyncio.to_thread(self.fshare.get_file_info, url)
