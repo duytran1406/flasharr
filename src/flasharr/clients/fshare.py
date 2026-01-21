@@ -200,6 +200,9 @@ class FshareClient:
         Returns:
             True if session is valid, False otherwise
         """
+        cookies_count = len(self.session.cookies) if self.session else 0
+        logger.info(f"🔍 validate_session: email={self.email}, cookies={cookies_count}")
+        
         try:
             response = self.session.get(
                 "https://www.fshare.vn/account/profile",
@@ -208,23 +211,23 @@ class FshareClient:
             
             # Check if redirected to login (session expired)
             if "site/login" in response.url:
-                logger.debug("Session validation failed: redirected to login")
+                logger.info(f"❌ validate_session FAILED: redirected to login (cookies={cookies_count})")
                 return False
             
             # Check if we got profile page
             if "account/profile" not in response.url:
-                logger.debug(f"Session validation failed: unexpected URL {response.url}")
+                logger.info(f"❌ validate_session FAILED: unexpected URL {response.url}")
                 return False
             
             # Check status code
             if response.status_code != 200:
-                logger.debug(f"Session validation failed: HTTP {response.status_code}")
+                logger.info(f"❌ validate_session FAILED: HTTP {response.status_code}")
                 return False
             
             # Session is valid! Parse account info as side effect
             try:
                 self._parse_profile(response.text)
-                logger.debug(f"Session validated: {self._account_type}, Traffic: {self._traffic_left}")
+                logger.info(f"✅ validate_session SUCCESS: {self._account_type}, Traffic: {self._traffic_left}")
             except Exception as e:
                 logger.warning(f"Failed to parse profile during validation: {e}")
                 # Still return True since session is valid, just couldn't parse
@@ -232,7 +235,7 @@ class FshareClient:
             return True
             
         except Exception as e:
-            logger.warning(f"Session validation failed: {e}")
+            logger.warning(f"❌ validate_session FAILED with exception: {e}")
             return False
     
     def login(self) -> bool:
@@ -559,11 +562,21 @@ class FshareClient:
         Uses server-side validation via validate_session() to ensure
         the session is actually valid on Fshare's servers.
         """
+        import traceback
+        caller_stack = ''.join(traceback.format_stack()[-4:-1])
+        logger.debug(f"ensure_authenticated called from:\n{caller_stack}")
+        
+        # Log session state before validation
+        cookies_count = len(self.session.cookies) if self.session else 0
+        logger.info(f"🔍 ensure_authenticated: email={self.email}, token={self._token}, cookies={cookies_count}")
+        
         # Always validate against server (not just local cookies)
         if self.validate_session():
+            logger.info("✅ Session validated successfully - no login needed")
             return True
             
         if not force_login:
+            logger.info("❌ Session invalid and force_login=False")
             return False
 
         # Lock to ensure only one thread triggers a login
@@ -571,9 +584,10 @@ class FshareClient:
         with self._login_lock:
             # Re-check after acquiring lock in case another thread logged in
             if self.validate_session():
+                logger.info("✅ Session validated after lock (another thread logged in)")
                 return True
                 
-            logger.info("Session invalid, logging in...")
+            logger.info("🔑 Session invalid, logging in...")
             success = self.login()
             return success
     

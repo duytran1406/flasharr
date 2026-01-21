@@ -195,15 +195,21 @@ class AccountManager:
     def get_primary_client(self) -> Optional[FshareClient]:
         """Get a functional FshareClient for the primary account (cached)."""
         if not self.primary_email:
+            logger.debug("get_primary_client: No primary email set")
             return None
         
         # Return from cache if available
         if self.primary_email in self._client_cache:
-            return self._client_cache[self.primary_email]
+            client = self._client_cache[self.primary_email]
+            logger.debug(f"get_primary_client: Returning cached client for {self.primary_email}, cookies={len(client.session.cookies)}")
+            return client
             
         account = next((a for a in self.accounts if a['email'] == self.primary_email), None)
         if not account:
+            logger.debug(f"get_primary_client: Account {self.primary_email} not found")
             return None
+        
+        logger.info(f"🔧 Creating new FshareClient for {self.primary_email}")
             
         config = FshareConfig(email=account['email'], password=account['password'])
         client = FshareClient.from_config(config)
@@ -211,13 +217,20 @@ class AccountManager:
         
         # Restore session if available
         if account.get('cookies'):
-             client.set_cookies(account['cookies'])
-        if account.get('token_expires'):
-             try:
-                 client._token_expires = datetime.fromtimestamp(account['token_expires'])
-                 client._token = "web_session" # Mark as having token
-             except:
-                 pass
+            client.set_cookies(account['cookies'])
+            # ALWAYS set token when cookies exist - this marks the client as "having a session"
+            client._token = "web_session"
+            logger.info(f"✅ Restored {len(account['cookies'])} cookies for {self.primary_email}")
+            
+            # Restore token expiry if available
+            if account.get('token_expires'):
+                try:
+                    client._token_expires = datetime.fromtimestamp(account['token_expires'])
+                    logger.debug(f"Restored token_expires: {client._token_expires}")
+                except Exception as e:
+                    logger.warning(f"Failed to restore token_expires: {e}")
+        else:
+            logger.warning(f"⚠️ No cookies found for {self.primary_email} - will need to login")
                  
         # Store in cache
         self._client_cache[self.primary_email] = client
