@@ -2,7 +2,7 @@
 
 **A complete integration bridge for using Fshare.vn with Sonarr, Radarr, and Prowlarr.**
 
-[![Version](https://img.shields.io/badge/version-0.0.3--beta-blue.svg)](./VERSION)
+[![Version](https://img.shields.io/badge/version-0.2.0--beta-blue.svg)](./VERSION)
 [![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](./docker-compose.yml)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 
@@ -107,19 +107,19 @@ Radarr/Sonarr → Flasharr (SABnzbd API) → Built-in Engine → Fshare.vn
 
 ## 📚 Documentation
 
-Complete documentation is available in the [`flasharr_docs/`](flasharr_docs/) directory:
+Complete documentation is available in the [`docs/`](docs/) directory:
 
-- **[Getting Started](flasharr_docs/getting-started/)** - Installation, quick start, configuration
-- **[User Guide](flasharr_docs/user-guide/)** - Web interface, download management, troubleshooting
-- **[API Reference](flasharr_docs/api-reference/)** - Newznab, SABnzbd, Engine APIs
-- **[Architecture](flasharr_docs/architecture/)** - System design and internals
-- **[Development](flasharr_docs/development/)** - Contributing, testing, changelog
+- **[Getting Started](docs/getting-started/)** - Installation, quick start, configuration
+- **[User Guide](docs/user-guide/)** - Troubleshooting and common issues
+- **[API Reference](docs/api-reference/)** - Newznab, SABnzbd APIs
+- **[Architecture](docs/architecture/)** - System design and code structure
+- **[Development](docs/development/)** - Changelog, deployment
 
 **Quick Links:**
-- [Installation Guide](flasharr_docs/getting-started/installation.md)
-- [Quick Start](flasharr_docs/getting-started/quick-start.md)
-- [Troubleshooting](flasharr_docs/user-guide/troubleshooting.md)
-- [Changelog](flasharr_docs/development/changelog.md)
+- [Installation Guide](docs/getting-started/installation.md)
+- [Quick Start](docs/getting-started/quick-start.md)
+- [Troubleshooting](docs/user-guide/troubleshooting.md)
+- [Changelog](docs/development/changelog.md)
 
 ---
 
@@ -287,6 +287,6 @@ MIT License - See LICENSE file for details.
 
 ## 📞 Support
 
-- **Documentation:** [flasharr_docs/](flasharr_docs/)
+- **Documentation:** [docs/](docs/)
 - **Issues:** [GitHub Issues](https://github.com/yourusername/fshare-arr-bridge/issues)
-- **Version:** 0.0.3-beta
+- **Version:** 0.2.0-beta
