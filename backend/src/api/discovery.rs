@@ -18,6 +18,7 @@ use crate::utils::smart_tokenizer::{smart_parse, MediaType};
 use crate::utils::title_matcher::{extract_core_title, get_title_keywords, is_different_franchise_entry};
 use std::collections::HashMap;
 use futures_util::future::join_all;
+use crate::constants::TMDB_API_KEY;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -154,12 +155,11 @@ async fn smart_search(
     // 1. Resolve Aliases from TMDB
     let mut aliases = Vec::new();
     if let Some(tmdb_id) = payload.tmdb_id {
-        let tmdb_key = "8d95150f3391194ca66fef44df497ad6"; // Same as in tmdb.rs
         let url = format!(
             "https://api.themoviedb.org/3/{}/{}/alternative_titles?api_key={}",
             if payload.media_type == "tv" { "tv" } else { "movie" },
             tmdb_id,
-            tmdb_key
+            TMDB_API_KEY
         );
         
         if let Ok(resp) = client.get(&url).send().await {
@@ -361,12 +361,11 @@ async fn popular_today(
     State(_state): State<Arc<AppState>>,
     Query(params): Query<PopularQuery>,
 ) -> Json<PopularResponse> {
-    let tmdb_key = "8d95150f3391194ca66fef44df497ad6";
     let client = Client::new();
     let url = format!(
         "https://api.themoviedb.org/3/trending/{}/day?api_key={}",
         params.media_type,
-        tmdb_key
+        TMDB_API_KEY
     );
     
     let mut results: Vec<PopularItem> = Vec::new();
@@ -468,8 +467,6 @@ async fn trending() -> Json<TrendingResponse> {
         .cookie_store(true)
         .build()
         .unwrap_or_default();
-        
-    let tmdb_key = "8d95150f3391194ca66fef44df497ad6";
     let url = "https://timfshare.com/api/key/data-top";
     
     let mut results = Vec::new();
@@ -533,7 +530,7 @@ async fn trending() -> Json<TrendingResponse> {
             let media_type = if is_series { "tv" } else { "movie" };
             let mut url = format!(
                 "https://api.themoviedb.org/3/search/{}?api_key={}&query={}",
-                media_type, tmdb_key, urlencoding::encode(&clean_title)
+                media_type, TMDB_API_KEY, urlencoding::encode(&clean_title)
             );
              if let Some(y) = &year {
                 if media_type == "movie" {
@@ -556,7 +553,7 @@ async fn trending() -> Json<TrendingResponse> {
             if year.is_some() {
                  let url = format!(
                     "https://api.themoviedb.org/3/search/{}?api_key={}&query={}",
-                    media_type, tmdb_key, urlencoding::encode(&clean_title)
+                    media_type, TMDB_API_KEY, urlencoding::encode(&clean_title)
                 );
                  if let Ok(resp) = client.get(&url).send().await {
                      if let Ok(data) = resp.json::<Value>().await {

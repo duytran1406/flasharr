@@ -19,7 +19,7 @@ use reqwest::Client;
 use serde_json::Value;
 use std::sync::OnceLock;
 
-const TMDB_KEY: &str = "8d95150f3391194ca66fef44df497ad6";
+use crate::constants::TMDB_API_KEY;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -131,7 +131,7 @@ async fn handle_movie_search(
                 return Some((cached.0, cached.1, cached.3, cached.2));
             }
             // V2 HARD MODE: Movie alternative_titles endpoint.
-            let url = format!("https://api.themoviedb.org/3/movie/{}/alternative_titles?api_key={}", tmdb_id, TMDB_KEY);
+            let url = format!("https://api.themoviedb.org/3/movie/{}/alternative_titles?api_key={}", tmdb_id, TMDB_API_KEY);
             if let Ok(resp) = c1.get(&url).send().await {
                 if let Ok(data) = resp.json::<Value>().await {
                     if let Some(titles) = data["titles"].as_array() {
@@ -146,7 +146,7 @@ async fn handle_movie_search(
             }
 
             // Official details
-            let details_url = format!("https://api.themoviedb.org/3/movie/{}?api_key={}&append_to_response=belongs_to_collection", tmdb_id, TMDB_KEY);
+            let details_url = format!("https://api.themoviedb.org/3/movie/{}?api_key={}&append_to_response=belongs_to_collection", tmdb_id, TMDB_API_KEY);
             if let Ok(resp) = c1.get(&details_url).send().await {
                 if let Ok(data) = resp.json::<Value>().await {
                     official = data["title"].as_str().map(|s| s.to_string());
@@ -154,7 +154,7 @@ async fn handle_movie_search(
                     
                     if let Some(coll_data) = data["belongs_to_collection"].as_object() {
                         if let Some(coll_id) = coll_data["id"].as_u64() {
-                            let coll_url = format!("https://api.themoviedb.org/3/collection/{}?api_key={}", coll_id, TMDB_KEY);
+                            let coll_url = format!("https://api.themoviedb.org/3/collection/{}?api_key={}", coll_id, TMDB_API_KEY);
                             if let Ok(c_resp) = c1.get(&coll_url).send().await {
                                 if let Ok(c_data) = c_resp.json::<Value>().await {
                                     if let Some(parts) = c_data["parts"].as_array() {
@@ -455,7 +455,7 @@ async fn handle_tv_search(
                 return Some((cached.0, cached.1, cached.2));
             }
             // V2 HARD MODE: TV alternative_titles endpoint.
-            let url = format!("https://api.themoviedb.org/3/tv/{}/alternative_titles?api_key={}", tmdb_id, TMDB_KEY);
+            let url = format!("https://api.themoviedb.org/3/tv/{}/alternative_titles?api_key={}", tmdb_id, TMDB_API_KEY);
             info!("Enriching TV metadata from TMDB: {}", url);
             if let Ok(resp) = c1.get(&url).send().await {
                 if let Ok(data) = resp.json::<Value>().await {
@@ -471,7 +471,7 @@ async fn handle_tv_search(
             }
             
             // Details for name/poster
-            let details_url = format!("https://api.themoviedb.org/3/tv/{}?api_key={}", tmdb_id, TMDB_KEY);
+            let details_url = format!("https://api.themoviedb.org/3/tv/{}?api_key={}", tmdb_id, TMDB_API_KEY);
             if let Ok(resp) = c1.get(&details_url).send().await {
                 if let Ok(data) = resp.json::<Value>().await {
                     official = data["name"].as_str().map(|s| s.to_string());
@@ -480,7 +480,7 @@ async fn handle_tv_search(
             }
 
             // V3 EXTENSION: Also fetch translations for better VN title coverage (e.g. Bộ Bộ Kinh Tâm)
-            let trans_url = format!("https://api.themoviedb.org/3/tv/{}/translations?api_key={}", tmdb_id, TMDB_KEY);
+            let trans_url = format!("https://api.themoviedb.org/3/tv/{}/translations?api_key={}", tmdb_id, TMDB_API_KEY);
             if let Ok(resp) = c1.get(&trans_url).send().await {
                 if let Ok(data) = resp.json::<Value>().await {
                     if let Some(translations) = data["translations"].as_array() {
@@ -893,7 +893,7 @@ async fn handle_tv_search(
             let c = client.clone();
             let tid = tmdb_id;
             fetch_tasks.push(tokio::spawn(async move {
-                let url = format!("https://api.themoviedb.org/3/tv/{}/season/{}?api_key={}", tid, s_num, TMDB_KEY);
+                let url = format!("https://api.themoviedb.org/3/tv/{}/season/{}?api_key={}", tid, s_num, TMDB_API_KEY);
                 if let Ok(resp) = c.get(&url).send().await {
                     if let Ok(data) = resp.json::<Value>().await {
                         return Some((s_num, data));

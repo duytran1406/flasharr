@@ -20,6 +20,7 @@ mod db;
 mod config;
 mod utils;
 mod arr;
+mod constants;
 
 
 use std::sync::Arc;
