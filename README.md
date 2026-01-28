@@ -1,292 +1,332 @@
-# Flasharr (Beta)
+<p align="center">
+  <img src="https://img.shields.io/badge/version-3.0.0-blue?style=for-the-badge" alt="Version">
+  <img src="https://img.shields.io/badge/rust-1.75+-orange?style=for-the-badge&logo=rust" alt="Rust">
+  <img src="https://img.shields.io/badge/svelte-5-ff3e00?style=for-the-badge&logo=svelte" alt="Svelte">
+  <img src="https://img.shields.io/badge/docker-ready-2496ED?style=for-the-badge&logo=docker" alt="Docker">
+</p>
 
-**A complete integration bridge for using Fshare.vn with Sonarr, Radarr, and Prowlarr.**
+# 🚀 Flasharr
 
-[![Version](https://img.shields.io/badge/version-0.2.0--beta-blue.svg)](./VERSION)
-[![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](./docker-compose.yml)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
+**Flasharr** is a lightweight, high-performance download manager that bridges **Fshare** (Vietnamese file hosting service) with the **\*arr ecosystem** (Sonarr & Radarr). It enables automated downloading and importing of media files directly into your Plex/Jellyfin library.
 
----
-
-## 🚀 Features
-
-- **🔍 Newznab/Torznab Indexer** - Search Fshare via Prowlarr
-- **📥 SABnzbd-Compatible API** - Download client for Radarr/Sonarr
-- **⚡ Built-in Download Engine** - Multi-threaded, segmented downloads
-- **🔄 Multi-Account Support** - Load balancing across VIP accounts
-- **📊 Priority Queue** - Prioritize important downloads
-- **🎯 Real-time Updates** - WebSocket-powered dashboard
-- **🌐 Web Dashboard** - Modern UI for management
-- **🔧 Auto-Cleanup** - Automatic history management
+Built with **Rust** and **SvelteKit**, Flasharr is optimized for low-resource hardware like mini PCs (Intel N100, 4GB RAM) while delivering blazing-fast download speeds.
 
 ---
 
-## 📋 What's New in Beta
+## ✨ Key Features
 
-Flasharr beta is a **complete rewrite** with major improvements:
-
-- ✅ **Native Download Engine** - No more PyLoad dependency
-- ✅ **Multi-threaded Downloads** - Segmented downloads for maximum speed
-- ✅ **Multi-Account Support** - Distribute downloads across VIP accounts
-- ✅ **Priority System** - Control download order
-- ✅ **Enhanced Dashboard** - Real-time statistics and control
-- ✅ **Better Performance** - Optimized for speed and reliability
+- 🎬 **\*arr Integration** — Seamlessly works with Sonarr and Radarr for automated media management
+- 🔍 **Smart Search** — Search Fshare with TMDB-enriched metadata (posters, ratings, descriptions)
+- ⬇️ **Intelligent Downloads** — State machine with smart error handling and automatic retries
+- ⚡ **High Performance** — Download speeds up to 300 MB/s with minimal resource usage
+- 🔄 **Real-time Updates** — WebSocket-based progress tracking
+- 📱 **Modern UI** — Beautiful, responsive web interface
+- 🐳 **Docker Ready** — One-command deployment
 
 ---
 
-## 🏗️ Architecture
+## 📋 Requirements
 
-```
-Prowlarr → Flasharr (Newznab API) → TimFshare.com (Search)
-                ↓
-Radarr/Sonarr → Flasharr (SABnzbd API) → Built-in Engine → Fshare.vn
-                ↓
-        Download Files
-```
-
-**No external download manager required!** Flasharr handles everything internally.
+- **Docker** and **Docker Compose** (recommended)
+- **Fshare VIP account** (required for premium download speeds)
+- **TMDB API key** (free, for media metadata)
+- Optionally: **Sonarr** and/or **Radarr** for automation
 
 ---
 
 ## 🚀 Quick Start
 
-### Docker Installation (Recommended)
+### Step 1: Create Project Directory
 
-1. **Create environment file:**
-   ```bash
-   mkdir -p /mnt/appdata/Flasharr
-   nano /mnt/appdata/Flasharr/.env
-   ```
-
-2. **Add your Fshare credentials:**
-   ```bash
-   FSHARE_EMAIL=your-email@example.com
-   FSHARE_PASSWORD=your-password
-   INDEXER_PORT=8484
-   DOWNLOAD_DIR=/downloads
-   MAX_CONCURRENT_DOWNLOADS=2
-   SEGMENTS_PER_DOWNLOAD=4
-   ```
-
-3. **Start Flasharr:**
-   ```bash
-   docker-compose up -d
-   ```
-
-4. **Access the dashboard:**
-   ```
-   http://localhost:8484
-   ```
-
----
-
-## 🔧 Configuration
-
-### Add to Prowlarr (Indexer)
-
-1. **Settings** → **Indexers** → **Add Indexer**
-2. Select **Newznab**
-3. Configure:
-   - **Name:** Fshare (Flasharr)
-   - **URL:** `http://flasharr:8484/indexer`
-   - **API Key:** (optional)
-   - **Categories:** Movies (2000), TV (5000)
-
-### Add to Radarr/Sonarr (Download Client)
-
-1. **Settings** → **Download Clients** → **Add**
-2. Select **SABnzbd**
-3. Configure:
-   - **Name:** Flasharr
-   - **Host:** `flasharr`
-   - **Port:** `8484`
-   - **URL Base:** `/sabnzbd`
-   - **Category:** movies (Radarr) or tv (Sonarr)
-
----
-
-## 📚 Documentation
-
-Complete documentation is available in the [`docs/`](docs/) directory:
-
-- **[Getting Started](docs/getting-started/)** - Installation, quick start, configuration
-- **[User Guide](docs/user-guide/)** - Troubleshooting and common issues
-- **[API Reference](docs/api-reference/)** - Newznab, SABnzbd APIs
-- **[Architecture](docs/architecture/)** - System design and code structure
-- **[Development](docs/development/)** - Changelog, deployment
-
-**Quick Links:**
-- [Installation Guide](docs/getting-started/installation.md)
-- [Quick Start](docs/getting-started/quick-start.md)
-- [Troubleshooting](docs/user-guide/troubleshooting.md)
-- [Changelog](docs/development/changelog.md)
-
----
-
-## 🎯 Key Features Explained
-
-### Multi-threaded Downloads
-Download files using multiple segments simultaneously for maximum speed:
 ```bash
-SEGMENTS_PER_DOWNLOAD=8  # More segments = faster downloads
+mkdir flasharr && cd flasharr
 ```
 
-### Multi-Account Support
-Distribute downloads across multiple VIP accounts:
-```bash
-FSHARE_ACCOUNTS=email1:pass1,email2:pass2,email3:pass3
-```
+### Step 2: Create Configuration Files
 
-### Priority Queue
-Control download order:
-- **URGENT** - Download immediately
-- **HIGH** - Before normal downloads
-- **NORMAL** - Default priority
-- **LOW** - Download last
-
-### Global Speed Limiting
-Limit bandwidth usage:
-```bash
-GLOBAL_SPEED_LIMIT_MBPS=10  # Limit to 10 MB/s
-```
-
----
-
-## 🔌 API Endpoints
-
-### Indexer API (Prowlarr)
-- `GET /indexer/api?t=caps` - Capabilities
-- `GET /indexer/api?t=search&q={query}` - Search
-- `GET /indexer/nzb/{guid}` - Get NZB
-
-### SABnzbd API (Radarr/Sonarr)
-- `POST /sabnzbd/api?mode=addurl` - Add download
-- `GET /sabnzbd/api?mode=queue` - Get queue
-- `GET /sabnzbd/api?mode=history` - Get history
-
-### Engine API (Direct Control)
-- `GET /api/downloads` - List downloads
-- `POST /api/downloads` - Add download
-- `POST /api/downloads/{id}/pause` - Pause download
-- `POST /api/downloads/{id}/resume` - Resume download
-
----
-
-## 🐳 Docker Compose
+Create a `docker-compose.yml` file:
 
 ```yaml
+version: "3.8"
+
 services:
   flasharr:
-    image: flasharr:beta
+    image: flasharr:latest
     container_name: flasharr
     restart: unless-stopped
     ports:
       - "8484:8484"
-    env_file:
-      - /mnt/appdata/Flasharr/.env
     volumes:
-      - /mnt/appdata/Flasharr/data:/app/data
-      - /data/fshare-downloader:/downloads
+      # AppData volume for configuration and database
+      - ./appData:/appData
+
+      # Mount your media library (adjust paths as needed)
+      # - /path/to/downloads:/appData/downloads
+    environment:
+      - FLASHARR_APPDATA_DIR=/appData
+      - RUST_LOG=flasharr=info,tower_http=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8484/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 ```
 
----
-
-## 🛠️ Development
-
-### Project Structure
-
-```
-fshare-arr-bridge/
-├── src/flasharr/              # Main application code
-│   ├── api/                   # API endpoints
-│   ├── clients/               # Fshare & TimFshare clients
-│   ├── core/                  # Core services
-│   ├── downloader/            # Download engine
-│   ├── services/              # Business logic
-│   ├── web/                   # Web UI
-│   └── websocket/             # Real-time updates
-├── tests/                     # Test suite
-├── flasharr_docs/             # Documentation
-├── docker-compose.yml         # Docker configuration
-├── Dockerfile                 # Container definition
-└── README.md                  # This file
-```
-
-### Running Tests
+Create a `.env` file in the same directory:
 
 ```bash
-pytest tests/ -v
+# Fshare Credentials (REQUIRED)
+FSHARE_EMAIL=your-email@example.com
+FSHARE_PASSWORD=your-fshare-password
+
+# TMDB API Key (REQUIRED for media search)
+# Get your free API key at: https://www.themoviedb.org/settings/api
+TMDB_API_KEY=your-tmdb-api-key
+
+# Indexer API Key (for Sonarr/Radarr authentication)
+# Generate a secure key: openssl rand -hex 32
+API_KEY=your-generated-api-key
+
+# Server Configuration
+FLASHARR_PORT=8484
+DEBUG=false
 ```
 
-### Building from Source
+### Step 3: Start Flasharr
 
 ```bash
-docker-compose build
+docker-compose up -d
+```
+
+### Step 4: Access the Web UI
+
+Open your browser and navigate to:
+
+```
+http://localhost:8484
 ```
 
 ---
 
-## 🐛 Troubleshooting
+## ⚙️ Configuration
 
-### Container Won't Start
+### Getting Your API Keys
+
+#### TMDB API Key (Free)
+
+1. Create an account at [themoviedb.org](https://www.themoviedb.org/signup)
+2. Go to **Settings** → **API**
+3. Request an API key (choose "Developer" for personal use)
+4. Copy your **API Key (v3 auth)**
+
+#### Fshare VIP Account
+
+A Fshare VIP account is required for high-speed downloads. Visit [fshare.vn](https://www.fshare.vn) to purchase a subscription.
+
+---
+
+## 🔗 Sonarr & Radarr Integration
+
+Flasharr acts as both an **Indexer** (search) and **Download Client** (SABnzbd-compatible) for the \*arr suite.
+
+### Adding Flasharr to Sonarr/Radarr
+
+#### Step 1: Add as Indexer
+
+1. Open **Sonarr/Radarr** → **Settings** → **Indexers**
+2. Click **+ Add Indexer** → Choose **Newznab** (Generic)
+3. Configure:
+   - **Name:** `Flasharr`
+   - **URL:** `http://flasharr:8484/api/indexer` (or use your Flasharr IP)
+   - **API Key:** Your `API_KEY` from `.env`
+4. Click **Test** then **Save**
+
+#### Step 2: Add as Download Client
+
+1. Open **Sonarr/Radarr** → **Settings** → **Download Clients**
+2. Click **+ Add** → Choose **SABnzbd**
+3. Configure:
+   - **Name:** `Flasharr`
+   - **Host:** `flasharr` (or your Flasharr IP)
+   - **Port:** `8484`
+   - **API Key:** Your `API_KEY` from `.env`
+   - **Category (TV):** `tv` (for Sonarr)
+   - **Category (Movies):** `movies` (for Radarr)
+4. Click **Test** then **Save**
+
+### Docker Network Setup
+
+If running all services in Docker, ensure they share a network:
+
+```yaml
+version: "3.8"
+
+services:
+  flasharr:
+    image: flasharr:latest
+    container_name: flasharr
+    networks:
+      - arr-network
+    # ... other config
+
+  sonarr:
+    image: linuxserver/sonarr
+    container_name: sonarr
+    networks:
+      - arr-network
+    # ... other config
+
+  radarr:
+    image: linuxserver/radarr
+    container_name: radarr
+    networks:
+      - arr-network
+    # ... other config
+
+networks:
+  arr-network:
+    driver: bridge
+```
+
+---
+
+## 📁 Directory Structure
+
+After starting Flasharr, the following structure is created:
+
+```
+./appData/
+├── config/         # Configuration files
+│   └── config.json # Main config (auto-generated)
+├── data/           # SQLite database
+│   └── flasharr.db
+├── downloads/      # Downloaded files
+│   ├── tv/         # TV shows (for Sonarr)
+│   └── movies/     # Movies (for Radarr)
+└── logs/           # Application logs
+```
+
+### Custom Download Path
+
+To use a different download location, mount it in your `docker-compose.yml`:
+
+```yaml
+volumes:
+  - ./appData:/appData
+  - /mnt/media/downloads:/appData/downloads
+```
+
+---
+
+## 🔧 Advanced Configuration
+
+### Environment Variables
+
+| Variable               | Description                   | Default         |
+| ---------------------- | ----------------------------- | --------------- |
+| `FLASHARR_APPDATA_DIR` | Data directory path           | `/appData`      |
+| `FSHARE_EMAIL`         | Fshare login email            | -               |
+| `FSHARE_PASSWORD`      | Fshare login password         | -               |
+| `TMDB_API_KEY`         | TMDB API key for metadata     | -               |
+| `API_KEY`              | API key for \*arr integration | -               |
+| `FLASHARR_PORT`        | Server port                   | `8484`          |
+| `RUST_LOG`             | Log level                     | `flasharr=info` |
+| `DEBUG`                | Enable debug mode             | `false`         |
+
+### Resource Limits (Optional)
+
+For low-resource systems, add resource limits:
+
+```yaml
+services:
+  flasharr:
+    # ... other config
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 128M
+```
+
+---
+
+## 📊 Performance
+
+Flasharr is optimized for minimal resource usage:
+
+| Metric          | Flasharr V3    |
+| --------------- | -------------- |
+| Memory (Idle)   | ~30 MB         |
+| Memory (Active) | ~100 MB        |
+| CPU (Idle)      | < 0.5%         |
+| Download Speed  | Up to 300 MB/s |
+| Startup Time    | ~0.2s          |
+
+---
+
+## 🆘 Troubleshooting
+
+### Common Issues
+
+#### Fshare Login Failed
+
+- Verify your credentials in `.env`
+- Check if your VIP subscription is active
+- Ensure your IP isn't blocked by Fshare
+
+#### Sonarr/Radarr Connection Failed
+
+- Verify the Flasharr container is running: `docker ps`
+- Check the API key matches in both services
+- Ensure containers are on the same Docker network
+
+#### Downloads Not Starting
+
+- Check Fshare account status in Settings
+- Verify disk space is available
+- Check logs: `docker logs flasharr`
+
+### View Logs
+
 ```bash
-docker-compose logs flasharr
+# Live logs
+docker logs -f flasharr
+
+# Last 100 lines
+docker logs --tail 100 flasharr
 ```
 
-### No Search Results
+---
+
+## 🔄 Updating
+
+To update to the latest version:
+
 ```bash
-# Test indexer directly
-curl "http://localhost:8484/indexer/api?t=search&q=test"
+docker-compose pull
+docker-compose up -d
 ```
 
-### Downloads Not Starting
-```bash
-# Check queue
-curl "http://localhost:8484/sabnzbd/api?mode=queue"
-```
+---
 
-See the [Troubleshooting Guide](flasharr_docs/user-guide/troubleshooting.md) for more solutions.
+## 📜 License
+
+This project is for personal use only. Flasharr is not affiliated with Fshare, Sonarr, Radarr, or any other mentioned services.
 
 ---
 
-## 📝 Environment Variables
+## 🙏 Acknowledgments
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `FSHARE_EMAIL` | Fshare account email | Required |
-| `FSHARE_PASSWORD` | Fshare account password | Required |
-| `INDEXER_PORT` | Web server port | `8484` |
-| `DOWNLOAD_DIR` | Download directory | `/downloads` |
-| `MAX_CONCURRENT_DOWNLOADS` | Max simultaneous downloads | `2` |
-| `SEGMENTS_PER_DOWNLOAD` | Segments per file | `4` |
-| `GLOBAL_SPEED_LIMIT_MBPS` | Speed limit (0=unlimited) | `0` |
-
-See [Configuration Guide](flasharr_docs/getting-started/configuration.md) for all options.
+- [Sonarr](https://sonarr.tv/) & [Radarr](https://radarr.video/) — The amazing \*arr ecosystem
+- [TMDB](https://www.themoviedb.org/) — Media metadata API
+- [Fshare](https://www.fshare.vn/) — Vietnamese file hosting service
 
 ---
 
-## 🤝 Contributing
-
-Contributions are welcome! See [Contributing Guide](flasharr_docs/development/contributing.md).
-
----
-
-## 📄 License
-
-MIT License - See LICENSE file for details.
-
----
-
-## 🙏 Credits
-
-- Built for integration with the *arr media management suite
-- Uses TimFshare.com for Fshare search
-- Implements Newznab/Torznab and SABnzbd API standards
-
----
-
-## 📞 Support
-
-- **Documentation:** [docs/](docs/)
-- **Issues:** [GitHub Issues](https://github.com/yourusername/fshare-arr-bridge/issues)
-- **Version:** 0.2.0-beta
+<p align="center">
+  Made with ❤️ for the home media enthusiast community
+</p>

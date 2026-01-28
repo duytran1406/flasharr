@@ -1,0 +1,22 @@
+[server]
+host = "0.0.0.0"
+port = 8484
+
+[downloads]
+directory = "/tmp/flasharr-downloads"
+max_concurrent = 3
+segments_per_download = 4
+
+[fshare]
+email = "duytran.1406@gmail.com"
+password = "duytran1406"
+
+[radarr]
+enabled = true
+url = "http://localhost:7878"
+api_key = "test-radarr-key"
+auto_import = false
+
+[indexer]
+enabled = true
+api_key = "flasharr-default-key"

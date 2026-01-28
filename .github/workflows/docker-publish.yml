@@ -1,0 +1,101 @@
+name: Docker Build and Publish
+
+on:
+  push:
+    branches: 
+      - main      # Triggers 'latest' and 'nightly'
+      - develop   # Triggers 'develop'
+    tags: 
+      - 'v*'      # Triggers version tags and 'stable'
+  schedule:
+    # Build nightly at 2 AM UTC every day
+    - cron: '0 2 * * *'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # Tag as 'nightly' on scheduled builds or main branch pushes
+            type=raw,value=nightly,enable=${{ github.event_name == 'schedule' || github.ref == 'refs/heads/main' }}
+            
+            # Tag as 'latest' on main branch (not scheduled)
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' && github.event_name != 'schedule' }}
+            
+            # Tag as 'develop' on develop branch
+            type=raw,value=develop,enable=${{ github.ref == 'refs/heads/develop' }}
+            
+            # Version tags from git tags (v1.2.3 -> 1.2.3, 1.2, 1)
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            
+            # Tag as 'stable' on version tags
+            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            
+            # Git commit SHA for traceability
+            type=sha,prefix={{branch}}-
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            BUILD_DATE=${{ steps.meta.outputs.created }}
+            VCS_REF=${{ github.sha }}
+
+      - name: Create release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = context.ref.replace('refs/tags/', '');
+            const images = `${{ steps.meta.outputs.tags }}`.split('\n');
+            
+            const body = `## Docker Images\n\n${images.map(img => `- \`${img}\``).join('\n')}\n\n## Quick Start\n\n\`\`\`bash\ndocker pull ${images[0]}\n\`\`\``;
+            
+            github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: tag,
+              body: body,
+              draft: false,
+              prerelease: tag.includes('rc') || tag.includes('beta') || tag.includes('alpha')
+            });

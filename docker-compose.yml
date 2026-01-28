@@ -1,27 +1,59 @@
+version: '3.8'
+
 services:
-  # Flasharr - Main integration service
   flasharr:
-    build: .
-    image: flasharr:beta
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: flasharr:latest
     container_name: flasharr
     restart: unless-stopped
+    
     ports:
       - "8484:8484"
-    env_file:
-      - /mnt/appdata/Flasharr/.env
+    
     volumes:
-      - /data/appdata:/app/data
-      - /data/fshare-downloader:/downloads
-      - ./src/flasharr/static:/app/src/flasharr/static
+      # AppData volume for persistence
+      - ./appData:/appData
+      
+      # Optional: Separate downloads volume
+      # - /path/to/downloads:/appData/downloads
+    
     environment:
-      # Server configuration
-      INDEXER_PORT: 8484
-      DATA_DIR: /app/data
-    dns:
-      - 8.8.8.8
+      # AppData directory
+      - FLASHARR_APPDATA_DIR=/appData
+      
+      # Logging level
+      - RUST_LOG=flasharr=info,tower_http=info
+    
+    # Optional: Resource limits
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2'
+    #       memory: 512M
+    #     reservations:
+    #       cpus: '0.5'
+    #       memory: 128M
+    
+    # Optional: Health check override
     healthcheck:
-      test: [ "CMD", "python3", "-c", "import requests; requests.get('http://localhost:8484/health')" ]
+      test: ["CMD", "curl", "-f", "http://localhost:8484/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 3s
       retries: 3
-      start_period: 20s
+      start_period: 10s
+    
+    # Optional: Network configuration
+    # networks:
+    #   - flasharr-network
+
+# Optional: Custom network
+# networks:
+#   flasharr-network:
+#     driver: bridge
+
+# Optional: Named volumes
+# volumes:
+#   flasharr-data:
+#     driver: local

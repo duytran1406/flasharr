@@ -1,0 +1,33 @@
+# Flasharr Backend Configuration
+# Copy this file to config.toml and fill in your credentials
+
+[server]
+host = "0.0.0.0"
+port = 8484
+
+[downloads]
+directory = "/appData/downloads"
+max_concurrent = 3
+segments_per_download = 4
+
+[fshare]
+# Your Fshare VIP account credentials
+email = "your-email@example.com"
+password = "your-fshare-password"
+
+[radarr]
+enabled = false
+url = "http://localhost:7878"
+api_key = ""
+auto_import = false
+
+[sonarr]
+enabled = false
+url = "http://localhost:8989"
+api_key = ""
+auto_import = false
+
+[indexer]
+enabled = true
+# Generate with: openssl rand -hex 32
+api_key = ""

@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  flasharr:
+    image: ghcr.io/duytran1406/flasharr:latest  # Use pre-built image
+    container_name: flasharr
+    restart: unless-stopped
+    
+    ports:
+      - "8484:8484"
+    
+    volumes:
+      # Persistent data
+      - ./appData:/appData
+      
+      # Optional: Custom download location
+      # - /path/to/downloads:/appData/downloads
+    
+    environment:
+      # Timezone
+      - TZ=Asia/Bangkok
+      
+      # Logging level (optional)
+      - RUST_LOG=flasharr=info,tower_http=info
+      
+      # AppData directory (don't change unless you know what you're doing)
+      - FLASHARR_APPDATA_DIR=/appData
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8484/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s

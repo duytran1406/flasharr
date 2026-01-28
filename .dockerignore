@@ -1,0 +1,60 @@
+# Docker ignore file for Flasharr
+
+# Git
+.git
+.gitignore
+
+# AppData (user data - should be mounted as volume)
+appData/
+
+# Development files
+.env
+.env.local
+*.log
+*.pid
+
+# Backend build artifacts
+backend/target/
+backend/Cargo.lock
+backend/flasharr.db
+backend/config.toml
+backend/backend.pid
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/build/
+frontend/.svelte-kit/
+frontend/package-lock.json
+
+# Static files (will be built in Docker)
+backend/static/
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Debug and test files
+debug_log/
+backup_*/
+comparison_report.txt
+
+# Scripts (not needed in container)
+scripts/
+migrate-to-appdata.sh
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+
+# Agent artifacts
+.agent/

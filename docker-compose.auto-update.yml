@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  flasharr:
+    image: ghcr.io/duytran1406/flasharr:latest
+    container_name: flasharr
+    restart: unless-stopped
+    ports:
+      - "8484:8484"
+    volumes:
+      - ./appData:/appData
+    environment:
+      - TZ=Asia/Bangkok
+      - RUST_LOG=flasharr=info,tower_http=info
+      - FLASHARR_APPDATA_DIR=/appData
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8484/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # Auto-update service (optional)
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: flasharr-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_INCLUDE_RESTARTING=true
+      - WATCHTOWER_SCHEDULE=0 0 4 * * *  # Check daily at 4 AM
+    command: --interval 86400  # Check every 24 hours

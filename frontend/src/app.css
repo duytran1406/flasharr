@@ -1,0 +1,65 @@
+/* Flasharr v3 - Use Vanilla Styles */
+
+/* Import the complete v2 styles */
+@import './v2-styles.css';
+@import './mobile-v2.css';
+
+/* Override any Tailwind reset conflicts */
+html, body {
+  height: 100vh;
+  width: 100vw;
+  margin: 0;
+  padding: 0;
+}
+
+/* Light Theme Override */
+[data-theme="light"] {
+  --color-primary: #0066cc;
+  --color-secondary: #00a86b;
+  --color-accent: #6200ea;
+
+  --bg-app: #f8fafc;
+  --bg-glass: rgba(255, 255, 255, 0.85);
+  --bg-glass-heavy: rgba(255, 255, 255, 0.95);
+
+  --border-glass: rgba(0, 0, 0, 0.08);
+  --border-glass-active: rgba(0, 102, 204, 0.3);
+
+  --text-primary: #1e293b;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+
+  --shadow-glass: 0 4px 20px rgba(0, 0, 0, 0.08), inset 0 0 0 1px rgba(0, 0, 0, 0.03);
+  --glow-primary: 0 0 20px rgba(0, 102, 204, 0.15);
+}
+
+[data-theme="light"] body {
+  background-image:
+    radial-gradient(
+      circle at 50% 50%,
+      rgba(0, 102, 204, 0.03),
+      transparent 80%
+    ),
+    linear-gradient(rgba(0, 0, 0, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.02) 1px, transparent 1px);
+}
+
+[data-theme="light"] .connection-status {
+  background: rgba(0, 168, 107, 0.08);
+  border-color: rgba(0, 168, 107, 0.15);
+}
+
+[data-theme="light"] .status-dot {
+  background: var(--color-secondary);
+  box-shadow: 0 0 8px var(--color-secondary);
+}
+
+[data-theme="light"] .connection-status.disconnected .status-dot {
+  background: #dc2626;
+  box-shadow: 0 0 8px #dc2626;
+}
+
+[data-theme="light"] .connection-status.disconnected .status-text {
+  color: #dc2626;
+}
+
