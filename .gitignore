@@ -38,3 +38,10 @@ test-data/
 
 # Local development
 *.local
+
+# Agent and local documentation
+.agent/
+PUBLISHED.md
+PUBLISHING_SETUP.md
+VERSIONING_SETUP.md
+READY_TO_PUBLISH.md
