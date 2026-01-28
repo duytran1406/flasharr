@@ -15,7 +15,6 @@ appData/
 
 # Backend build artifacts
 backend/target/
-backend/Cargo.lock
 backend/flasharr.db
 backend/config.toml
 backend/backend.pid
@@ -24,7 +23,6 @@ backend/backend.pid
 frontend/node_modules/
 frontend/build/
 frontend/.svelte-kit/
-frontend/package-lock.json
 
 # Static files (will be built in Docker)
 backend/static/
