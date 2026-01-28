@@ -112,10 +112,17 @@
       if (reset) {
         items = newItems;
       } else {
-        items = [...items, ...newItems];
+        // Safety: Limit total items to prevent memory issues
+        const MAX_ITEMS = 500;
+        items = [...items, ...newItems].slice(0, MAX_ITEMS);
+
+        if (items.length >= MAX_ITEMS) {
+          console.warn("[Discover] Reached maximum items limit");
+          hasMore = false;
+        }
       }
 
-      hasMore = newItems.length === 20;
+      hasMore = hasMore && newItems.length === 20;
       page = requestPage + 1;
       error = null; // Clear error on success
     } catch (err) {
@@ -129,20 +136,29 @@
     }
   }
 
-  // Handle infinite scroll
+  // Handle infinite scroll with debounce
+  let scrollTimeout: number | undefined;
   function handleScroll() {
     if (!scrollContainer) return;
 
-    const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
-    const threshold = 500;
-
-    if (
-      scrollHeight - scrollTop - clientHeight < threshold &&
-      !loading &&
-      hasMore
-    ) {
-      fetchDiscoverData();
+    // Clear existing timeout
+    if (scrollTimeout) {
+      clearTimeout(scrollTimeout);
     }
+
+    // Debounce scroll events
+    scrollTimeout = window.setTimeout(() => {
+      const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
+      const threshold = 500;
+
+      if (
+        scrollHeight - scrollTop - clientHeight < threshold &&
+        !loading &&
+        hasMore
+      ) {
+        fetchDiscoverData();
+      }
+    }, 100); // 100ms debounce
   }
 
   // Toggle genre selection
