@@ -93,8 +93,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     // Handle outgoing messages (progress broadcasts)
     let mut send_task = tokio::spawn(async move {
-        // Send periodic stats updates
+        // Send periodic stats updates (check every 2 seconds)
         let mut stats_interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
+        
+        // Track last sent stats to avoid sending duplicates
+        let mut last_stats: Option<EngineStats> = None;
         
         loop {
             tokio::select! {
@@ -129,16 +132,28 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     }
                 }
                 
-                // Send periodic stats
+                // Check stats periodically, but only send if changed
                 _ = stats_interval.tick() => {
                     let stats = orchestrator.get_stats().await;
-                    let msg = WsMessage::EngineStats { stats };
                     
-                    if let Ok(json) = serde_json::to_string(&msg) {
-                        if sender.send(Message::Text(json)).await.is_err() {
-                            tracing::debug!("WebSocket client disconnected during stats update");
-                            break;
+                    // Only send if stats have changed
+                    let should_send = match &last_stats {
+                        None => true, // First time, always send
+                        Some(prev) => prev != &stats, // Only send if different
+                    };
+                    
+                    if should_send {
+                        let msg = WsMessage::EngineStats { stats: stats.clone() };
+                        
+                        if let Ok(json) = serde_json::to_string(&msg) {
+                            if sender.send(Message::Text(json)).await.is_err() {
+                                tracing::debug!("WebSocket client disconnected during stats update");
+                                break;
+                            }
                         }
+                        
+                        // Update last sent stats
+                        last_stats = Some(stats);
                     }
                 }
             }

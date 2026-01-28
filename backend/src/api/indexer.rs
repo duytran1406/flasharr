@@ -88,29 +88,51 @@ fn get_search_cache() -> &'static Cache<String, Vec<IndexerResult>> {
 async fn handle_indexer(
     State(state): State<Arc<AppState>>,
     Query(params): Query<IndexerParams>,
-) -> (StatusCode, String) {
-    match params.t.as_str() {
+) -> impl axum::response::IntoResponse {
+    use axum::http::header;
+    use axum::response::Response;
+    use axum::body::Body;
+    
+    tracing::info!("Newznab API request - mode: {}, apikey: {:?}", params.t, params.apikey);
+    
+    let (status, xml_body) = match params.t.as_str() {
         "caps" => (StatusCode::OK, handle_caps()),
         "search" => {
             if !validate_api_key(&state, &params.apikey) {
-                return (StatusCode::UNAUTHORIZED, generate_error_xml("Invalid API key"));
+                tracing::warn!("Invalid API key provided: {:?}", params.apikey);
+                (StatusCode::UNAUTHORIZED, generate_error_xml("Invalid API key"))
+            } else {
+                (StatusCode::OK, handle_search(state, params).await)
             }
-            (StatusCode::OK, handle_search(state, params).await)
         },
         "tvsearch" => {
             if !validate_api_key(&state, &params.apikey) {
-                return (StatusCode::UNAUTHORIZED, generate_error_xml("Invalid API key"));
+                tracing::warn!("Invalid API key provided: {:?}", params.apikey);
+                (StatusCode::UNAUTHORIZED, generate_error_xml("Invalid API key"))
+            } else {
+                (StatusCode::OK, handle_tv_search(state, params).await)
             }
-            (StatusCode::OK, handle_tv_search(state, params).await)
         },
         "movie" => {
             if !validate_api_key(&state, &params.apikey) {
-                return (StatusCode::UNAUTHORIZED, generate_error_xml("Invalid API key"));
+                tracing::warn!("Invalid API key provided: {:?}", params.apikey);
+                (StatusCode::UNAUTHORIZED, generate_error_xml("Invalid API key"))
+            } else {
+                (StatusCode::OK, handle_movie_search(state, params).await)
             }
-            (StatusCode::OK, handle_movie_search(state, params).await)
         },
         _ => (StatusCode::BAD_REQUEST, generate_error_xml("Unknown function")),
-    }
+    };
+    
+    // CRITICAL: Trim to remove any leading/trailing whitespace from r#""# strings
+    let trimmed_body = xml_body.trim().to_string();
+    
+    // FORCE the response headers and body using explicit builder
+    Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, "application/xml; charset=utf-8")
+        .body(Body::from(trimmed_body))
+        .unwrap()
 }
 
 /// Handle capabilities request
@@ -121,7 +143,7 @@ fn handle_caps() -> String {
   <limits max="100" default="100" />
   <searching>
     <search available="yes" supportedParams="q" />
-    <tv-search available="yes" supportedParams="q,season,ep" />
+    <tv-search available="yes" supportedParams="q,season,ep,tvdbid" />
     <movie-search available="yes" supportedParams="q,imdbid" />
   </searching>
   <categories>
@@ -144,7 +166,7 @@ async fn handle_search(
 ) -> String {
     let query = match params.q {
         Some(q) if !q.is_empty() => q,
-        _ => return generate_error_xml("Missing search query"),
+        _ => return generate_search_xml(vec![], ""), // Return empty feed instead of error
     };
     
     // Check cache first
@@ -171,7 +193,7 @@ async fn handle_tv_search(
 ) -> String {
     let query = match params.q {
         Some(q) if !q.is_empty() => q,
-        _ => return generate_error_xml("Missing search query"),
+        _ => return generate_search_xml(vec![], ""), // Return empty feed instead of error
     };
     
     // Build TV-specific query
@@ -205,7 +227,7 @@ async fn handle_movie_search(
 ) -> String {
     let query = match params.q {
         Some(q) if !q.is_empty() => q,
-        _ => return generate_error_xml("Missing search query"),
+        _ => return generate_search_xml(vec![], ""), // Return empty feed instead of error
     };
     
     // Check cache
@@ -233,6 +255,10 @@ fn validate_api_key(state: &AppState, provided: &str) -> bool {
     let config_key = state.config.indexer.as_ref()
         .map(|i| i.api_key.as_str())
         .unwrap_or("flasharr-default-key");
+    
+    // DEBUG: See exactly what is happening in the logs
+    tracing::info!("Auth Check: Provided='{}', Expected='{}', Match={}", 
+        provided, config_key, provided == config_key);
     
     !provided.is_empty() && provided == config_key
 }
@@ -376,6 +402,7 @@ fn generate_search_xml(results: Vec<IndexerResult>, _query: &str) -> String {
     rss.push_attribute(("version", "2.0"));
     rss.push_attribute(("xmlns:atom", "http://www.w3.org/2005/Atom"));
     rss.push_attribute(("xmlns:newznab", "http://www.newznab.com/DTD/2010/feeds/attributes/"));
+    rss.push_attribute(("xmlns:torznab", "http://torznab.com/schemas/2015/feed"));
     writer.write_event(Event::Start(rss)).unwrap();
     
     // Channel
@@ -385,6 +412,16 @@ fn generate_search_xml(results: Vec<IndexerResult>, _query: &str) -> String {
     writer.write_event(Event::Start(BytesStart::new("title"))).unwrap();
     writer.write_event(Event::Text(BytesText::new("Fshare Indexer"))).unwrap();
     writer.write_event(Event::End(BytesEnd::new("title"))).unwrap();
+    
+    // Channel description
+    writer.write_event(Event::Start(BytesStart::new("description"))).unwrap();
+    let desc = if results.is_empty() {
+        "No results found"
+    } else {
+        "Fshare search results"
+    };
+    writer.write_event(Event::Text(BytesText::new(desc))).unwrap();
+    writer.write_event(Event::End(BytesEnd::new("description"))).unwrap();
     
     // Items
     for result in results {
@@ -429,12 +466,20 @@ fn write_item<W: std::io::Write>(writer: &mut quick_xml::Writer<W>, result: Inde
     writer.write_event(Event::Text(BytesText::new(&result.pub_date.to_rfc2822()))).unwrap();
     writer.write_event(Event::End(BytesEnd::new("pubDate"))).unwrap();
     
-    // Newznab attributes
+    // Newznab attributes (critical for *arr suite)
+    // GUID attribute for deduplication
+    let mut attr_guid = BytesStart::new("newznab:attr");
+    attr_guid.push_attribute(("name", "guid"));
+    attr_guid.push_attribute(("value", result.guid.as_str()));
+    writer.write_event(Event::Empty(attr_guid)).unwrap();
+    
+    // Category attribute
     let mut attr_cat = BytesStart::new("newznab:attr");
     attr_cat.push_attribute(("name", "category"));
     attr_cat.push_attribute(("value", result.category.to_string().as_str()));
     writer.write_event(Event::Empty(attr_cat)).unwrap();
     
+    // Size attribute (*arr suite prefers this over <size> tag)
     let mut attr_size = BytesStart::new("newznab:attr");
     attr_size.push_attribute(("name", "size"));
     attr_size.push_attribute(("value", result.size.to_string().as_str()));

@@ -67,8 +67,8 @@ pub struct DownloadOrchestrator {
     /// Task notification for workers (wake when new task added)
     task_notify: Arc<Notify>,
     
-    /// *arr API client for bi-directional sync
-    arr_client: Option<Arc<crate::arr::ArrClient>>,
+    /// *arr API client for bi-directional sync (wrapped for dynamic updates)
+    arr_client: Arc<RwLock<Option<Arc<crate::arr::ArrClient>>>>,
 }
 
 impl DownloadOrchestrator {
@@ -101,7 +101,7 @@ impl DownloadOrchestrator {
             config: Arc::new(RwLock::new(config)),
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             task_notify: Arc::new(Notify::new()),
-            arr_client,
+            arr_client: Arc::new(RwLock::new(arr_client)),
         }
     }
     
@@ -496,11 +496,12 @@ impl DownloadOrchestrator {
                 if let Some(task) = task_manager.pop_next_queued() {
                     tracing::info!("Worker {}: Processing task {}", worker_id, task.id);
                     
-                    // Acquire locks for current config and engine
-                    let (current_engine, current_config) = {
+                    // Acquire locks for current config, engine, and arr_client
+                    let (current_engine, current_config, current_arr_client) = {
                         let engine_guard = download_engine.read().await;
                         let config_guard = config.read().await;
-                        (engine_guard.clone(), config_guard.clone())
+                        let arr_guard = arr_client.read().await;
+                        (engine_guard.clone(), config_guard.clone(), arr_guard.clone())
                     };
 
                     // Process task
@@ -513,7 +514,7 @@ impl DownloadOrchestrator {
                         db.as_ref(),
                         &progress_tx,
                         &current_config,
-                        arr_client.as_ref(),
+                        current_arr_client.as_ref(),
                     ).await;
                 } else {
                     // No tasks - wait for notification or timeout
@@ -796,6 +797,11 @@ impl DownloadOrchestrator {
     
     /// Update download configuration
     pub async fn update_config(&self, new_config: DownloadConfig) {
+        let old_max_concurrent = {
+            let config_guard = self.config.read().await;
+            config_guard.max_concurrent
+        };
+        
         // Update config
         {
             let mut config_guard = self.config.write().await;
@@ -809,10 +815,52 @@ impl DownloadOrchestrator {
             *engine_guard = new_engine;
         }
         
+        // Dynamic worker pool resizing
+        let new_max_concurrent = new_config.max_concurrent;
+        if new_max_concurrent != old_max_concurrent {
+            let mut workers = self.workers.lock().await;
+            
+            if new_max_concurrent > old_max_concurrent {
+                // Spawn additional workers
+                let workers_to_add = new_max_concurrent - old_max_concurrent;
+                tracing::info!("Spawning {} additional workers ({}→{})", 
+                    workers_to_add, old_max_concurrent, new_max_concurrent);
+                
+                for worker_id in old_max_concurrent..new_max_concurrent {
+                    let handle = self.spawn_worker(worker_id);
+                    workers.push(handle);
+                }
+            } else {
+                // Workers will automatically sleep when worker_id >= max_concurrent
+                // No need to kill them - they'll just idle
+                tracing::info!("Reduced max_concurrent ({}→{}). Excess workers will idle.", 
+                    old_max_concurrent, new_max_concurrent);
+            }
+        }
+        
         tracing::info!("Updated download configuration: max_concurrent={}, segments={}", 
             new_config.max_concurrent, new_config.segments_per_download);
-            
-        // Note: Changing max_concurrent currently relies on restart or we need to implement dynamic pool resizing.
-        // For now, it will apply on next restart, but segments_per_download will apply immediately.
+    }
+
+    
+    /// Reload *arr client with new configuration (dynamic update without restart)
+    pub async fn reload_arr_client(
+        &self,
+        sonarr_config: Option<crate::config::ArrConfig>,
+        radarr_config: Option<crate::config::ArrConfig>,
+    ) {
+        let new_client = if sonarr_config.is_some() || radarr_config.is_some() {
+            Some(Arc::new(crate::arr::ArrClient::new(sonarr_config.clone(), radarr_config.clone())))
+        } else {
+            None
+        };
+        
+        {
+            let mut arr_guard = self.arr_client.write().await;
+            *arr_guard = new_client;
+        }
+        
+        tracing::info!("Reloaded *arr client: sonarr={}, radarr={}", 
+            sonarr_config.is_some(), radarr_config.is_some());
     }
 }

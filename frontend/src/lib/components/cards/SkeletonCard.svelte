@@ -5,9 +5,12 @@
   }
 
   let { mode = "poster", count = 1 }: Props = $props();
+
+  // Safety: Ensure count is always a valid positive integer
+  const safeCount = $derived(Math.max(0, Math.floor(count || 1)));
 </script>
 
-{#each Array(count) as _, i}
+{#each Array(safeCount) as _, i}
   <div class="skeleton-card mode-{mode}" style="animation-delay: {i * 0.1}s">
     <div class="skeleton-image"></div>
     <div class="skeleton-content">

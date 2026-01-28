@@ -314,6 +314,15 @@ pub async fn complete_setup(
         });
     }
 
+    // Clear FShare session so it re-logs in with new credentials
+    if let Some(handler) = state.host_registry.get_handler_for_url("https://fshare.vn/file/test") {
+        if let Err(e) = handler.logout().await {
+            tracing::warn!("Failed to clear FShare session: {}", e);
+        } else {
+            tracing::info!("Cleared FShare session, will re-login with new credentials");
+        }
+    }
+
     // Save download settings
     if let Err(e) = state.db.save_download_settings(&payload.downloads.directory, payload.downloads.max_concurrent) {
         tracing::error!("Failed to save download settings: {}", e);
@@ -323,10 +332,21 @@ pub async fn complete_setup(
         });
     }
 
+    // Collect arr configs for reload
+    let mut sonarr_config = None;
+    let mut radarr_config = None;
+
     // Save Sonarr config if provided
     if let Some(sonarr) = payload.sonarr {
         if let Err(e) = state.db.save_arr_config("sonarr", &sonarr.url, &sonarr.api_key) {
             tracing::error!("Failed to save Sonarr config: {}", e);
+        } else {
+            sonarr_config = Some(crate::config::ArrConfig {
+                enabled: true,
+                url: sonarr.url,
+                api_key: sonarr.api_key,
+                auto_import: true,
+            });
         }
     }
 
@@ -334,7 +354,20 @@ pub async fn complete_setup(
     if let Some(radarr) = payload.radarr {
         if let Err(e) = state.db.save_arr_config("radarr", &radarr.url, &radarr.api_key) {
             tracing::error!("Failed to save Radarr config: {}", e);
+        } else {
+            radarr_config = Some(crate::config::ArrConfig {
+                enabled: true,
+                url: radarr.url,
+                api_key: radarr.api_key,
+                auto_import: true,
+            });
         }
+    }
+
+    // Reload arr_client with new configurations
+    if sonarr_config.is_some() || radarr_config.is_some() {
+        state.download_orchestrator.reload_arr_client(sonarr_config, radarr_config).await;
+        tracing::info!("Reloaded *arr client with wizard settings");
     }
 
     // Save Jellyfin config if provided
@@ -353,6 +386,7 @@ pub async fn complete_setup(
         });
     }
 
+    tracing::info!("Setup wizard completed successfully");
     Json(SuccessResponse {
         success: true,
         message: "Setup completed successfully".to_string(),

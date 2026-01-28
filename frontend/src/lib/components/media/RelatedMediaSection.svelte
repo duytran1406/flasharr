@@ -29,6 +29,9 @@
     columns = 4,
   }: Props = $props();
 
+  // Safety: Ensure columns is always a valid positive integer
+  const safeColumns = $derived(Math.max(0, Math.floor(columns || 4)));
+
   function getTitle(item: MediaItem): string {
     return item.title || item.name || "Unknown";
   }
@@ -42,7 +45,7 @@
   <h3 class="section-label">{title}</h3>
   <div class="related-grid" style="--columns: {columns}">
     {#if loading}
-      {#each Array(columns) as _}
+      {#each Array(safeColumns) as _}
         <SkeletonCard mode="poster" />
       {/each}
     {:else if items.length > 0}

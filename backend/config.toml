@@ -8,8 +8,14 @@ max_concurrent = 3
 segments_per_download = 4
 
 [fshare]
-email = "duytran.1406@gmail.com"
-password = "duytran1406"
+email = ""
+password = ""
+
+[sonarr]
+enabled = true
+url = "http://192.168.1.110:8989"
+api_key = "6cc69aeeec80439eadc8ec63ef63f839"
+auto_import = true
 
 [radarr]
 enabled = true

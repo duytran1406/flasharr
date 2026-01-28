@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import { get } from "svelte/store";
   import { goto } from "$app/navigation";
   import { accountStore } from "$lib/stores/account.svelte";
   import {
@@ -40,46 +41,53 @@
   let indexerApiKey = $state("");
   let indexerUrl = $state("");
 
-  // Reactive: sync store data to local state
-  $effect(() => {
-    const dlSettings = $downloadSettings;
-    concurrency = dlSettings.max_concurrent;
-    threads = dlSettings.segments_per_download;
-    downloadPath = dlSettings.directory;
-  });
+  // Logs - use manual subscription to avoid reactive re-renders
+  let logs = $state<LogEntry[]>([]);
 
-  $effect(() => {
-    const idxSettings = $indexerSettings;
-    indexerApiKey = idxSettings.api_key;
-    indexerUrl = idxSettings.indexer_url;
-  });
-
-  $effect(() => {
-    const snrSettings = $sonarrSettings;
-    sonarrEnabled = snrSettings.enabled;
-    sonarrUrl = snrSettings.url;
-    sonarrApiKey = snrSettings.api_key;
-    sonarrAutoImport = snrSettings.auto_import;
-  });
-
-  $effect(() => {
-    const rdrSettings = $radarrSettings;
-    radarrEnabled = rdrSettings.enabled;
-    radarrUrl = rdrSettings.url;
-    radarrApiKey = rdrSettings.api_key;
-    radarrAutoImport = rdrSettings.auto_import;
-  });
-
-  let logs = $derived($systemLogs);
+  // Import LogEntry type
+  import type { LogEntry } from "$lib/stores/system";
 
   onMount(() => {
-    // Fetch settings-specific data using systemStore
-    systemStore.fetchLogs();
-    systemStore.fetchDownloadSettings();
-    systemStore.fetchIndexerSettings();
-    systemStore.fetchSonarrSettings();
-    systemStore.fetchRadarrSettings();
+    // Fetch all settings once on mount and initialize form state
+    (async () => {
+      await Promise.all([
+        systemStore.fetchDownloadSettings(),
+        systemStore.fetchIndexerSettings(),
+        systemStore.fetchSonarrSettings(),
+        systemStore.fetchRadarrSettings(),
+        systemStore.fetchLogs(),
+      ]);
 
+      // Initialize local form state from stores (one-time, non-reactive read)
+      const dlSettings = get(downloadSettings);
+      concurrency = dlSettings.max_concurrent;
+      threads = dlSettings.segments_per_download;
+      downloadPath = dlSettings.directory;
+
+      const idxSettings = get(indexerSettings);
+      indexerApiKey = idxSettings.api_key;
+      indexerUrl =
+        idxSettings.indexer_url || "http://flasharr:8484/api/indexer";
+
+      const snrSettings = get(sonarrSettings);
+      sonarrEnabled = snrSettings.enabled;
+      sonarrUrl = snrSettings.url;
+      sonarrApiKey = snrSettings.api_key;
+      sonarrAutoImport = snrSettings.auto_import;
+
+      const rdrSettings = get(radarrSettings);
+      radarrEnabled = rdrSettings.enabled;
+      radarrUrl = rdrSettings.url;
+      radarrApiKey = rdrSettings.api_key;
+      radarrAutoImport = rdrSettings.auto_import;
+    })();
+
+    // Subscribe to logs manually (doesn't cause component re-render)
+    const unsubscribeLogs = systemLogs.subscribe((value) => {
+      logs = value;
+    });
+
+    // Re-enable log polling - now it won't cause form resets!
     logInterval = setInterval(() => systemStore.fetchLogs(), 3000);
 
     // Set Page Header
@@ -120,6 +128,7 @@
   async function generateApiKey() {
     const newKey = await systemStore.generateIndexerApiKey();
     if (newKey) {
+      indexerApiKey = newKey; // Update local state
       toasts.success("New API key generated");
     } else {
       toasts.error("Failed to generate API key");
@@ -239,16 +248,8 @@
           </button>
           <button
             class="tab-btn-v3"
-            class:active={activeCategory === "indexer"}
-            onclick={() => (activeCategory = "indexer")}
-          >
-            <span class="material-icons">travel_explore</span>
-            <span>Indexer</span>
-          </button>
-          <button
-            class="tab-btn-v3"
-            class:active={activeCategory === "arrs"}
-            onclick={() => (activeCategory = "arrs")}
+            class:active={activeCategory === "services"}
+            onclick={() => (activeCategory = "services")}
           >
             <span class="material-icons">hub</span>
             <span>Services</span>
@@ -269,50 +270,72 @@
     <main class="settings-main-v3">
       <div class="content-container-v3">
         {#if activeCategory === "accounts"}
-          <section class="settings-section">
+          <section class="settings-section max-w-3xl">
             <div class="section-v3-title">
-              <h3>FShare Cloud Access</h3>
-              <p>Manage multiple premium connections and monitoring quotas.</p>
+              <h3>FShare Account</h3>
+              <p>
+                Configure your FShare premium account credentials and monitor
+                quota usage.
+              </p>
             </div>
-            <div class="accounts-grid-v3">
+
+            {#if accountStore.listFormatted.length > 0}
               {#each accountStore.listFormatted as acc}
-                <div class="identity-wrapper-v3">
-                  <IdentityCard
-                    email={acc.email}
-                    rank={acc.rank}
-                    expiry={acc.expiry}
-                    quotaUsed={acc.quotaUsed}
-                    quotaTotal={acc.quotaTotal}
-                    quotaPercent={acc.quotaPercent}
-                    onRefresh={() => accountStore.refresh(acc.email)}
-                    onLogout={async () => {
-                      if (
-                        confirm(
-                          `Are you sure you want to logout from ${acc.email}?`,
-                        )
-                      ) {
-                        await accountStore.logout(acc.email);
-                        toasts.success("Account removed");
-                      }
-                    }}
-                  />
-                </div>
-              {:else}
-                <div class="empty-placeholder-v3">
-                  <span class="material-icons">no_accounts</span>
-                  <p>No active connections detected</p>
+                <div class="account-status-card">
+                  <div class="account-header">
+                    <div class="account-info">
+                      <div class="account-avatar">
+                        <span class="material-icons">account_circle</span>
+                      </div>
+                      <div class="account-details">
+                        <div class="account-email">{acc.email}</div>
+                        <div class="account-rank">{acc.rank} Account</div>
+                      </div>
+                    </div>
+                    <button
+                      class="btn-refresh"
+                      onclick={() => accountStore.refresh(acc.email)}
+                    >
+                      <span class="material-icons">refresh</span>
+                      REFRESH
+                    </button>
+                  </div>
+
+                  <div class="quota-section">
+                    <div class="quota-header">
+                      <span>Storage Quota</span>
+                      <span class="quota-text"
+                        >{acc.quotaUsed} / {acc.quotaTotal}</span
+                      >
+                    </div>
+                    <div class="quota-bar">
+                      <div
+                        class="quota-fill"
+                        style="width: {acc.quotaPercent}%"
+                      ></div>
+                    </div>
+                  </div>
+
+                  <div class="account-meta">
+                    <div class="meta-item">
+                      <span class="material-icons">event</span>
+                      <span>Expires: {acc.expiry}</span>
+                    </div>
+                  </div>
                 </div>
               {/each}
-              <button
-                class="add-account-card-v3"
-                onclick={() => goto("/setup")}
-              >
-                <div class="inner">
-                  <span class="material-icons">add</span>
-                  <span>Link New Account</span>
+            {:else}
+              <div class="premium-config-card">
+                <div class="empty-state">
+                  <span class="material-icons">cloud_off</span>
+                  <h4>No Account Connected</h4>
+                  <p>
+                    Please complete the setup wizard to configure your FShare
+                    account.
+                  </p>
                 </div>
-              </button>
-            </div>
+              </div>
+            {/if}
           </section>
         {/if}
 
@@ -377,224 +400,323 @@
           </section>
         {/if}
 
-        {#if activeCategory === "indexer"}
-          <section class="settings-section max-w-3xl">
-            <div class="section-v3-title">
-              <h3>Newznab Indexer API</h3>
-              <p>Expose local library metadata to external automation tools.</p>
-            </div>
-            <div class="premium-config-card">
-              <div class="input-v3-group">
-                <label for="indexer-endpoint">INDEXER ENDPOINT</label>
-                <div class="input-v3-box readonly">
-                  <span class="material-icons">link</span>
-                  <input
-                    type="text"
-                    id="indexer-endpoint"
-                    value={indexerUrl}
-                    readonly
-                  />
-                  <button
-                    class="icon-action"
-                    onclick={() => copyToClipboard(indexerUrl, "Indexer URL")}
-                  >
-                    <span class="material-icons">content_copy</span>
-                  </button>
-                </div>
-              </div>
-
-              <div class="input-v3-group">
-                <label for="indexer-key">API KEY</label>
-                <div class="input-v3-box readonly">
-                  <span class="material-icons">key</span>
-                  <input
-                    type={showApiKey ? "text" : "password"}
-                    id="indexer-key"
-                    value={indexerApiKey}
-                    readonly
-                  />
-                  <button
-                    class="icon-action"
-                    onclick={() => (showApiKey = !showApiKey)}
-                  >
-                    <span class="material-icons"
-                      >{showApiKey ? "visibility_off" : "visibility"}</span
-                    >
-                  </button>
-                  <button
-                    class="icon-action"
-                    onclick={() => copyToClipboard(indexerApiKey, "API Key")}
-                  >
-                    <span class="material-icons">content_copy</span>
-                  </button>
-                </div>
-              </div>
-
-              <div class="card-action-v3">
-                <button class="btn-secondary-v3" onclick={generateApiKey}>
-                  <span class="material-icons">refresh</span>
-                  REGENERATE API KEY
-                </button>
-              </div>
-            </div>
-          </section>
-        {/if}
-
-        {#if activeCategory === "arrs"}
+        {#if activeCategory === "services"}
           <section class="settings-section">
             <div class="section-v3-title">
-              <h3>Arr Cloud Integrations</h3>
-              <p>Automate library synchronization with Sonarr and Radarr.</p>
+              <h3>Services & Integrations</h3>
+              <p>Configure Newznab indexer API and Arr cloud integrations.</p>
             </div>
-            <div class="arr-grid-v3">
+            <div class="services-grid-3col">
+              <!-- Newznab Indexer -->
+              <div class="integration-card">
+                <div class="integration-card-header">
+                  <div class="integration-brand">
+                    <img
+                      src="/images/newznab-logo.png"
+                      alt="Newznab"
+                      class="integration-icon"
+                    />
+                    <span>Newznab</span>
+                  </div>
+                </div>
+                <div class="integration-card-body">
+                  <div class="node-field">
+                    <label for="indexer-endpoint">INDEXER ENDPOINT</label>
+                    <input
+                      type="text"
+                      id="indexer-endpoint"
+                      value="http://flasharr:8484/newznab/api"
+                      readonly
+                      class="readonly-input"
+                    />
+                  </div>
+                  <div class="node-field">
+                    <label for="newznab-username">USERNAME</label>
+                    <input
+                      type="text"
+                      id="newznab-username"
+                      value="flasharr"
+                      readonly
+                      class="readonly-input"
+                    />
+                  </div>
+                  <div class="node-field">
+                    <label for="newznab-password">PASSWORD</label>
+                    <input
+                      type="text"
+                      id="newznab-password"
+                      value="flasharr-pwd"
+                      readonly
+                      class="readonly-input"
+                    />
+                  </div>
+                  <div class="node-field">
+                    <label for="indexer-key">API KEY</label>
+                    <div class="pass-box">
+                      <input
+                        type={showApiKey ? "text" : "password"}
+                        id="indexer-key"
+                        value={indexerApiKey}
+                        readonly
+                      />
+                      <button
+                        class="visibility-toggle"
+                        onclick={() => (showApiKey = !showApiKey)}
+                      >
+                        <span class="material-icons"
+                          >{showApiKey ? "visibility_off" : "visibility"}</span
+                        >
+                      </button>
+                    </div>
+                  </div>
+                  <div class="node-actions">
+                    <button
+                      class="btn-save full-width"
+                      onclick={generateApiKey}
+                    >
+                      <span class="material-icons">refresh</span>
+                      REGENERATE KEY
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- SABnzbd Download Client -->
+              <div class="integration-card">
+                <div class="integration-card-header">
+                  <div class="integration-brand">
+                    <img
+                      src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/sabnzbd.png"
+                      alt="SABnzbd"
+                      class="integration-icon"
+                    />
+                    <span>SABnzbd</span>
+                  </div>
+                </div>
+                <div class="integration-card-body">
+                  <div class="node-field">
+                    <label for="sabnzbd-endpoint"
+                      >DOWNLOAD CLIENT ENDPOINT</label
+                    >
+                    <input
+                      type="text"
+                      id="sabnzbd-endpoint"
+                      value="http://flasharr:8484/sabnzbd/api"
+                      readonly
+                      class="readonly-input"
+                    />
+                  </div>
+                  <div class="node-field">
+                    <label for="sabnzbd-username">USERNAME</label>
+                    <input
+                      type="text"
+                      id="sabnzbd-username"
+                      value="flasharr"
+                      readonly
+                      class="readonly-input"
+                    />
+                  </div>
+                  <div class="node-field">
+                    <label for="sabnzbd-password">PASSWORD</label>
+                    <input
+                      type="text"
+                      id="sabnzbd-password"
+                      value="flasharr-pwd"
+                      readonly
+                      class="readonly-input"
+                    />
+                  </div>
+                  <div class="node-field">
+                    <label for="sabnzbd-key">API KEY</label>
+                    <div class="pass-box">
+                      <input
+                        type={showApiKey ? "text" : "password"}
+                        id="sabnzbd-key"
+                        value={indexerApiKey}
+                        readonly
+                      />
+                      <button
+                        class="visibility-toggle"
+                        onclick={() => (showApiKey = !showApiKey)}
+                      >
+                        <span class="material-icons"
+                          >{showApiKey ? "visibility_off" : "visibility"}</span
+                        >
+                      </button>
+                    </div>
+                  </div>
+                  <div class="node-field">
+                    <div class="field-label">COMPATIBILITY</div>
+                    <div class="info-badge">
+                      <span class="material-icons">check_circle</span>
+                      <span>SABnzbd v3.0.0 Compatible</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <!-- Sonarr -->
-              <div class="arr-node-v3 sonarr" class:active={sonarrEnabled}>
-                <div class="node-header">
-                  <div class="brand sonarr">
+              <div class="integration-card">
+                <div class="integration-card-header">
+                  <div class="integration-brand">
                     <img
                       src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/sonarr.png"
                       alt="Sonarr"
-                      class="brand-logo"
+                      class="integration-icon"
                     />
-                    <span>SONARR</span>
+                    <span>Sonarr</span>
                   </div>
                   <label class="hybrid-switch">
                     <input type="checkbox" bind:checked={sonarrEnabled} />
                     <span class="switch-ui"></span>
                   </label>
                 </div>
-                <div class="node-body">
-                  <div class="node-field">
-                    <label for="sn-url">SERVICE URL</label>
-                    <input
-                      type="text"
-                      id="sn-url"
-                      bind:value={sonarrUrl}
-                      placeholder="http://localhost:8989"
-                    />
-                  </div>
-                  <div class="node-field">
-                    <label for="sn-key">API KEY</label>
-                    <div class="pass-box">
+                {#if sonarrEnabled}
+                  <div class="integration-card-body">
+                    <div class="node-field">
+                      <label for="sn-url">SERVICE URL</label>
                       <input
-                        type={showSonarrApiKey ? "text" : "password"}
-                        id="sn-key"
-                        bind:value={sonarrApiKey}
-                        placeholder="Enter your Sonarr API key"
+                        type="text"
+                        id="sn-url"
+                        bind:value={sonarrUrl}
+                        placeholder="http://localhost:8989"
                       />
-                      <button
-                        class="visibility-toggle"
-                        onclick={() => (showSonarrApiKey = !showSonarrApiKey)}
-                      >
-                        <span class="material-icons"
-                          >{showSonarrApiKey
-                            ? "visibility_off"
-                            : "visibility"}</span
+                    </div>
+                    <div class="node-field">
+                      <label for="sn-key">API KEY</label>
+                      <div class="pass-box">
+                        <input
+                          type={showSonarrApiKey ? "text" : "password"}
+                          id="sn-key"
+                          bind:value={sonarrApiKey}
+                          placeholder="Enter your Sonarr API key"
+                        />
+                        <button
+                          class="visibility-toggle"
+                          onclick={() => (showSonarrApiKey = !showSonarrApiKey)}
                         >
+                          <span class="material-icons"
+                            >{showSonarrApiKey
+                              ? "visibility_off"
+                              : "visibility"}</span
+                          >
+                        </button>
+                      </div>
+                    </div>
+                    <div class="node-toggle">
+                      <div class="txt">
+                        <span>Auto-Import</span>
+                        <small>Trigger import on download completion</small>
+                      </div>
+                      <label class="v3-switch-mini">
+                        <input
+                          type="checkbox"
+                          bind:checked={sonarrAutoImport}
+                        />
+                        <span class="slider-mini"></span>
+                      </label>
+                    </div>
+                    <div class="node-actions">
+                      <button
+                        class="btn-test"
+                        onclick={testSonarrConnection}
+                        disabled={sonarrTesting}
+                      >
+                        <span
+                          class="material-icons"
+                          class:rotating={sonarrTesting}
+                          >{sonarrTesting ? "refresh" : "sync_alt"}</span
+                        >
+                        {sonarrTesting ? "TESTING" : "TEST"}
                       </button>
+                      <button class="btn-save" onclick={saveSonarrSettings}
+                        >SAVE</button
+                      >
                     </div>
                   </div>
-                  <div class="node-toggle">
-                    <div class="txt">
-                      <span>Auto-Import</span>
-                      <small>Trigger import on download completion</small>
-                    </div>
-                    <label class="v3-switch-mini">
-                      <input type="checkbox" bind:checked={sonarrAutoImport} />
-                      <span class="slider-mini"></span>
-                    </label>
-                  </div>
-                </div>
-                <div class="node-actions">
-                  <button
-                    class="btn-test"
-                    onclick={testSonarrConnection}
-                    disabled={sonarrTesting}
-                  >
-                    <span class="material-icons" class:rotating={sonarrTesting}
-                      >{sonarrTesting ? "refresh" : "sync_alt"}</span
-                    >
-                    {sonarrTesting ? "TESTING" : "TEST"}
-                  </button>
-                  <button class="btn-save" onclick={saveSonarrSettings}
-                    >SAVE</button
-                  >
-                </div>
+                {/if}
               </div>
 
               <!-- Radarr -->
-              <div class="arr-node-v3 radarr" class:active={radarrEnabled}>
-                <div class="node-header">
-                  <div class="brand radarr">
+              <div class="integration-card">
+                <div class="integration-card-header">
+                  <div class="integration-brand">
                     <img
                       src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/radarr.png"
                       alt="Radarr"
-                      class="brand-logo"
+                      class="integration-icon"
                     />
-                    <span>RADARR</span>
+                    <span>Radarr</span>
                   </div>
                   <label class="hybrid-switch">
                     <input type="checkbox" bind:checked={radarrEnabled} />
                     <span class="switch-ui"></span>
                   </label>
                 </div>
-                <div class="node-body">
-                  <div class="node-field">
-                    <label for="rd-url">SERVICE URL</label>
-                    <input
-                      type="text"
-                      id="rd-url"
-                      bind:value={radarrUrl}
-                      placeholder="http://localhost:7878"
-                    />
-                  </div>
-                  <div class="node-field">
-                    <label for="rd-key">API KEY</label>
-                    <div class="pass-box">
+                {#if radarrEnabled}
+                  <div class="integration-card-body">
+                    <div class="node-field">
+                      <label for="rd-url">SERVICE URL</label>
                       <input
-                        type={showRadarrApiKey ? "text" : "password"}
-                        id="rd-key"
-                        bind:value={radarrApiKey}
-                        placeholder="Enter your Radarr API key"
+                        type="text"
+                        id="rd-url"
+                        bind:value={radarrUrl}
+                        placeholder="http://localhost:7878"
                       />
-                      <button
-                        class="visibility-toggle"
-                        onclick={() => (showRadarrApiKey = !showRadarrApiKey)}
-                      >
-                        <span class="material-icons"
-                          >{showRadarrApiKey
-                            ? "visibility_off"
-                            : "visibility"}</span
+                    </div>
+                    <div class="node-field">
+                      <label for="rd-key">API KEY</label>
+                      <div class="pass-box">
+                        <input
+                          type={showRadarrApiKey ? "text" : "password"}
+                          id="rd-key"
+                          bind:value={radarrApiKey}
+                          placeholder="Enter your Radarr API key"
+                        />
+                        <button
+                          class="visibility-toggle"
+                          onclick={() => (showRadarrApiKey = !showRadarrApiKey)}
                         >
+                          <span class="material-icons"
+                            >{showRadarrApiKey
+                              ? "visibility_off"
+                              : "visibility"}</span
+                          >
+                        </button>
+                      </div>
+                    </div>
+                    <div class="node-toggle">
+                      <div class="txt">
+                        <span>Auto-Import</span>
+                        <small>Trigger import on download completion</small>
+                      </div>
+                      <label class="v3-switch-mini">
+                        <input
+                          type="checkbox"
+                          bind:checked={radarrAutoImport}
+                        />
+                        <span class="slider-mini"></span>
+                      </label>
+                    </div>
+                    <div class="node-actions">
+                      <button
+                        class="btn-test"
+                        onclick={testRadarrConnection}
+                        disabled={radarrTesting}
+                      >
+                        <span
+                          class="material-icons"
+                          class:rotating={radarrTesting}
+                          >{radarrTesting ? "refresh" : "sync_alt"}</span
+                        >
+                        {radarrTesting ? "TESTING" : "TEST"}
                       </button>
+                      <button class="btn-save" onclick={saveRadarrSettings}
+                        >SAVE</button
+                      >
                     </div>
                   </div>
-                  <div class="node-toggle">
-                    <div class="txt">
-                      <span>Auto-Import</span>
-                      <small>Trigger import on download completion</small>
-                    </div>
-                    <label class="v3-switch-mini">
-                      <input type="checkbox" bind:checked={radarrAutoImport} />
-                      <span class="slider-mini"></span>
-                    </label>
-                  </div>
-                </div>
-                <div class="node-actions">
-                  <button
-                    class="btn-test"
-                    onclick={testRadarrConnection}
-                    disabled={radarrTesting}
-                  >
-                    <span class="material-icons" class:rotating={radarrTesting}
-                      >{radarrTesting ? "refresh" : "sync_alt"}</span
-                    >
-                    {radarrTesting ? "TESTING" : "TEST"}
-                  </button>
-                  <button class="btn-save" onclick={saveRadarrSettings}
-                    >SAVE</button
-                  >
-                </div>
+                {/if}
               </div>
             </div>
           </section>
@@ -843,6 +965,185 @@
     transform: translateY(-4px);
   }
 
+  /* Account Status Card */
+  .account-status-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 20px;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .account-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .account-info {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+  }
+
+  .account-avatar {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: linear-gradient(
+      135deg,
+      rgba(0, 243, 255, 0.2),
+      rgba(0, 243, 255, 0.05)
+    );
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid rgba(0, 243, 255, 0.3);
+  }
+
+  .account-avatar .material-icons {
+    font-size: 2rem;
+    color: var(--color-primary);
+  }
+
+  .account-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .account-email {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #fff;
+  }
+
+  .account-rank {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .btn-refresh {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-secondary);
+    border-radius: 12px;
+    height: 44px;
+    padding: 0 1.5rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.75rem;
+    transition: all 0.2s;
+  }
+
+  .btn-refresh:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+
+  .btn-refresh .material-icons {
+    font-size: 1.1rem;
+  }
+
+  .quota-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 1.5rem;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .quota-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+
+  .quota-text {
+    color: #fff;
+    font-family: var(--font-mono);
+  }
+
+  .quota-bar {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .quota-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--color-primary), #00d4ff);
+    border-radius: 10px;
+    transition: width 0.3s ease;
+  }
+
+  .account-meta {
+    display: flex;
+    gap: 1.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .meta-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+  }
+
+  .meta-item .material-icons {
+    font-size: 1.1rem;
+    color: var(--color-primary);
+  }
+
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+    padding: 3rem 2rem;
+    text-align: center;
+  }
+
+  .empty-state .material-icons {
+    font-size: 4rem;
+    color: var(--text-muted);
+    opacity: 0.5;
+  }
+
+  .empty-state h4 {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #fff;
+    margin: 0;
+  }
+
+  .empty-state p {
+    font-size: 0.9rem;
+    color: var(--text-muted);
+    margin: 0;
+    max-width: 400px;
+  }
+
   .premium-config-card {
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid rgba(255, 255, 255, 0.05);
@@ -987,6 +1288,178 @@
     gap: 2rem;
   }
 
+  .services-grid-3col {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5rem;
+  }
+
+  @media (max-width: 900px) {
+    .services-grid-3col {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .info-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: rgba(0, 243, 255, 0.05);
+    border: 1px solid rgba(0, 243, 255, 0.15);
+    border-radius: 10px;
+    color: var(--color-primary);
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+
+  .info-badge .material-icons {
+    font-size: 1.2rem;
+    color: var(--color-primary);
+  }
+
+  .service-icon {
+    width: 48px;
+    height: 48px;
+    font-size: 2rem !important;
+    color: var(--color-primary);
+    filter: drop-shadow(0 0 8px rgba(0, 243, 255, 0.3));
+  }
+
+  .input-with-copy {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .input-with-copy input {
+    flex: 1;
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    height: 48px;
+    padding: 0 1rem;
+    color: #fff;
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    outline: none;
+    transition: all 0.2s;
+  }
+
+  .input-with-copy input:focus {
+    border-color: var(--color-primary);
+    background: rgba(0, 0, 0, 0.6);
+    box-shadow: 0 0 0 3px rgba(0, 243, 255, 0.1);
+  }
+
+  .copy-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: none;
+    color: var(--text-muted);
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    flex-shrink: 0;
+  }
+
+  .copy-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--color-primary);
+  }
+
+  .copy-btn .material-icons {
+    font-size: 1.1rem;
+  }
+
+  .btn-secondary-full {
+    width: 100%;
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-secondary);
+    border-radius: 12px;
+    height: 48px;
+    padding: 0 1.5rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.75rem;
+    transition: all 0.3s;
+  }
+
+  .btn-secondary-full:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: var(--color-primary);
+    color: var(--color-primary);
+  }
+
+  .btn-secondary-full .material-icons {
+    font-size: 1.2rem;
+  }
+
+  /* Integration Card - Wizard Style */
+  .integration-card {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 12px;
+    padding: 1.25rem;
+    transition: all 0.2s;
+  }
+
+  .integration-card:hover {
+    border-color: rgba(0, 243, 255, 0.2);
+  }
+
+  .integration-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 1rem;
+  }
+
+  .integration-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .integration-brand {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  .integration-icon {
+    width: 48px;
+    height: 48px;
+    object-fit: contain;
+    padding: 6px;
+    border-radius: 12px;
+    position: relative;
+    z-index: 1;
+    filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.5))
+      drop-shadow(0 0 8px rgba(0, 243, 255, 0.3));
+  }
+
+  .integration-brand > span {
+    font-weight: 600;
+    font-size: 1rem;
+    color: #fff;
+  }
+
   .arr-node-v3 {
     background: rgba(10, 12, 18, 0.6);
     border: 1px solid rgba(255, 255, 255, 0.05);
@@ -1052,8 +1525,6 @@
     width: 48px;
     height: 48px;
     object-fit: contain;
-    padding: 6px;
-    border-radius: 12px;
     position: relative;
     z-index: 1;
     filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.5))
@@ -1062,40 +1533,15 @@
   }
 
   .arr-node-v3:hover .brand-logo {
-    transform: scale(1.1);
     filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.7))
-      drop-shadow(0 0 15px rgba(0, 243, 255, 0.5));
+      drop-shadow(0 0 12px rgba(0, 243, 255, 0.5));
   }
 
-  .brand span:first-child {
-    width: 48px;
-    height: 48px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 12px;
+  .brand > span {
+    font-weight: 600;
+    font-size: 1.05rem;
     color: #fff;
-    font-size: 1.5rem;
-    transition: all 0.3s;
-  }
-
-  .arr-node-v3:hover .brand span:first-child {
-    transform: scale(1.1);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-  }
-
-  /* Legacy span styles - kept for fallback but images now used */
-  .sonarr .brand span:first-child,
-  .radarr .brand span:first-child {
-    background: transparent;
-    box-shadow: none;
-  }
-
-  .brand span:last-child {
-    font-weight: 900;
-    letter-spacing: 0.1em;
-    font-size: 1.1rem;
-    color: #fff;
+    letter-spacing: 0.02em;
   }
 
   .node-body {
@@ -1111,7 +1557,8 @@
     gap: 0.5rem;
   }
 
-  .node-field label {
+  .node-field label,
+  .node-field .field-label {
     font-size: 0.65rem;
     font-weight: 900;
     color: var(--text-muted);
@@ -1251,6 +1698,21 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 1rem;
+  }
+
+  .node-actions.single-action {
+    grid-template-columns: 1fr;
+  }
+
+  .readonly-input {
+    background: rgba(0, 0, 0, 0.4) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    cursor: default !important;
+    color: rgba(255, 255, 255, 0.7) !important;
+  }
+
+  .full-width {
+    width: 100%;
   }
 
   /* Premium Range V3 */

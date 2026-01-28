@@ -14,6 +14,16 @@ pub struct EngineStats {
     pub total_speed: f64,
 }
 
+impl PartialEq for EngineStats {
+    fn eq(&self, other: &Self) -> bool {
+        self.active_downloads == other.active_downloads
+            && self.queued == other.queued
+            && self.completed == other.completed
+            && self.failed == other.failed
+            && (self.total_speed - other.total_speed).abs() < 0.01 // Consider speeds within 0.01 B/s as equal
+    }
+}
+
 impl Default for EngineStats {
     fn default() -> Self {
         Self {

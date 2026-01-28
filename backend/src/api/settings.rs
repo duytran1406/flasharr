@@ -181,15 +181,21 @@ async fn update_downloads_settings(
 /// GET /api/settings/sonarr - Get Sonarr settings
 async fn get_sonarr_settings(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<ArrSettings>, StatusCode> {
-    state.config.sonarr.as_ref()
-        .map(|s| Json(ArrSettings {
+) -> Json<ArrSettings> {
+    let settings = state.config.sonarr.as_ref()
+        .map(|s| ArrSettings {
             enabled: s.enabled,
             url: s.url.clone(),
             api_key: mask_api_key(&s.api_key),
             auto_import: s.auto_import,
-        }))
-        .ok_or(StatusCode::NOT_FOUND)
+        })
+        .unwrap_or(ArrSettings {
+            enabled: false,
+            url: "http://localhost:8989".to_string(),
+            api_key: String::new(),
+            auto_import: true,
+        });
+    Json(settings)
 }
 
 /// PUT /api/settings/sonarr - Update Sonarr settings
@@ -197,24 +203,43 @@ async fn update_sonarr_settings(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ArrSettings>,
 ) -> Json<ActionResponse> {
+    // Test connection first if enabled
+    if payload.enabled {
+        match crate::arr::ArrClient::test_sonarr_connection(&payload.url, &payload.api_key).await {
+            Ok(status) => {
+                tracing::info!("Sonarr connection test successful: {}", status);
+            }
+            Err(e) => {
+                return Json(ActionResponse {
+                    success: false,
+                    message: Some(format!("Sonarr connection test failed: {}", e)),
+                });
+            }
+        }
+    }
+    
     // Update in-memory config
     let mut config = state.config.clone();
-    config.sonarr = Some(crate::config::ArrConfig {
+    let sonarr_config = Some(crate::config::ArrConfig {
         enabled: payload.enabled,
-        url: payload.url,
-        api_key: payload.api_key,
+        url: payload.url.clone(),
+        api_key: payload.api_key.clone(),
         auto_import: payload.auto_import,
     });
+    config.sonarr = sonarr_config.clone();
     
     // Save to config.toml
     match crate::config::save_config(&config) {
         Ok(_) => {
-            // Update AppState config
-            // Note: This won't update the orchestrator's arr_client until restart
-            // For full dynamic updates, we'd need to reload the orchestrator
+            // Reload arr_client dynamically (no restart needed!)
+            state.download_orchestrator.reload_arr_client(
+                sonarr_config,
+                config.radarr.clone(),
+            ).await;
+            
             Json(ActionResponse {
                 success: true,
-                message: Some("Sonarr settings saved. Restart required for changes to take effect.".to_string()),
+                message: Some("Sonarr settings saved and applied successfully.".to_string()),
             })
         }
         Err(e) => {
@@ -230,15 +255,21 @@ async fn update_sonarr_settings(
 /// GET /api/settings/radarr - Get Radarr settings
 async fn get_radarr_settings(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<ArrSettings>, StatusCode> {
-    state.config.radarr.as_ref()
-        .map(|r| Json(ArrSettings {
+) -> Json<ArrSettings> {
+    let settings = state.config.radarr.as_ref()
+        .map(|r| ArrSettings {
             enabled: r.enabled,
             url: r.url.clone(),
             api_key: mask_api_key(&r.api_key),
             auto_import: r.auto_import,
-        }))
-        .ok_or(StatusCode::NOT_FOUND)
+        })
+        .unwrap_or(ArrSettings {
+            enabled: false,
+            url: "http://localhost:7878".to_string(),
+            api_key: String::new(),
+            auto_import: true,
+        });
+    Json(settings)
 }
 
 /// PUT /api/settings/radarr - Update Radarr settings
@@ -246,24 +277,43 @@ async fn update_radarr_settings(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ArrSettings>,
 ) -> Json<ActionResponse> {
+    // Test connection first if enabled
+    if payload.enabled {
+        match crate::arr::ArrClient::test_radarr_connection(&payload.url, &payload.api_key).await {
+            Ok(status) => {
+                tracing::info!("Radarr connection test successful: {}", status);
+            }
+            Err(e) => {
+                return Json(ActionResponse {
+                    success: false,
+                    message: Some(format!("Radarr connection test failed: {}", e)),
+                });
+            }
+        }
+    }
+    
     // Update in-memory config
     let mut config = state.config.clone();
-    config.radarr = Some(crate::config::ArrConfig {
+    let radarr_config = Some(crate::config::ArrConfig {
         enabled: payload.enabled,
-        url: payload.url,
-        api_key: payload.api_key,
+        url: payload.url.clone(),
+        api_key: payload.api_key.clone(),
         auto_import: payload.auto_import,
     });
+    config.radarr = radarr_config.clone();
     
     // Save to config.toml
     match crate::config::save_config(&config) {
         Ok(_) => {
-            // Update AppState config
-            // Note: This won't update the orchestrator's arr_client until restart
-            // For full dynamic updates, we'd need to reload the orchestrator
+            // Reload arr_client dynamically (no restart needed!)
+            state.download_orchestrator.reload_arr_client(
+                config.sonarr.clone(),
+                radarr_config,
+            ).await;
+            
             Json(ActionResponse {
                 success: true,
-                message: Some("Radarr settings saved. Restart required for changes to take effect.".to_string()),
+                message: Some("Radarr settings saved and applied successfully.".to_string()),
             })
         }
         Err(e) => {
@@ -279,20 +329,23 @@ async fn update_radarr_settings(
 /// GET /api/settings/indexer - Get indexer settings
 async fn get_indexer_settings(
     State(state): State<Arc<AppState>>,
-) -> Result<Json<IndexerSettings>, StatusCode> {
-    state.config.indexer.as_ref()
-        .map(|i| {
-            let host = &state.config.server.host;
-            let port = state.config.server.port;
-            let indexer_url = format!("http://{}:{}/api/indexer", host, port);
-            
-            Json(IndexerSettings {
-                enabled: i.enabled,
-                api_key: i.api_key.clone(),
-                indexer_url,
-            })
+) -> Json<IndexerSettings> {
+    let host = &state.config.server.host;
+    let port = state.config.server.port;
+    let indexer_url = format!("http://{}:{}/api/indexer", host, port);
+    
+    let settings = state.config.indexer.as_ref()
+        .map(|i| IndexerSettings {
+            enabled: i.enabled,
+            api_key: i.api_key.clone(),
+            indexer_url: indexer_url.clone(),
         })
-        .ok_or(StatusCode::NOT_FOUND)
+        .unwrap_or(IndexerSettings {
+            enabled: false,
+            api_key: String::new(),
+            indexer_url,
+        });
+    Json(settings)
 }
 
 /// PUT /api/settings/indexer - Update indexer settings

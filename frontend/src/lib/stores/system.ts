@@ -1,4 +1,4 @@
-import { writable, derived } from 'svelte/store';
+import { writable } from 'svelte/store';
 
 /**
  * Download Settings Interface
@@ -46,340 +46,297 @@ export interface LogEntry {
   message: string;
 }
 
+// ============================================================================
+// SEPARATE INDEPENDENT STORES
+// Each store is independent - updating one does NOT trigger others to re-emit
+// ============================================================================
+
 /**
- * System Store State
+ * Download Settings Store
  */
-interface SystemStoreState {
-  downloadSettings: DownloadSettings;
-  indexerSettings: IndexerSettings;
-  sonarrSettings: SonarrSettings;
-  radarrSettings: RadarrSettings;
-  logs: LogEntry[];
-  loading: boolean;
-  error: string | null;
+export const downloadSettings = writable<DownloadSettings>({
+  directory: '/downloads',
+  max_concurrent: 3,
+  segments_per_download: 4,
+});
+
+/**
+ * Indexer Settings Store
+ */
+export const indexerSettings = writable<IndexerSettings>({
+  api_key: '',
+  indexer_url: '',
+});
+
+/**
+ * Sonarr Settings Store
+ */
+export const sonarrSettings = writable<SonarrSettings>({
+  enabled: false,
+  url: 'http://localhost:8989',
+  api_key: '',
+  auto_import: true,
+});
+
+/**
+ * Radarr Settings Store
+ */
+export const radarrSettings = writable<RadarrSettings>({
+  enabled: false,
+  url: 'http://localhost:7878',
+  api_key: '',
+  auto_import: true,
+});
+
+/**
+ * System Logs Store
+ */
+export const systemLogs = writable<LogEntry[]>([]);
+
+/**
+ * Loading State Store
+ */
+export const systemLoading = writable<boolean>(false);
+
+/**
+ * Error State Store
+ */
+export const systemError = writable<string | null>(null);
+
+// ============================================================================
+// API FUNCTIONS
+// Each function only updates its specific store
+// ============================================================================
+
+const API_BASE = '/api';
+
+/**
+ * Fetch download settings - ONLY updates downloadSettings store
+ */
+export async function fetchDownloadSettings(): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE}/settings/downloads`);
+    if (response.ok) {
+      const data = await response.json();
+      downloadSettings.set(data);
+    }
+  } catch (err) {
+    console.error('[SystemStore] Fetch download settings error:', err);
+  }
 }
 
 /**
- * Create the system store
+ * Save download settings
  */
-function createSystemStore() {
-  const initialState: SystemStoreState = {
-    downloadSettings: {
-      directory: '/downloads',
-      max_concurrent: 3,
-      segments_per_download: 4,
-    },
-    indexerSettings: {
-      api_key: '',
-      indexer_url: '',
-    },
-    sonarrSettings: {
-      enabled: false,
-      url: 'http://localhost:8989',
-      api_key: '',
-      auto_import: true,
-    },
-    radarrSettings: {
-      enabled: false,
-      url: 'http://localhost:7878',
-      api_key: '',
-      auto_import: true,
-    },
-    logs: [],
-    loading: false,
-    error: null,
-  };
+export async function saveDownloadSettings(settings: DownloadSettings): Promise<{ success: boolean; message?: string }> {
+  try {
+    const response = await fetch(`${API_BASE}/settings/downloads`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
 
-  const { subscribe, set, update } = writable<SystemStoreState>(initialState);
-
-  const API_BASE = '/api';
-
-  /**
-   * Fetch download settings
-   */
-  async function fetchDownloadSettings(): Promise<void> {
-    try {
-      const response = await fetch(`${API_BASE}/settings/downloads`);
-      if (response.ok) {
-        const data = await response.json();
-        update(state => ({
-          ...state,
-          downloadSettings: data,
-        }));
-      }
-    } catch (err) {
-      console.error('[SystemStore] Fetch download settings error:', err);
-    }
-  }
-
-  /**
-   * Save download settings
-   */
-  async function saveDownloadSettings(settings: DownloadSettings): Promise<{ success: boolean; message?: string }> {
-    try {
-      const response = await fetch(`${API_BASE}/settings/downloads`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        update(state => ({
-          ...state,
-          downloadSettings: settings,
-        }));
-        return { success: data.success, message: data.message };
-      }
-      return { success: false, message: 'Failed to save settings' };
-    } catch (err) {
-      console.error('[SystemStore] Save download settings error:', err);
-      return { success: false, message: 'Network error' };
-    }
-  }
-
-  /**
-   * Fetch indexer settings
-   */
-  async function fetchIndexerSettings(): Promise<void> {
-    try {
-      const response = await fetch(`${API_BASE}/settings/indexer`);
-      if (response.ok) {
-        const data = await response.json();
-        update(state => ({
-          ...state,
-          indexerSettings: data,
-        }));
-      }
-    } catch (err) {
-      console.error('[SystemStore] Fetch indexer settings error:', err);
-    }
-  }
-
-  /**
-   * Generate new indexer API key
-   */
-  async function generateIndexerApiKey(): Promise<string | null> {
-    try {
-      const response = await fetch(`${API_BASE}/settings/indexer/generate-key`);
-      if (response.ok) {
-        const data = await response.json();
-        update(state => ({
-          ...state,
-          indexerSettings: {
-            ...state.indexerSettings,
-            api_key: data.api_key,
-          },
-        }));
-        return data.api_key;
-      }
-      return null;
-    } catch (err) {
-      console.error('[SystemStore] Generate API key error:', err);
-      return null;
-    }
-  }
-
-  /**
-   * Fetch Sonarr settings
-   */
-  async function fetchSonarrSettings(): Promise<void> {
-    try {
-      const response = await fetch(`${API_BASE}/settings/sonarr`);
-      if (response.ok) {
-        const data = await response.json();
-        update(state => ({
-          ...state,
-          sonarrSettings: data,
-        }));
-      }
-    } catch (err) {
-      console.error('[SystemStore] Fetch Sonarr settings error:', err);
-    }
-  }
-
-  /**
-   * Save Sonarr settings
-   */
-  async function saveSonarrSettings(settings: SonarrSettings): Promise<{ success: boolean; message?: string }> {
-    try {
-      const response = await fetch(`${API_BASE}/settings/sonarr`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        update(state => ({
-          ...state,
-          sonarrSettings: settings,
-        }));
-        return { success: data.success, message: data.message };
-      }
-      return { success: false };
-    } catch (err) {
-      console.error('[SystemStore] Save Sonarr settings error:', err);
-      return { success: false };
-    }
-  }
-
-  /**
-   * Test Sonarr connection
-   */
-  async function testSonarrConnection(settings: SonarrSettings): Promise<{ success: boolean; message?: string }> {
-    try {
-      const response = await fetch(`${API_BASE}/settings/sonarr/test`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
-      });
-
+    if (response.ok) {
       const data = await response.json();
+      downloadSettings.set(settings);
       return { success: data.success, message: data.message };
-    } catch (err) {
-      console.error('[SystemStore] Test Sonarr connection error:', err);
-      return { success: false, message: 'Connection failed' };
     }
+    return { success: false, message: 'Failed to save settings' };
+  } catch (err) {
+    console.error('[SystemStore] Save download settings error:', err);
+    return { success: false, message: 'Network error' };
   }
-
-  /**
-   * Fetch Radarr settings
-   */
-  async function fetchRadarrSettings(): Promise<void> {
-    try {
-      const response = await fetch(`${API_BASE}/settings/radarr`);
-      if (response.ok) {
-        const data = await response.json();
-        update(state => ({
-          ...state,
-          radarrSettings: data,
-        }));
-      }
-    } catch (err) {
-      console.error('[SystemStore] Fetch Radarr settings error:', err);
-    }
-  }
-
-  /**
-   * Save Radarr settings
-   */
-  async function saveRadarrSettings(settings: RadarrSettings): Promise<{ success: boolean; message?: string }> {
-    try {
-      const response = await fetch(`${API_BASE}/settings/radarr`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        update(state => ({
-          ...state,
-          radarrSettings: settings,
-        }));
-        return { success: data.success, message: data.message };
-      }
-      return { success: false };
-    } catch (err) {
-      console.error('[SystemStore] Save Radarr settings error:', err);
-      return { success: false };
-    }
-  }
-
-  /**
-   * Test Radarr connection
-   */
-  async function testRadarrConnection(settings: RadarrSettings): Promise<{ success: boolean; message?: string }> {
-    try {
-      const response = await fetch(`${API_BASE}/settings/radarr/test`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settings),
-      });
-
-      const data = await response.json();
-      return { success: data.success, message: data.message };
-    } catch (err) {
-      console.error('[SystemStore] Test Radarr connection error:', err);
-      return { success: false, message: 'Connection failed' };
-    }
-  }
-
-  /**
-   * Fetch system logs
-   */
-  async function fetchLogs(lines: number = 50): Promise<void> {
-    try {
-      const response = await fetch(`${API_BASE}/system/logs?lines=${lines}`);
-      if (response.ok) {
-        const data = await response.json();
-        update(state => ({
-          ...state,
-          logs: data.logs || [],
-        }));
-      }
-    } catch (err) {
-      console.error('[SystemStore] Fetch logs error:', err);
-    }
-  }
-
-  /**
-   * Clear logs (client-side only)
-   */
-  function clearLogs(): void {
-    update(state => ({
-      ...state,
-      logs: [],
-    }));
-  }
-
-  return {
-    subscribe,
-    fetchDownloadSettings,
-    saveDownloadSettings,
-    fetchIndexerSettings,
-    generateIndexerApiKey,
-    fetchSonarrSettings,
-    saveSonarrSettings,
-    testSonarrConnection,
-    fetchRadarrSettings,
-    saveRadarrSettings,
-    testRadarrConnection,
-    fetchLogs,
-    clearLogs,
-  };
 }
 
 /**
- * Global system store instance
+ * Fetch indexer settings - ONLY updates indexerSettings store
  */
-export const systemStore = createSystemStore();
+export async function fetchIndexerSettings(): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE}/settings/indexer`);
+    if (response.ok) {
+      const data = await response.json();
+      indexerSettings.set(data);
+    }
+  } catch (err) {
+    console.error('[SystemStore] Fetch indexer settings error:', err);
+  }
+}
 
 /**
- * Derived stores
+ * Generate new indexer API key
  */
-export const downloadSettings = derived(
-  systemStore,
-  $store => $store.downloadSettings
-);
+export async function generateIndexerApiKey(): Promise<string | null> {
+  try {
+    const response = await fetch(`${API_BASE}/settings/indexer/generate-key`);
+    if (response.ok) {
+      const data = await response.json();
+      indexerSettings.update(state => ({
+        ...state,
+        api_key: data.api_key,
+      }));
+      return data.api_key;
+    }
+    return null;
+  } catch (err) {
+    console.error('[SystemStore] Generate API key error:', err);
+    return null;
+  }
+}
 
-export const indexerSettings = derived(
-  systemStore,
-  $store => $store.indexerSettings
-);
+/**
+ * Fetch Sonarr settings - ONLY updates sonarrSettings store
+ */
+export async function fetchSonarrSettings(): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE}/settings/sonarr`);
+    if (response.ok) {
+      const data = await response.json();
+      sonarrSettings.set(data);
+    }
+  } catch (err) {
+    console.error('[SystemStore] Fetch Sonarr settings error:', err);
+  }
+}
 
-export const sonarrSettings = derived(
-  systemStore,
-  $store => $store.sonarrSettings
-);
+/**
+ * Save Sonarr settings
+ */
+export async function saveSonarrSettings(settings: SonarrSettings): Promise<{ success: boolean; message?: string }> {
+  try {
+    const response = await fetch(`${API_BASE}/settings/sonarr`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
 
-export const radarrSettings = derived(
-  systemStore,
-  $store => $store.radarrSettings
-);
+    if (response.ok) {
+      const data = await response.json();
+      sonarrSettings.set(settings);
+      return { success: data.success, message: data.message };
+    }
+    return { success: false };
+  } catch (err) {
+    console.error('[SystemStore] Save Sonarr settings error:', err);
+    return { success: false };
+  }
+}
 
-export const systemLogs = derived(
-  systemStore,
-  $store => $store.logs
-);
+/**
+ * Test Sonarr connection
+ */
+export async function testSonarrConnection(settings: SonarrSettings): Promise<{ success: boolean; message?: string }> {
+  try {
+    const response = await fetch(`${API_BASE}/settings/sonarr/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
+
+    const data = await response.json();
+    return { success: data.success, message: data.message };
+  } catch (err) {
+    console.error('[SystemStore] Test Sonarr connection error:', err);
+    return { success: false, message: 'Connection failed' };
+  }
+}
+
+/**
+ * Fetch Radarr settings - ONLY updates radarrSettings store
+ */
+export async function fetchRadarrSettings(): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE}/settings/radarr`);
+    if (response.ok) {
+      const data = await response.json();
+      radarrSettings.set(data);
+    }
+  } catch (err) {
+    console.error('[SystemStore] Fetch Radarr settings error:', err);
+  }
+}
+
+/**
+ * Save Radarr settings
+ */
+export async function saveRadarrSettings(settings: RadarrSettings): Promise<{ success: boolean; message?: string }> {
+  try {
+    const response = await fetch(`${API_BASE}/settings/radarr`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      radarrSettings.set(settings);
+      return { success: data.success, message: data.message };
+    }
+    return { success: false };
+  } catch (err) {
+    console.error('[SystemStore] Save Radarr settings error:', err);
+    return { success: false };
+  }
+}
+
+/**
+ * Test Radarr connection
+ */
+export async function testRadarrConnection(settings: RadarrSettings): Promise<{ success: boolean; message?: string }> {
+  try {
+    const response = await fetch(`${API_BASE}/settings/radarr/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(settings),
+    });
+
+    const data = await response.json();
+    return { success: data.success, message: data.message };
+  } catch (err) {
+    console.error('[SystemStore] Test Radarr connection error:', err);
+    return { success: false, message: 'Connection failed' };
+  }
+}
+
+/**
+ * Fetch system logs - ONLY updates systemLogs store
+ * This will NOT affect sonarr/radarr/indexer settings!
+ */
+export async function fetchLogs(lines: number = 50): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE}/system/logs?lines=${lines}`);
+    if (response.ok) {
+      const data = await response.json();
+      systemLogs.set(data.logs || []);
+    }
+  } catch (err) {
+    console.error('[SystemStore] Fetch logs error:', err);
+  }
+}
+
+/**
+ * Clear logs (client-side only)
+ */
+export function clearLogs(): void {
+  systemLogs.set([]);
+}
+
+// ============================================================================
+// BACKWARD COMPATIBILITY
+// Expose a systemStore object with the same API as before
+// ============================================================================
+
+export const systemStore = {
+  fetchDownloadSettings,
+  saveDownloadSettings,
+  fetchIndexerSettings,
+  generateIndexerApiKey,
+  fetchSonarrSettings,
+  saveSonarrSettings,
+  testSonarrConnection,
+  fetchRadarrSettings,
+  saveRadarrSettings,
+  testRadarrConnection,
+  fetchLogs,
+  clearLogs,
+};

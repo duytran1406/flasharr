@@ -9,6 +9,7 @@ use axum::{
     Json,
     extract::{State, Query},
     http::StatusCode,
+    response::IntoResponse,
 };
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
@@ -53,10 +54,67 @@ struct SabResponse {
     history: Option<SabHistory>,
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config: Option<SabConfig>,
+}
+
+#[derive(Serialize)]
+struct SabFullStatusResponse {
+    #[serde(flatten)]
+    queue: SabQueueData,
+}
+
+#[derive(Serialize)]
+struct SabConfig {
+    version: String,
+    paused: bool,
+    #[serde(rename = "pause_int")]
+    pause_int: String,
+    #[serde(rename = "download_dir")]
+    download_dir: String,
+    #[serde(rename = "complete_dir")]
+    complete_dir: String,
+    #[serde(rename = "nzb_backup_dir")]
+    nzb_backup_dir: String,
+    #[serde(rename = "script_dir")]
+    script_dir: String,
+    categories: Vec<SabCategory>,
+    misc: SabMisc,
+}
+
+#[derive(Serialize)]
+struct SabMisc {
+    #[serde(rename = "queue_complete")]
+    queue_complete: String,
+    #[serde(rename = "refresh_rate")]
+    refresh_rate: i32,
+    #[serde(rename = "bandwidth_limit")]
+    bandwidth_limit: String,
+}
+
+#[derive(Serialize)]
+struct SabCategory {
+    name: String,
+    dir: String,
+    newzbin: String,
+    priority: i32,
 }
 
 #[derive(Serialize)]
 struct SabQueue {
+    paused: bool,
+    status: String,
+    noofslots: usize,
+    slots: Vec<SabQueueSlot>,
+    speed: String,
+    size: String,
+    sizeleft: String,
+}
+
+#[derive(Serialize)]
+struct SabQueueData {
+    paused: bool,
+    noofslots: usize,
     slots: Vec<SabQueueSlot>,
     speed: String,
     size: String,
@@ -95,50 +153,46 @@ struct SabHistorySlot {
 async fn handle_get(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SabParams>,
-) -> Result<Json<SabResponse>, StatusCode> {
-    handle_request(state, params).await
+) -> axum::response::Response {
+    let mode = params.mode.as_deref().unwrap_or("queue");
+    
+    tracing::info!("SABnzbd API request - mode: {}, apikey: {:?}", mode, params.apikey);
+
+    let result = match mode {
+        "addurl" => handle_add_url(state, params).await,
+        "queue" => handle_queue(state).await,
+        "fullstatus" => handle_fullstatus(state).await,
+        "history" => handle_history(state).await,
+        "version" => handle_version().await,
+        "get_config" => handle_get_config().await,
+        "pause" => handle_pause(state, params).await,
+        "resume" => handle_resume(state, params).await,
+        "delete" => handle_delete(state, params).await,
+        _ => {
+            tracing::warn!("Unknown SABnzbd mode: {}", mode);
+            Ok(Json(serde_json::json!({ "status": false, "error": "Unknown mode" })))
+        }
+    };
+
+    match result {
+        Ok(json) => (StatusCode::OK, json).into_response(),
+        Err(status) => status.into_response(),
+    }
 }
 
 /// Handle POST requests (form data)
 async fn handle_post(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SabParams>,
-) -> Result<Json<SabResponse>, StatusCode> {
-    handle_request(state, params).await
-}
-
-async fn handle_request(
-    state: Arc<AppState>,
-    params: SabParams,
-) -> Result<Json<SabResponse>, StatusCode> {
-    let mode = params.mode.as_deref().unwrap_or("queue");
-    
-    match mode {
-        "addurl" => handle_add_url(state, params).await,
-        "queue" => handle_queue(state).await,
-        "history" => handle_history(state).await,
-        "version" => handle_version().await,
-        "pause" => handle_pause(state, params).await,
-        "resume" => handle_resume(state, params).await,
-        "delete" => handle_delete(state, params).await,
-        _ => {
-            tracing::warn!("Unknown SABnzbd mode: {}", mode);
-            Ok(Json(SabResponse {
-                status: false,
-                nzo_ids: None,
-                queue: None,
-                history: None,
-                version: None,
-            }))
-        }
-    }
+) -> axum::response::Response {
+    handle_get(State(state), Query(params)).await
 }
 
 /// Add URL to download queue
 async fn handle_add_url(
     state: Arc<AppState>,
     params: SabParams,
-) -> Result<Json<SabResponse>, StatusCode> {
+) -> Result<Json<serde_json::Value>, StatusCode> {
     let url = params.name.ok_or(StatusCode::BAD_REQUEST)?;
     let filename = params.nzbname.unwrap_or_else(|| "download".to_string());
     let category = params.cat.unwrap_or_else(|| "other".to_string());
@@ -152,17 +206,14 @@ async fn handle_add_url(
         category,
     ).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
-    Ok(Json(SabResponse {
-        status: true,
-        nzo_ids: Some(vec![task.id.to_string()]),
-        queue: None,
-        history: None,
-        version: None,
-    }))
+    Ok(Json(serde_json::json!({
+        "status": true,
+        "nzo_ids": [task.id.to_string()]
+    })))
 }
 
 /// Get queue status
-async fn handle_queue(state: Arc<AppState>) -> Result<Json<SabResponse>, StatusCode> {
+async fn handle_queue(state: Arc<AppState>) -> Result<Json<serde_json::Value>, StatusCode> {
     let tasks = state.download_orchestrator.task_manager().get_tasks();
     
     let mut total_speed = 0.0;
@@ -177,22 +228,13 @@ async fn handle_queue(state: Arc<AppState>) -> Result<Json<SabResponse>, StatusC
             DownloadState::Waiting
         ))
         .map(|t| {
-            let downloaded = ((t.progress as f64 / 100.0) * t.size as f64) as u64;
-            let left = t.size.saturating_sub(downloaded);
-            
+            total_speed += t.speed as f64;
             total_size += t.size;
+            let downloaded = ((t.progress as f64) / 100.0 * t.size as f64) as u64;
+            let left = t.size.saturating_sub(downloaded);
             total_left += left;
             
-            // Get speed from progress (if available)
-            // For now, we'll use a simple calculation
-            let speed = if t.state == DownloadState::Downloading {
-                // This would come from progress tracking in real implementation
-                0.0
-            } else {
-                0.0
-            };
-            total_speed += speed;
-            
+            let speed = t.speed as f64;
             let eta = if speed > 0.0 {
                 format!("{}s", (left as f64 / speed) as u64)
             } else {
@@ -211,22 +253,72 @@ async fn handle_queue(state: Arc<AppState>) -> Result<Json<SabResponse>, StatusC
         })
         .collect();
     
-    Ok(Json(SabResponse {
-        status: true,
-        nzo_ids: None,
-        queue: Some(SabQueue {
-            slots,
-            speed: format!("{:.2} MB/s", total_speed / 1_048_576.0),
-            size: format!("{:.2} MB", total_size as f64 / 1_048_576.0),
-            sizeleft: format!("{:.2} MB", total_left as f64 / 1_048_576.0),
-        }),
-        history: None,
-        version: None,
-    }))
+    Ok(Json(serde_json::json!({
+        "queue": {
+            "paused": false,
+            "status": if slots.is_empty() { "Idle" } else { "Downloading" },
+            "noofslots": slots.len(),
+            "slots": slots,
+            "speed": format!("{:.2} MB/s", total_speed / 1_048_576.0),
+            "size": format!("{:.2} MB", total_size as f64 / 1_048_576.0),
+            "sizeleft": format!("{:.2} MB", total_left as f64 / 1_048_576.0),
+        }
+    })))
 }
 
+/// Get full status (flattened queue response for *arr compatibility)
+async fn handle_fullstatus(state: Arc<AppState>) -> Result<Json<serde_json::Value>, StatusCode> {
+    let tasks = state.download_orchestrator.task_manager().get_tasks();
+    
+    let mut total_speed = 0.0;
+    let mut total_size = 0u64;
+    let mut total_left = 0u64;
+    
+    let slots: Vec<SabQueueSlot> = tasks
+        .iter()
+        .filter(|t| matches!(t.state, crate::downloader::DownloadState::Downloading | crate::downloader::DownloadState::Queued))
+        .map(|t| {
+            total_speed += t.speed as f64;
+            total_size += t.size;
+            let downloaded = ((t.progress as f64) / 100.0 * t.size as f64) as u64;
+            let left = t.size.saturating_sub(downloaded);
+            total_left += left;
+            
+            let speed = t.speed as f64;
+            let eta = if speed > 0.0 {
+                format!("{}s", (left as f64 / speed) as u64)
+            } else {
+                "Unknown".to_string()
+            };
+            
+            SabQueueSlot {
+                nzo_id: t.id.to_string(),
+                filename: t.filename.clone(),
+                percentage: format!("{:.1}", t.progress),
+                mb: format!("{:.2}", t.size as f64 / 1_048_576.0),
+                mbleft: format!("{:.2}", left as f64 / 1_048_576.0),
+                status: format!("{:?}", t.state),
+                timeleft: eta,
+            }
+        })
+        .collect();
+    
+    Ok(Json(serde_json::json!({
+        "status": {
+            "state": if slots.is_empty() { "Idle" } else { "Downloading" },
+            "paused": false,
+            "noofslots": slots.len(),
+            "slots": slots,
+            "speed": format!("{:.2} MB/s", total_speed / 1_048_576.0),
+            "size": format!("{:.2} MB", total_size as f64 / 1_048_576.0),
+            "sizeleft": format!("{:.2} MB", total_left as f64 / 1_048_576.0),
+        }
+    })))
+}
+
+
 /// Get history
-async fn handle_history(state: Arc<AppState>) -> Result<Json<SabResponse>, StatusCode> {
+async fn handle_history(state: Arc<AppState>) -> Result<Json<serde_json::Value>, StatusCode> {
     let tasks = state.download_orchestrator.task_manager().get_tasks();
     
     let slots: Vec<SabHistorySlot> = tasks.iter()
@@ -252,82 +344,98 @@ async fn handle_history(state: Arc<AppState>) -> Result<Json<SabResponse>, Statu
         })
         .collect();
     
-    Ok(Json(SabResponse {
-        status: true,
-        nzo_ids: None,
-        queue: None,
-        history: Some(SabHistory { slots }),
-        version: None,
-    }))
+    Ok(Json(serde_json::json!({
+        "history": {
+            "slots": slots
+        }
+    })))
 }
 
 /// Get version
-async fn handle_version() -> Result<Json<SabResponse>, StatusCode> {
-    Ok(Json(SabResponse {
-        status: true,
-        nzo_ids: None,
-        queue: None,
-        history: None,
-        version: Some("3.0.0".to_string()),
-    }))
+async fn handle_version() -> Result<Json<serde_json::Value>, StatusCode> {
+    Ok(Json(serde_json::json!({
+        "version": "3.5.0"
+    })))
+}
+
+/// Get config (for *arr compatibility testing)
+async fn handle_get_config() -> Result<Json<serde_json::Value>, StatusCode> {
+    Ok(Json(serde_json::json!({
+        "config": {
+            "version": "3.5.0",
+            "paused": false,
+            "pause_int": "0",
+            "download_dir": "/appData/downloads/incomplete",
+            "complete_dir": "/appData/downloads",
+            "nzb_backup_dir": "/appData/nzb_backup",
+            "script_dir": "/appData/scripts",
+            "categories": [
+                {
+                    "name": "tv",
+                    "dir": "TV",
+                    "newzbin": "",
+                    "priority": 0
+                },
+                {
+                    "name": "movies",
+                    "dir": "Movies",
+                    "newzbin": "",
+                    "priority": 0
+                },
+                {
+                    "name": "*",
+                    "dir": "",
+                    "newzbin": "",
+                    "priority": 0
+                }
+            ],
+            "misc": {
+                "queue_complete": "",
+                "refresh_rate": 2,
+                "bandwidth_limit": ""
+            }
+        }
+    })))
 }
 
 /// Pause a download
 async fn handle_pause(
     state: Arc<AppState>,
     params: SabParams,
-) -> Result<Json<SabResponse>, StatusCode> {
+) -> Result<Json<serde_json::Value>, StatusCode> {
     if let Some(nzo_id) = params.nzo_id {
         if let Ok(uuid) = uuid::Uuid::parse_str(&nzo_id) {
             state.download_orchestrator.task_manager().pause_task(uuid);
         }
     }
     
-    Ok(Json(SabResponse {
-        status: true,
-        nzo_ids: None,
-        queue: None,
-        history: None,
-        version: None,
-    }))
+    Ok(Json(serde_json::json!({ "status": true })))
 }
 
 /// Resume a download
 async fn handle_resume(
     state: Arc<AppState>,
     params: SabParams,
-) -> Result<Json<SabResponse>, StatusCode> {
+) -> Result<Json<serde_json::Value>, StatusCode> {
     if let Some(nzo_id) = params.nzo_id {
         if let Ok(uuid) = uuid::Uuid::parse_str(&nzo_id) {
             state.download_orchestrator.task_manager().resume_task(uuid);
         }
     }
     
-    Ok(Json(SabResponse {
-        status: true,
-        nzo_ids: None,
-        queue: None,
-        history: None,
-        version: None,
-    }))
+    Ok(Json(serde_json::json!({ "status": true })))
 }
 
 /// Delete a download
 async fn handle_delete(
     state: Arc<AppState>,
     params: SabParams,
-) -> Result<Json<SabResponse>, StatusCode> {
+) -> Result<Json<serde_json::Value>, StatusCode> {
     if let Some(nzo_id) = params.nzo_id {
         if let Ok(uuid) = uuid::Uuid::parse_str(&nzo_id) {
             state.download_orchestrator.task_manager().delete_task(uuid);
         }
     }
     
-    Ok(Json(SabResponse {
-        status: true,
-        nzo_ids: None,
-        queue: None,
-        history: None,
-        version: None,
-    }))
+    Ok(Json(serde_json::json!({ "status": true })))
 }

@@ -227,26 +227,131 @@ docker compose up -d --build
 
 ## 🔗 \*arr Integration
 
-### Add to Sonarr/Radarr
+Flasharr integrates with Sonarr/Radarr in **two ways**:
 
-#### As Indexer (Search)
+1. **As a Newznab Indexer** - For searching and discovering media
+2. **As a SABnzbd Download Client** - For automated downloading
 
-1. **Settings** → **Indexers** → **Add** → **Newznab**
+### 🔍 Setup as Indexer (Search)
+
+This allows Sonarr/Radarr to search for media through Flasharr's Newznab-compatible API.
+
+**In Sonarr/Radarr:**
+
+1. Navigate to **Settings** → **Indexers** → **Add Indexer** → **Newznab**
 2. Configure:
-   - **Name**: `Flasharr`
-   - **URL**: `http://flasharr:8484/api/indexer`
-   - **API Key**: (from Flasharr settings)
-3. **Test** → **Save**
+   ```
+   Name:        Flasharr Indexer
+   URL:         http://flasharr:8484/api/indexer
+   API Key:     <your-flasharr-api-key>
+   Categories:  (leave default or customize)
+   ```
+3. Click **Test** to verify connection
+4. Click **Save**
 
-#### As Download Client
+> **Note**: Get your API key from Flasharr Settings → Services → Newznab section
 
-1. **Settings** → **Download Clients** → **Add** → **SABnzbd**
+### 📥 Setup as Download Client
+
+Flasharr **simulates the SABnzbd API** to act as a download client. This allows Sonarr/Radarr to automatically send downloads to Flasharr.
+
+**In Sonarr/Radarr:**
+
+1. Navigate to **Settings** → **Download Clients** → **Add Download Client** → **SABnzbd**
 2. Configure:
-   - **Name**: `Flasharr`
-   - **Host**: `flasharr`
-   - **Port**: `8484`
-   - **API Key**: (from Flasharr settings)
-3. **Test** → **Save**
+   ```
+   Name:        Flasharr
+   Enable:      ✓
+   Host:        flasharr
+   Port:        8484
+   API Key:     <your-flasharr-api-key>
+   URL Base:    /sabnzbd
+   Use SSL:     ☐ (unless using HTTPS)
+   Category:    (optional: tv, movies, etc.)
+   ```
+3. Click **Test** to verify connection
+4. Click **Save**
+
+> **Important**: Flasharr implements SABnzbd's API endpoints (`/sabnzbd/api`) to maintain compatibility with \*arr applications.
+
+### 🐳 Docker Network Configuration
+
+If running in Docker, ensure all containers are on the **same network**:
+
+```yaml
+version: "3.8"
+
+services:
+  flasharr:
+    image: ghcr.io/duytran1406/flasharr:latest
+    container_name: flasharr
+    ports:
+      - "8484:8484"
+    networks:
+      - media
+
+  sonarr:
+    image: linuxserver/sonarr:latest
+    container_name: sonarr
+    ports:
+      - "8989:8989"
+    networks:
+      - media
+
+  radarr:
+    image: linuxserver/radarr:latest
+    container_name: radarr
+    ports:
+      - "7878:7878"
+    networks:
+      - media
+
+networks:
+  media:
+    driver: bridge
+```
+
+### ✅ Verification
+
+Test the integration:
+
+```bash
+# Test from Sonarr/Radarr container
+docker exec sonarr ping flasharr
+docker exec radarr ping flasharr
+
+# Check Flasharr logs
+docker logs flasharr | grep -i sabnzbd
+```
+
+### 🔧 Troubleshooting
+
+<details>
+<summary><b>Connection refused</b></summary>
+
+- Verify containers are on the same Docker network
+- Check if Flasharr is accessible: `curl http://flasharr:8484/health`
+- Ensure port 8484 is not blocked by firewall
+
+</details>
+
+<details>
+<summary><b>API key invalid</b></summary>
+
+- Copy the exact API key from Flasharr Settings → Services → Newznab
+- Ensure no extra spaces or characters
+- Regenerate the API key if needed
+
+</details>
+
+<details>
+<summary><b>Downloads not starting</b></summary>
+
+- Check Flasharr logs: `docker logs flasharr`
+- Verify Fshare credentials are configured in Flasharr
+- Ensure the download URL is valid
+
+</details>
 
 ---
 

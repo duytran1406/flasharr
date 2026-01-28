@@ -150,6 +150,7 @@ async fn main() {
         .nest("/api/setup", api::setup::router())
         .nest("/sabnzbd", api::sabnzbd::router())
         .nest("/api/indexer", api::indexer::router())
+        .nest("/newznab/api", api::indexer::router())  // Standard Newznab path
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)

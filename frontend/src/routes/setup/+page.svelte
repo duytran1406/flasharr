@@ -7,7 +7,7 @@
   import { fade, fly } from "svelte/transition";
 
   let currentStep = $derived(setupStore.currentStep);
-  let wizardData = $derived(setupStore.data);
+  // Access data directly from store for two-way binding (don't use $derived for bindable data)
   let isLoading = $derived(setupStore.isLoading);
 
   // Form validation states
@@ -46,17 +46,17 @@
     fsharePasswordError = "";
     fshareValidationError = "";
 
-    if (!wizardData.fshareEmail) {
+    if (!setupStore.data.fshareEmail) {
       fshareEmailError = "Email is required";
       return;
     }
 
-    if (!validateEmail(wizardData.fshareEmail)) {
+    if (!validateEmail(setupStore.data.fshareEmail)) {
       fshareEmailError = "Invalid email format";
       return;
     }
 
-    if (!wizardData.fsharePassword) {
+    if (!setupStore.data.fsharePassword) {
       fsharePasswordError = "Password is required";
       return;
     }
@@ -73,7 +73,7 @@
   function handleDownloadsNext() {
     downloadPathError = "";
 
-    if (!wizardData.downloadPath) {
+    if (!setupStore.data.downloadPath) {
       downloadPathError = "Download path is required";
       return;
     }
@@ -84,17 +84,20 @@
   async function handleIntegrationsNext() {
     let allValid = true;
 
-    if (wizardData.sonarrEnabled && !setupStore.sonarrValidated) {
+    if (setupStore.data.sonarrEnabled && !setupStore.sonarrValidated) {
       const valid = await setupStore.testSonarr();
       if (!valid) allValid = false;
     }
 
-    if (wizardData.radarrEnabled && !setupStore.radarrValidated) {
+    if (setupStore.data.radarrEnabled && !setupStore.radarrValidated) {
       const valid = await setupStore.testRadarr();
       if (!valid) allValid = false;
     }
 
-    if (allValid || (!wizardData.sonarrEnabled && !wizardData.radarrEnabled)) {
+    if (
+      allValid ||
+      (!setupStore.data.sonarrEnabled && !setupStore.data.radarrEnabled)
+    ) {
       setupStore.nextStep();
     }
   }
@@ -103,7 +106,8 @@
     const success = await setupStore.completeSetup();
     if (success) {
       setTimeout(() => {
-        goto("/");
+        // Use full page reload to ensure WebSocket connects
+        window.location.href = "/";
       }, 1500);
     }
   }
@@ -197,7 +201,7 @@
               id="email"
               class="input-field"
               class:error={fshareEmailError}
-              bind:value={wizardData.fshareEmail}
+              bind:value={setupStore.data.fshareEmail}
               placeholder="your.email@example.com"
               disabled={isLoading}
             />
@@ -213,7 +217,7 @@
               id="password"
               class="input-field"
               class:error={fsharePasswordError}
-              bind:value={wizardData.fsharePassword}
+              bind:value={setupStore.data.fsharePassword}
               placeholder="Enter your password"
               disabled={isLoading}
             />
@@ -294,7 +298,7 @@
                 id="path"
                 class="input-field"
                 class:error={downloadPathError}
-                bind:value={wizardData.downloadPath}
+                bind:value={setupStore.data.downloadPath}
                 placeholder="/downloads"
               />
             </div>
@@ -309,14 +313,14 @@
           <div class="input-group">
             <label for="concurrent">
               MAX CONCURRENT DOWNLOADS
-              <span class="value-pill">{wizardData.maxConcurrent}</span>
+              <span class="value-pill">{setupStore.data.maxConcurrent}</span>
             </label>
             <input
               type="range"
               id="concurrent"
               min="1"
               max="10"
-              bind:value={wizardData.maxConcurrent}
+              bind:value={setupStore.data.maxConcurrent}
               class="range-slider"
             />
             <span class="input-hint">Recommended: 3-5 concurrent downloads</span
@@ -367,12 +371,12 @@
               <label class="switch">
                 <input
                   type="checkbox"
-                  bind:checked={wizardData.sonarrEnabled}
+                  bind:checked={setupStore.data.sonarrEnabled}
                 />
                 <span class="slider"></span>
               </label>
             </div>
-            {#if wizardData.sonarrEnabled}
+            {#if setupStore.data.sonarrEnabled}
               <div
                 class="integration-fields"
                 transition:fly={{ y: -10, duration: 300 }}
@@ -380,13 +384,13 @@
                 <input
                   type="text"
                   class="input-field-sm"
-                  bind:value={wizardData.sonarrUrl}
+                  bind:value={setupStore.data.sonarrUrl}
                   placeholder="http://localhost:8989"
                 />
                 <input
                   type="password"
                   class="input-field-sm"
-                  bind:value={wizardData.sonarrApiKey}
+                  bind:value={setupStore.data.sonarrApiKey}
                   placeholder="API Key"
                 />
                 <button
@@ -418,12 +422,12 @@
               <label class="switch">
                 <input
                   type="checkbox"
-                  bind:checked={wizardData.radarrEnabled}
+                  bind:checked={setupStore.data.radarrEnabled}
                 />
                 <span class="slider"></span>
               </label>
             </div>
-            {#if wizardData.radarrEnabled}
+            {#if setupStore.data.radarrEnabled}
               <div
                 class="integration-fields"
                 transition:fly={{ y: -10, duration: 300 }}
@@ -431,13 +435,13 @@
                 <input
                   type="text"
                   class="input-field-sm"
-                  bind:value={wizardData.radarrUrl}
+                  bind:value={setupStore.data.radarrUrl}
                   placeholder="http://localhost:7878"
                 />
                 <input
                   type="password"
                   class="input-field-sm"
-                  bind:value={wizardData.radarrApiKey}
+                  bind:value={setupStore.data.radarrApiKey}
                   placeholder="API Key"
                 />
                 <button
@@ -492,7 +496,7 @@
             <div class="review-label">FSHARE ACCOUNT</div>
             <div class="review-item">
               <span class="material-icons">email</span>
-              <span>{wizardData.fshareEmail}</span>
+              <span>{setupStore.data.fshareEmail}</span>
             </div>
           </div>
 
@@ -500,18 +504,18 @@
             <div class="review-label">DOWNLOAD CONFIG</div>
             <div class="review-item">
               <span class="material-icons">folder</span>
-              <span>{wizardData.downloadPath}</span>
+              <span>{setupStore.data.downloadPath}</span>
             </div>
             <div class="review-item">
               <span class="material-icons">speed</span>
-              <span>{wizardData.maxConcurrent} concurrent downloads</span>
+              <span>{setupStore.data.maxConcurrent} concurrent downloads</span>
             </div>
           </div>
 
-          {#if wizardData.sonarrEnabled || wizardData.radarrEnabled || wizardData.jellyfinEnabled}
+          {#if setupStore.data.sonarrEnabled || setupStore.data.radarrEnabled || setupStore.data.jellyfinEnabled}
             <div class="review-section">
               <div class="review-label">INTEGRATIONS</div>
-              {#if wizardData.sonarrEnabled}
+              {#if setupStore.data.sonarrEnabled}
                 <div class="review-item">
                   <span
                     class="material-icons"
@@ -520,10 +524,10 @@
                   >
                     {setupStore.sonarrValidated ? "check_circle" : "cancel"}
                   </span>
-                  <span>Sonarr: {wizardData.sonarrUrl}</span>
+                  <span>Sonarr: {setupStore.data.sonarrUrl}</span>
                 </div>
               {/if}
-              {#if wizardData.radarrEnabled}
+              {#if setupStore.data.radarrEnabled}
                 <div class="review-item">
                   <span
                     class="material-icons"
@@ -532,10 +536,10 @@
                   >
                     {setupStore.radarrValidated ? "check_circle" : "cancel"}
                   </span>
-                  <span>Radarr: {wizardData.radarrUrl}</span>
+                  <span>Radarr: {setupStore.data.radarrUrl}</span>
                 </div>
               {/if}
-              {#if !wizardData.sonarrEnabled && !wizardData.radarrEnabled}
+              {#if !setupStore.data.sonarrEnabled && !setupStore.data.radarrEnabled}
                 <div class="review-item">
                   <span class="material-icons" style="color: var(--text-muted);"
                     >info</span

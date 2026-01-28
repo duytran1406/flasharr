@@ -122,29 +122,37 @@ async fn add_account(
 ) -> Result<Json<ActionResponse>, StatusCode> {
     tracing::info!("Add account request for: {}", payload.email);
     
-    // Update Fshare configuration
-    let mut new_config = state.config.clone();
-    new_config.fshare.email = payload.email.clone();
-    new_config.fshare.password = payload.password.clone();
-    new_config.fshare.session_id = None;
-
-    // Save to config.toml
-    match crate::config::save_config(&new_config) {
-        Ok(_) => {
-            tracing::info!("Fshare account added successfully for {}", payload.email);
-            Ok(Json(ActionResponse {
-                success: true,
-                message: Some("Account added successfully. Restart required for full effect.".to_string()),
-            }))
-        }
-        Err(e) => {
-            tracing::error!("Failed to save config after account addition: {}", e);
-            Ok(Json(ActionResponse {
-                success: false,
-                message: Some(format!("Failed to save configuration: {}", e)),
-            }))
+    // Save credentials to database (where FshareHandler reads from)
+    if let Err(e) = state.db.save_setting("fshare_email", &payload.email) {
+        tracing::error!("Failed to save fshare_email to database: {}", e);
+        return Ok(Json(ActionResponse {
+            success: false,
+            message: Some(format!("Failed to save email: {}", e)),
+        }));
+    }
+    
+    if let Err(e) = state.db.save_setting("fshare_password", &payload.password) {
+        tracing::error!("Failed to save fshare_password to database: {}", e);
+        return Ok(Json(ActionResponse {
+            success: false,
+            message: Some(format!("Failed to save password: {}", e)),
+        }));
+    }
+    
+    // Clear the existing session so it re-logs in with new credentials
+    if let Some(handler) = state.host_registry.get_handler_for_url("https://fshare.vn/file/test") {
+        if let Err(e) = handler.logout().await {
+            tracing::warn!("Failed to clear session after adding account: {}", e);
+        } else {
+            tracing::info!("Cleared old session, will re-login with new credentials");
         }
     }
+    
+    tracing::info!("Fshare account added successfully for {}", payload.email);
+    Ok(Json(ActionResponse {
+        success: true,
+        message: Some("Account added and activated successfully.".to_string()),
+    }))
 }
 
 /// DELETE /api/accounts/:email - Remove account
