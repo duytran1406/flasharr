@@ -1,368 +1,468 @@
 # Flasharr \*arr Integration Guide
 
+Complete guide for integrating Flasharr with Sonarr and Radarr as both a Newznab indexer and SABnzbd download client.
+
+---
+
+## 📋 Table of Contents
+
+1. [Overview](#overview)
+2. [Prerequisites](#prerequisites)
+3. [Getting Your API Key](#getting-your-api-key)
+4. [Sonarr Integration](#sonarr-integration)
+5. [Radarr Integration](#radarr-integration)
+6. [Remote Path Mappings](#remote-path-mappings)
+7. [Testing](#testing)
+8. [Troubleshooting](#troubleshooting)
+
+---
+
 ## Overview
 
-Flasharr integrates with Sonarr and Radarr by **simulating two different APIs**:
+Flasharr provides two integration points for Sonarr/Radarr:
 
-1. **Newznab API** - For media search/indexing
-2. **SABnzbd API** - For download client functionality
+1. **Newznab Indexer** - Search for Vietnamese content on Fshare
+2. **SABnzbd Download Client** - Download files from Fshare
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Sonarr / Radarr                          │
-│                                                             │
-│  ┌──────────────┐              ┌──────────────┐            │
-│  │   Indexer    │              │   Download   │            │
-│  │   (Search)   │              │    Client    │            │
-│  └──────┬───────┘              └──────┬───────┘            │
-└─────────┼──────────────────────────────┼──────────────────┘
-          │                              │
-          │ Newznab API                  │ SABnzbd API
-          │ /api/indexer                 │ /sabnzbd/api
-          │                              │
-┌─────────▼──────────────────────────────▼──────────────────┐
-│                      Flasharr                              │
-│                                                            │
-│  ┌──────────────┐              ┌──────────────┐           │
-│  │   Newznab    │              │   SABnzbd    │           │
-│  │  Endpoints   │              │  Endpoints   │           │
-│  └──────┬───────┘              └──────┬───────┘           │
-│         │                             │                   │
-│         └─────────────┬───────────────┘                   │
-│                       │                                   │
-│              ┌────────▼────────┐                          │
-│              │  Download       │                          │
-│              │  Orchestrator   │                          │
-│              └────────┬────────┘                          │
-│                       │                                   │
-│              ┌────────▼────────┐                          │
-│              │  Fshare Host    │                          │
-│              │  Integration    │                          │
-│              └─────────────────┘                          │
-└────────────────────────────────────────────────────────────┘
+Both use the same API key for authentication.
+
+---
+
+## Prerequisites
+
+- ✅ Flasharr installed and running
+- ✅ Sonarr v3+ or Radarr v3+ installed
+- ✅ Network connectivity between \*arr apps and Flasharr
+- ✅ Valid Fshare account configured in Flasharr
+
+---
+
+## Getting Your API Key
+
+### Option 1: From Flasharr Settings UI
+
+1. Open Flasharr web interface: `http://your-flasharr-ip:8484`
+2. Navigate to **Settings** → **Indexer** tab
+3. Your API key is displayed in the **Newznab Indexer** section
+4. Default key: `flasharr-default-key`
+
+### Option 2: From Configuration File
+
+```bash
+# View your API key
+cat /path/to/flasharr/config.toml | grep api_key
 ```
 
-## API Endpoints
+### Option 3: Custom API Key
 
-### Newznab API (`/api/indexer`)
+Edit `config.toml`:
 
-**Purpose**: Allow Sonarr/Radarr to search for media
+```toml
+[indexer]
+api_key = "your-custom-secure-key-here"
+```
 
-**Endpoints**:
+Then restart Flasharr.
 
-- `GET /api/indexer?t=caps` - Get indexer capabilities
-- `GET /api/indexer?t=search&q=...` - Search for media
-- `GET /api/indexer?t=tvsearch&tvdbid=...` - Search TV shows
-- `GET /api/indexer?t=movie&imdbid=...` - Search movies
+---
 
-### SABnzbd API (`/sabnzbd/api`)
+## Sonarr Integration
 
-**Purpose**: Allow Sonarr/Radarr to manage downloads
+### Step 1: Add Newznab Indexer
 
-**Supported Modes**:
+1. In Sonarr, go to **Settings** → **Indexers**
+2. Click **+** → Select **Newznab**
+3. Configure as follows:
 
-- `mode=addurl` - Add download to queue
-- `mode=queue` - Get current download queue
-- `mode=history` - Get download history
-- `mode=pause` - Pause a download
-- `mode=resume` - Resume a download
-- `mode=delete` - Delete a download
-- `mode=version` - Get SABnzbd version (returns "3.0.0")
+| Field                         | Value                                       |
+| ----------------------------- | ------------------------------------------- |
+| **Name**                      | `Flasharr`                                  |
+| **Enable RSS**                | ✅ (Optional)                               |
+| **Enable Automatic Search**   | ✅                                          |
+| **Enable Interactive Search** | ✅                                          |
+| **URL**                       | `http://your-flasharr-ip:8484/newznab`      |
+| **API Path**                  | `/api`                                      |
+| **API Key**                   | `flasharr-default-key` (or your custom key) |
+| **Categories**                | `5000,5040,5045` (TV categories)            |
 
-## Configuration Steps
-
-### Step 1: Get API Key from Flasharr
-
-1. Open Flasharr web UI: `http://localhost:8484`
-2. Navigate to **Settings** → **Services** tab
-3. Find the **Newznab** section
-4. Copy the **API Key** (or generate a new one)
-
-### Step 2: Configure Sonarr/Radarr as Indexer
-
-**In Sonarr/Radarr UI:**
-
-1. Go to **Settings** → **Indexers**
-2. Click **Add Indexer** → **Newznab**
-3. Fill in:
-   - **Name**: `Flasharr Indexer`
-   - **URL**: `http://flasharr:8484/api/indexer`
-   - **API Key**: `<paste-your-api-key>`
-   - **Categories**: Leave default
-4. Click **Test** (should show green checkmark)
+4. Click **Test** - You should see "Test was successful!"
 5. Click **Save**
 
-### Step 3: Configure Sonarr/Radarr as Download Client
+> **Note:** If you see "Invalid API Key" but the test passes, you can safely ignore it and save. This is a known Sonarr UI quirk.
 
-**In Sonarr/Radarr UI:**
+---
+
+### Step 2: Add SABnzbd Download Client
+
+1. In Sonarr, go to **Settings** → **Download Clients**
+2. Click **+** → Select **SABnzbd**
+3. Configure as follows:
+
+| Field        | Value                                       |
+| ------------ | ------------------------------------------- |
+| **Name**     | `Flasharr`                                  |
+| **Enable**   | ✅                                          |
+| **Host**     | `your-flasharr-ip`                          |
+| **Port**     | `8484`                                      |
+| **URL Base** | `/sabnzbd`                                  |
+| **API Key**  | `flasharr-default-key` (or your custom key) |
+| **Username** | (leave empty)                               |
+| **Password** | (leave empty)                               |
+| **Category** | `tv` (optional)                             |
+
+4. Click **Test** - You should see "Test was successful!"
+5. Click **Save**
+
+---
+
+## Radarr Integration
+
+### Step 1: Add Newznab Indexer
+
+1. In Radarr, go to **Settings** → **Indexers**
+2. Click **+** → Select **Newznab**
+3. Configure as follows:
+
+| Field                         | Value                                       |
+| ----------------------------- | ------------------------------------------- |
+| **Name**                      | `Flasharr`                                  |
+| **Enable RSS**                | ✅ (Optional)                               |
+| **Enable Automatic Search**   | ✅                                          |
+| **Enable Interactive Search** | ✅                                          |
+| **URL**                       | `http://your-flasharr-ip:8484/newznab`      |
+| **API Path**                  | `/api`                                      |
+| **API Key**                   | `flasharr-default-key` (or your custom key) |
+| **Categories**                | `2000,2040,2045` (Movie categories)         |
+
+4. Click **Test** - You should see "Test was successful!"
+5. Click **Save**
+
+---
+
+### Step 2: Add SABnzbd Download Client
+
+1. In Radarr, go to **Settings** → **Download Clients**
+2. Click **+** → Select **SABnzbd**
+3. Configure as follows:
+
+| Field        | Value                                       |
+| ------------ | ------------------------------------------- |
+| **Name**     | `Flasharr`                                  |
+| **Enable**   | ✅                                          |
+| **Host**     | `your-flasharr-ip`                          |
+| **Port**     | `8484`                                      |
+| **URL Base** | `/sabnzbd`                                  |
+| **API Key**  | `flasharr-default-key` (or your custom key) |
+| **Username** | (leave empty)                               |
+| **Password** | (leave empty)                               |
+| **Category** | `movies` (optional)                         |
+
+4. Click **Test** - You should see "Test was successful!"
+5. Click **Save**
+
+---
+
+## Remote Path Mappings
+
+If Sonarr/Radarr and Flasharr are on different systems, you need to configure Remote Path Mappings.
+
+### For Sonarr:
 
 1. Go to **Settings** → **Download Clients**
-2. Click **Add Download Client** → **SABnzbd**
-3. Fill in:
-   - **Name**: `Flasharr`
-   - **Enable**: ✓ (checked)
-   - **Host**: `flasharr` (or `localhost` if not using Docker)
-   - **Port**: `8484`
-   - **API Key**: `<paste-your-api-key>`
-   - **URL Base**: `/sabnzbd`
-   - **Use SSL**: ☐ (unchecked, unless using HTTPS)
-   - **Category**: `tv` (for Sonarr) or `movies` (for Radarr)
-4. Click **Test** (should show green checkmark)
-5. Click **Save**
+2. Scroll to **Remote Path Mappings**
+3. Click **+** and configure:
 
-## How It Works
+| Field           | Value                             |
+| --------------- | --------------------------------- |
+| **Host**        | `your-flasharr-ip`                |
+| **Remote Path** | `/appData/downloads/`             |
+| **Local Path**  | `/path/to/your/shared/downloads/` |
 
-### Workflow: Automatic Download via Sonarr
+### For Radarr:
 
-```
-1. User adds TV show to Sonarr
-   ↓
-2. Sonarr searches indexers (including Flasharr)
-   → GET /api/indexer?t=tvsearch&tvdbid=12345
-   ↓
-3. Flasharr returns available episodes
-   ← XML response with download links
-   ↓
-4. Sonarr selects best match and sends to download client
-   → POST /sabnzbd/api?mode=addurl&name=<fshare-url>&nzbname=...
-   ↓
-5. Flasharr adds to download queue
-   ← Returns task ID
-   ↓
-6. Sonarr monitors download progress
-   → GET /sabnzbd/api?mode=queue
-   ↓
-7. Flasharr downloads file from Fshare
-   ↓
-8. When complete, Sonarr imports the file
-   → GET /sabnzbd/api?mode=history
-```
+Same as Sonarr - configure the path where Radarr can access Flasharr's downloads.
 
-## Docker Network Setup
+### Example Scenarios:
 
-### Same Network (Recommended)
+**Scenario 1: Docker Compose (Same Network)**
 
 ```yaml
-version: "3.8"
+# Both containers share the same volume
+volumes:
+  - /mnt/downloads:/downloads
 
-services:
-  flasharr:
-    image: ghcr.io/duytran1406/flasharr:latest
-    container_name: flasharr
-    ports:
-      - "8484:8484"
-    networks:
-      - media
-    volumes:
-      - ./flasharr/appData:/appData
-
-  sonarr:
-    image: linuxserver/sonarr:latest
-    container_name: sonarr
-    ports:
-      - "8989:8989"
-    networks:
-      - media
-    volumes:
-      - ./sonarr/config:/config
-      - ./flasharr/appData/downloads:/downloads
-
-  radarr:
-    image: linuxserver/radarr:latest
-    container_name: radarr
-    ports:
-      - "7878:7878"
-    networks:
-      - media
-    volumes:
-      - ./radarr/config:/config
-      - ./flasharr/appData/downloads:/downloads
-
-networks:
-  media:
-    driver: bridge
+# Remote Path Mapping:
+# Remote: /appData/downloads/
+# Local: /downloads/
 ```
 
-**Key Points**:
+**Scenario 2: Separate Machines (NFS/SMB)**
 
-- All containers on same `media` network
-- Use container names as hostnames (`flasharr`, `sonarr`, `radarr`)
-- Share download directory between Flasharr and \*arr apps
+```
+# Flasharr downloads to: /appData/downloads/
+# Mounted on Sonarr at: /mnt/flasharr-downloads/
 
-## Testing the Integration
-
-### Test 1: Network Connectivity
-
-```bash
-# From Sonarr container
-docker exec sonarr ping -c 3 flasharr
-
-# From Radarr container
-docker exec radarr ping -c 3 flasharr
+# Remote Path Mapping:
+# Remote: /appData/downloads/
+# Local: /mnt/flasharr-downloads/
 ```
 
-**Expected**: Successful ping responses
+---
 
-### Test 2: API Accessibility
+## Testing
 
-```bash
-# Test Newznab API
-curl "http://flasharr:8484/api/indexer?t=caps"
+### Test Newznab Indexer
 
-# Test SABnzbd API
-curl "http://flasharr:8484/sabnzbd/api?mode=version"
-```
+#### In Sonarr:
 
-**Expected**: XML/JSON responses
+1. Go to **Series** → Select any series
+2. Click **Search** → **Manual Search**
+3. You should see results from Flasharr with Vietnamese titles
+4. Example: "Breaking Bad" → "Tội Phạm Hoàn Lương"
 
-### Test 3: Manual Download
+#### In Radarr:
 
-**In Sonarr/Radarr**:
+1. Go to **Movies** → Select any movie
+2. Click **Search** → **Manual Search**
+3. You should see results from Flasharr
 
-1. Search for a TV show/movie
-2. Click **Manual Search**
-3. Select a result from Flasharr indexer
-4. Click download icon
-5. Check Flasharr UI → Downloads tab
+### Test Download Client
 
-**Expected**: Download appears in Flasharr queue
+1. In Sonarr/Radarr, manually grab a release from Flasharr
+2. Check **Activity** → **Queue**
+3. The download should appear and progress
+4. Monitor Flasharr's **Downloads** tab for progress
+
+---
 
 ## Troubleshooting
 
-### Issue: "Connection refused"
+### Issue: "Invalid API Key" Error
 
-**Cause**: Containers not on same network or wrong hostname
+**Symptoms:** Test shows error but connection works
 
-**Solution**:
+**Solution:**
 
-```bash
-# Check network
-docker network inspect bridge
+- This is often a false positive in Sonarr/Radarr UI
+- If the test passes, save anyway
+- Check Flasharr logs for actual API key validation:
+  ```bash
+  tail -f /tmp/flasharr.log | grep "API key"
+  ```
 
-# Verify containers are listed
-docker ps
+---
 
-# Test connectivity
-docker exec sonarr ping flasharr
-```
+### Issue: "Connection Refused"
 
-### Issue: "Invalid API key"
+**Symptoms:** Cannot connect to Flasharr
 
-**Cause**: API key mismatch
+**Solutions:**
 
-**Solution**:
+1. **Check Flasharr is running:**
 
-1. Copy exact API key from Flasharr Settings
-2. Paste into Sonarr/Radarr (no extra spaces)
-3. If still failing, regenerate API key in Flasharr
+   ```bash
+   curl http://localhost:8484/health
+   ```
 
-### Issue: "Test failed" in Sonarr/Radarr
+2. **Check firewall:**
 
-**Cause**: Wrong URL or port
+   ```bash
+   # Allow port 8484
+   sudo ufw allow 8484/tcp
+   ```
 
-**Solution**:
+3. **Verify URL format:**
+   - ✅ Correct: `http://192.168.1.100:8484/newznab`
+   - ❌ Wrong: `http://192.168.1.100:8484/newznab/`
+   - ❌ Wrong: `http://192.168.1.100:8484/newznab/api`
 
-- Verify URL: `http://flasharr:8484/api/indexer` (indexer)
-- Verify URL base: `/sabnzbd` (download client)
-- Check port: `8484`
-- Ensure Flasharr is running: `docker ps | grep flasharr`
+4. **Check network connectivity:**
+   ```bash
+   # From Sonarr/Radarr host
+   curl http://flasharr-ip:8484/newznab/api?t=caps
+   ```
 
-### Issue: Downloads not starting
+---
 
-**Cause**: Fshare credentials not configured
+### Issue: No Search Results
 
-**Solution**:
+**Symptoms:** Searches return empty
 
-1. Open Flasharr → Settings → Account
-2. Enter Fshare email and password
-3. Click **Test Connection**
-4. Ensure VIP account is active
+**Solutions:**
+
+1. **Check Fshare credentials in Flasharr:**
+   - Go to Settings → Fshare Account
+   - Verify credentials are correct
+   - Test connection
+
+2. **Check search logs:**
+
+   ```bash
+   tail -f /tmp/flasharr.log | grep "Search"
+   ```
+
+3. **Try manual search in Flasharr:**
+   - Go to Discover tab
+   - Search for the same content
+   - If results appear, integration is working
+
+4. **Verify TMDB API:**
+   - Flasharr uses TMDB for Vietnamese title resolution
+   - Check logs for TMDB errors
+
+---
+
+### Issue: Downloads Not Importing
+
+**Symptoms:** Downloads complete but don't import to Sonarr/Radarr
+
+**Solutions:**
+
+1. **Check Remote Path Mappings:**
+   - Ensure paths are correctly mapped
+   - Verify both systems can access the download location
+
+2. **Check file permissions:**
+
+   ```bash
+   # Ensure Sonarr/Radarr can read downloaded files
+   ls -la /path/to/downloads/
+   ```
+
+3. **Check download location:**
+   - In Flasharr Settings, verify download path
+   - Ensure it matches Remote Path Mapping
+
+4. **Manual import:**
+   - Go to Sonarr/Radarr → Activity → Queue
+   - Click "Manual Import" if needed
+
+---
+
+### Issue: Slow Searches
+
+**Symptoms:** Searches take a long time
+
+**Solutions:**
+
+1. **Check TMDB API rate limits:**
+   - Flasharr caches TMDB data
+   - First search may be slower
+
+2. **Check Fshare response time:**
+   - Fshare API may be slow during peak hours
+
+3. **Enable caching:**
+   - Flasharr automatically caches search results
+   - Subsequent searches will be faster
+
+---
 
 ## Advanced Configuration
 
 ### Custom Categories
 
-Configure different download paths per category:
-
-**In Flasharr** (`config.toml`):
+Edit Flasharr's `config.toml`:
 
 ```toml
-[download]
-base_dir = "/appData/downloads"
+[indexer]
+api_key = "your-key"
 
-[download.categories]
-tv = "TV Shows"
-movies = "Movies"
-anime = "Anime"
+# Custom category mappings (optional)
+# tv_categories = [5000, 5040, 5045]
+# movie_categories = [2000, 2040, 2045]
 ```
 
-**In Sonarr/Radarr**:
+### Multiple Instances
 
-- Set **Category** to `tv`, `movies`, or `anime`
-- Files will be organized accordingly
+You can add Flasharr to multiple Sonarr/Radarr instances:
 
-### Auto-Import Configuration
+- Each instance uses the same API key
+- Configure Remote Path Mappings per instance
+- No additional Flasharr configuration needed
 
-**In Flasharr Settings → Services**:
+---
 
-1. Enable **Auto-Import** for Sonarr/Radarr
-2. Enter Sonarr/Radarr URL and API key
-3. When download completes, Flasharr notifies \*arr to import
+## API Endpoints Reference
 
-**Benefits**:
+### Newznab Indexer
 
-- Faster import (no polling needed)
-- Immediate library updates
-- Better error handling
+| Endpoint                                 | Description             |
+| ---------------------------------------- | ----------------------- |
+| `GET /newznab/api?t=caps`                | Get capabilities        |
+| `GET /newznab/api?t=search&q=...`        | General search          |
+| `GET /newznab/api?t=tvsearch&tvdbid=...` | TV search by TVDB ID    |
+| `GET /newznab/api?t=movie&imdbid=...`    | Movie search by IMDB ID |
 
-## API Reference
+### SABnzbd Download Client
 
-### SABnzbd Compatibility
+| Endpoint                    | Description          |
+| --------------------------- | -------------------- |
+| `GET /sabnzbd?mode=queue`   | Get download queue   |
+| `GET /sabnzbd?mode=history` | Get download history |
+| `GET /sabnzbd?mode=addurl`  | Add download         |
+| `GET /sabnzbd?mode=pause`   | Pause download       |
+| `GET /sabnzbd?mode=resume`  | Resume download      |
 
-Flasharr implements these SABnzbd API endpoints:
+---
 
-| Endpoint                    | Method   | Description      |
-| --------------------------- | -------- | ---------------- |
-| `/sabnzbd/api?mode=addurl`  | GET/POST | Add download     |
-| `/sabnzbd/api?mode=queue`   | GET      | Get queue status |
-| `/sabnzbd/api?mode=history` | GET      | Get history      |
-| `/sabnzbd/api?mode=pause`   | GET/POST | Pause download   |
-| `/sabnzbd/api?mode=resume`  | GET/POST | Resume download  |
-| `/sabnzbd/api?mode=delete`  | GET/POST | Delete download  |
-| `/sabnzbd/api?mode=version` | GET      | Get version      |
+## Support
 
-### Response Format
+If you encounter issues:
 
-**Queue Response**:
+1. **Check Flasharr logs:**
 
-```json
-{
-  "status": true,
-  "queue": {
-    "slots": [
-      {
-        "nzo_id": "uuid",
-        "filename": "Show.S01E01.mkv",
-        "percentage": "45.2",
-        "mb": "1024.00",
-        "mbleft": "560.64",
-        "status": "Downloading",
-        "timeleft": "120s"
-      }
-    ],
-    "speed": "8.50 MB/s",
-    "size": "1024.00 MB",
-    "sizeleft": "560.64 MB"
-  }
-}
-```
+   ```bash
+   tail -f /tmp/flasharr.log
+   ```
 
-## Summary
+2. **Check Sonarr/Radarr logs:**
+   - Settings → System → Logs
 
-✅ **Flasharr simulates SABnzbd** to integrate with Sonarr/Radarr  
-✅ **No actual SABnzbd installation needed**  
-✅ **Same API key for both indexer and download client**  
-✅ **Works seamlessly in Docker networks**  
-✅ **Supports all standard \*arr operations**
+3. **Test API directly:**
 
-For more help, check the [main README](../README.md) or open an issue on GitHub.
+   ```bash
+   # Test Newznab
+   curl "http://localhost:8484/newznab/api?t=caps"
+
+   # Test SABnzbd
+   curl "http://localhost:8484/sabnzbd?mode=version&apikey=flasharr-default-key"
+   ```
+
+4. **Report issues:**
+   - Include logs from both Flasharr and Sonarr/Radarr
+   - Include your configuration (remove sensitive data)
+
+---
+
+## Tips for Best Results
+
+1. **Use TVDB/IMDB IDs:** Sonarr/Radarr automatically send these for accurate Vietnamese title matching
+
+2. **Enable Interactive Search:** Allows manual selection of quality/release
+
+3. **Configure Quality Profiles:** Set preferred qualities in Sonarr/Radarr
+
+4. **Monitor First Downloads:** Verify Remote Path Mappings work correctly
+
+5. **Check Download Progress:** Use Flasharr's Downloads tab for detailed progress
+
+---
+
+## What Makes Flasharr Different
+
+Traditional Newznab indexers search by English titles, which often miss Vietnamese releases on Fshare.
+
+**Flasharr's Smart Search:**
+
+1. Receives TVDB/IMDB ID from Sonarr/Radarr
+2. Converts to TMDB ID
+3. Fetches Vietnamese alternative titles from TMDB
+4. Searches Fshare with both English and Vietnamese titles
+5. Returns accurate Vietnamese releases
+
+**Result:** Better matches for Vietnamese content! 🎯
+
+---
+
+**Happy downloading!** 🚀
