@@ -34,7 +34,7 @@ pub struct SmartSearchRequest {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SmartSearchResponse {
     pub query: String,
     pub total_found: usize,
@@ -44,13 +44,13 @@ pub struct SmartSearchResponse {
     pub seasons: Option<Vec<SeasonGroup>>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SeasonGroup {
     pub season: u32,
     pub episodes_grouped: Vec<EpisodeGroup>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EpisodeGroup {
     pub episode_number: u32,
     pub name: String,

@@ -217,11 +217,93 @@ async fn imdb_to_tmdb(imdb_id: &str) -> Option<String> {
 
 /// Convert SmartSearchResponse to Newznab XML
 /// This extracts results from the smart_search response and converts to IndexerResult format
-fn convert_smart_response_to_xml(response: axum::response::Response, query: &str) -> String {
-    // TODO: Properly deserialize SmartSearchResponse from response body
-    // For now, return empty results as placeholder
-    tracing::warn!("SmartSearch response conversion - returning empty results (implementation pending)");
-    generate_search_xml(vec![], query)
+async fn convert_smart_response_to_xml(response: axum::response::Response, query: &str) -> String {
+    use axum::body::to_bytes;
+    use crate::api::smart_search::SmartSearchResponse;
+    
+    // Extract body bytes from response
+    let (parts, body) = response.into_parts();
+    let body_bytes = match to_bytes(body, usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::error!("Failed to read response body: {}", e);
+            return generate_search_xml(vec![], query);
+        }
+    };
+    
+    // Deserialize SmartSearchResponse
+    let smart_response: SmartSearchResponse = match serde_json::from_slice(&body_bytes) {
+        Ok(resp) => resp,
+        Err(e) => {
+            tracing::error!("Failed to deserialize SmartSearchResponse: {}", e);
+            return generate_search_xml(vec![], query);
+        }
+    };
+    
+    // Extract all files from quality groups
+    let mut indexer_results = Vec::new();
+    let group_count = smart_response.groups.as_ref().map(|g| g.len()).unwrap_or(0);
+    
+    if let Some(groups) = smart_response.groups {
+        for group in groups {
+            for file in group.files {
+                // Determine category based on media type
+                let category = if smart_response.r#type == "tv" {
+                    5040 // TV/HD
+                } else {
+                    2040 // Movies/HD
+                };
+                
+                // Create IndexerResult
+                let result = IndexerResult {
+                    title: file.name.clone(),
+                    guid: format!("fshare://{}", extract_file_id(&file.url)),
+                    link: file.url.clone(),
+                    size: file.size,
+                    pub_date: Utc::now(),
+                    category,
+                };
+                
+                indexer_results.push(result);
+            }
+        }
+    }
+    
+    // Handle TV seasons structure if present
+    if let Some(seasons) = smart_response.seasons {
+        for season in seasons {
+            for episode_group in season.episodes_grouped {
+                for file in episode_group.files {
+                    let result = IndexerResult {
+                        title: file.name.clone(),
+                        guid: format!("fshare://{}", extract_file_id(&file.url)),
+                        link: file.url.clone(),
+                        size: file.size,
+                        pub_date: Utc::now(),
+                        category: 5040, // TV/HD
+                    };
+                    
+                    indexer_results.push(result);
+                }
+            }
+        }
+    }
+    
+    tracing::info!(
+        "Converted SmartSearchResponse: {} results from {} quality groups",
+        indexer_results.len(),
+        group_count
+    );
+    
+    generate_search_xml(indexer_results, query)
+}
+
+/// Extract file ID from Fshare URL
+fn extract_file_id(url: &str) -> String {
+    url.split('/').last()
+        .and_then(|s| s.split('?').next())
+        .unwrap_or("unknown")
+        .to_string()
 }
 
 
@@ -293,7 +375,7 @@ async fn handle_tv_search(
     let response = crate::api::smart_search::handle_tv_search(state, smart_req).await;
     
     // Step 4: Convert SmartSearchResponse to Newznab XML
-    convert_smart_response_to_xml(response, &title)
+    convert_smart_response_to_xml(response, &title).await
 }
 
 /// Handle movie search - Bridge to smart_search with IMDB → TMDB conversion
@@ -340,7 +422,7 @@ async fn handle_movie_search(
     let response = crate::api::smart_search::handle_movie_search(state, smart_req).await;
     
     // Step 5: Convert SmartSearchResponse to Newznab XML
-    convert_smart_response_to_xml(response, &title)
+    convert_smart_response_to_xml(response, &title).await
 }
 
 // ============================================================================
