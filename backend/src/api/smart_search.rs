@@ -79,7 +79,7 @@ pub async fn smart_search(
     }
 }
 
-async fn handle_movie_search(
+pub async fn handle_movie_search(
     state: Arc<AppState>,
     req: SmartSearchRequest,
 ) -> axum::response::Response {
@@ -400,7 +400,7 @@ async fn handle_movie_search(
     Json(response).into_response()
 }
 
-async fn handle_tv_search(
+pub async fn handle_tv_search(
     state: Arc<AppState>,
     req: SmartSearchRequest,
 ) -> axum::response::Response {

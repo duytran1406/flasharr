@@ -15,6 +15,9 @@ use crate::AppState;
 use chrono::{DateTime, Utc};
 use moka::future::Cache;
 use std::time::Duration;
+use reqwest::Client;
+use serde_json::Value;
+use crate::constants::TMDB_API_KEY;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -93,7 +96,10 @@ async fn handle_indexer(
     use axum::response::Response;
     use axum::body::Body;
     
-    tracing::info!("Newznab API request - mode: {}, apikey: {:?}", params.t, params.apikey);
+    tracing::info!(
+        "Newznab API request - mode: {}, q: {:?}, season: {:?}, ep: {:?}, imdbid: {:?}, tvdbid: {:?}, apikey: {:?}",
+        params.t, params.q, params.season, params.ep, params.imdbid, params.tvdbid, params.apikey
+    );
     
     let (status, xml_body) = match params.t.as_str() {
         "caps" => (StatusCode::OK, handle_caps()),
@@ -159,6 +165,66 @@ fn handle_caps() -> String {
 </caps>"#.to_string()
 }
 
+// ============================================================================
+// ID Conversion & Smart Search Bridge
+// ============================================================================
+
+/// Convert TVDB ID to TMDB ID
+async fn tvdb_to_tmdb(tvdb_id: &str) -> Option<String> {
+    let client = Client::new();
+    let url = format!(
+        "https://api.themoviedb.org/3/find/{}?api_key={}&external_source=tvdb_id",
+        tvdb_id, TMDB_API_KEY
+    );
+    
+    let resp = client.get(&url).send().await.ok()?;
+    let data: Value = resp.json().await.ok()?;
+    
+    data["tv_results"]
+        .as_array()?
+        .first()?
+        ["id"]
+        .as_u64()
+        .map(|id| id.to_string())
+}
+
+/// Convert IMDB ID to TMDB ID
+async fn imdb_to_tmdb(imdb_id: &str) -> Option<String> {
+    let client = Client::new();
+    
+    // Ensure IMDB ID has 'tt' prefix
+    let clean_id = if imdb_id.starts_with("tt") {
+        imdb_id.to_string()
+    } else {
+        format!("tt{}", imdb_id)
+    };
+    
+    let url = format!(
+        "https://api.themoviedb.org/3/find/{}?api_key={}&external_source=imdb_id",
+        clean_id, TMDB_API_KEY
+    );
+    
+    let resp = client.get(&url).send().await.ok()?;
+    let data: Value = resp.json().await.ok()?;
+    
+    data["movie_results"]
+        .as_array()?
+        .first()?
+        ["id"]
+        .as_u64()
+        .map(|id| id.to_string())
+}
+
+/// Convert SmartSearchResponse to Newznab XML
+/// This extracts results from the smart_search response and converts to IndexerResult format
+fn convert_smart_response_to_xml(response: axum::response::Response, query: &str) -> String {
+    // TODO: Properly deserialize SmartSearchResponse from response body
+    // For now, return empty results as placeholder
+    tracing::warn!("SmartSearch response conversion - returning empty results (implementation pending)");
+    generate_search_xml(vec![], query)
+}
+
+
 /// Handle general search
 async fn handle_search(
     state: Arc<AppState>,
@@ -186,63 +252,95 @@ async fn handle_search(
     generate_search_xml(results, &query)
 }
 
-/// Handle TV search
+/// Handle TV search - Bridge to smart_search with TVDB → TMDB conversion
 async fn handle_tv_search(
     state: Arc<AppState>,
     params: IndexerParams,
 ) -> String {
-    let query = match params.q {
-        Some(q) if !q.is_empty() => q,
-        _ => return generate_search_xml(vec![], ""), // Return empty feed instead of error
-    };
-    
-    // Build TV-specific query
-    let tv_query = if let (Some(season), Some(ep)) = (params.season, params.ep) {
-        format!("{} S{:02}E{:02}", query, season, ep)
-    } else if let Some(season) = params.season {
-        format!("{} Season {}", query, season)
+    // Step 1: Convert TVDB ID to TMDB ID if provided
+    let tmdb_id = if let Some(tvdb_id) = params.tvdbid {
+        match tvdb_to_tmdb(&tvdb_id).await {
+            Some(id) => {
+                tracing::info!("Converted TVDB {} → TMDB {}", tvdb_id, id);
+                Some(Value::String(id))
+            }
+            None => {
+                tracing::warn!("Failed to convert TVDB {} to TMDB", tvdb_id);
+                None
+            }
+        }
     } else {
-        query.clone()
+        None
     };
     
-    // Check cache
-    let cache = get_search_cache();
-    let cache_key = format!("tv:{}", tv_query);
-    
-    let results = if let Some(cached) = cache.get(&cache_key).await {
-        cached
-    } else {
-        let results = execute_fshare_search_for_indexer(&state, &tv_query).await;
-        cache.insert(cache_key, results.clone()).await;
-        results
+    // Step 2: Build SmartSearchRequest with all available data
+    let title = params.q.unwrap_or_else(|| "".to_string());
+    let smart_req = crate::api::smart_search::SmartSearchRequest {
+        title: title.clone(),
+        tmdb_id,
+        r#type: "tv".to_string(),
+        season: params.season,
+        episode: params.ep,
+        year: None, // TV shows don't use year in the same way
     };
     
-    generate_search_xml(results, &query)
+    tracing::info!(
+        "TV Search Bridge: title='{}', tmdb_id={:?}, season={:?}, ep={:?}",
+        title, smart_req.tmdb_id, smart_req.season, smart_req.episode
+    );
+    
+    // Step 3: Call smart_search (already has Vietnamese title logic!)
+    let response = crate::api::smart_search::handle_tv_search(state, smart_req).await;
+    
+    // Step 4: Convert SmartSearchResponse to Newznab XML
+    convert_smart_response_to_xml(response, &title)
 }
 
-/// Handle movie search
+/// Handle movie search - Bridge to smart_search with IMDB → TMDB conversion
 async fn handle_movie_search(
     state: Arc<AppState>,
     params: IndexerParams,
 ) -> String {
-    let query = match params.q {
-        Some(q) if !q.is_empty() => q,
-        _ => return generate_search_xml(vec![], ""), // Return empty feed instead of error
-    };
-    
-    // Check cache
-    let cache = get_search_cache();
-    let cache_key = format!("movie:{}", query);
-    
-    let results = if let Some(cached) = cache.get(&cache_key).await {
-        cached
+    // Step 1: Convert IMDB ID to TMDB ID if provided
+    let tmdb_id = if let Some(imdb_id) = params.imdbid {
+        match imdb_to_tmdb(&imdb_id).await {
+            Some(id) => {
+                tracing::info!("Converted IMDB {} → TMDB {}", imdb_id, id);
+                Some(Value::String(id))
+            }
+            None => {
+                tracing::warn!("Failed to convert IMDB {} to TMDB", imdb_id);
+                None
+            }
+        }
     } else {
-        let results = execute_fshare_search_for_indexer(&state, &query).await;
-        cache.insert(cache_key, results.clone()).await;
-        results
+        None
     };
     
-    generate_search_xml(results, &query)
+    // Step 2: Extract year from query or use separate parameter
+    let title = params.q.unwrap_or_else(|| "".to_string());
+    let year = None; // Radarr doesn't typically send year as separate param
+    
+    // Step 3: Build SmartSearchRequest with all available data
+    let smart_req = crate::api::smart_search::SmartSearchRequest {
+        title: title.clone(),
+        tmdb_id,
+        r#type: "movie".to_string(),
+        season: None,
+        episode: None,
+        year,
+    };
+    
+    tracing::info!(
+        "Movie Search Bridge: title='{}', tmdb_id={:?}, year={:?}",
+        title, smart_req.tmdb_id, smart_req.year
+    );
+    
+    // Step 4: Call smart_search (already has Vietnamese title logic!)
+    let response = crate::api::smart_search::handle_movie_search(state, smart_req).await;
+    
+    // Step 5: Convert SmartSearchResponse to Newznab XML
+    convert_smart_response_to_xml(response, &title)
 }
 
 // ============================================================================
