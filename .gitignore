@@ -45,3 +45,16 @@ PUBLISHED.md
 PUBLISHING_SETUP.md
 VERSIONING_SETUP.md
 READY_TO_PUBLISH.md
+
+# Sensitive config — copy config.example.toml → config.toml and fill in your own values
+backend/config.toml
+
+# SQLite databases (contain runtime state, not source code)
+*.db
+*.db-shm
+*.db-wal
+
+# Scratch files generated during development
+frame_*.png
+frontend/check_log.txt
+frontend/check_output.txt

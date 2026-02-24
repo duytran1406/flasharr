@@ -3,7 +3,7 @@ host = "0.0.0.0"
 port = 8484
 
 [downloads]
-directory = "/tmp/flasharr-downloads"
+directory = "/data/downloads"
 max_concurrent = 3
 segments_per_download = 4
 
@@ -13,15 +13,15 @@ password = ""
 prefer_api2 = true
 
 [sonarr]
-enabled = true
-url = "http://192.168.1.110:8989"
-api_key = "6cc69aeeec80439eadc8ec63ef63f839"
+enabled = false
+url = "http://your-sonarr-host:8989"
+api_key = "your-sonarr-api-key"
 auto_import = true
 
 [radarr]
-enabled = true
-url = "http://192.168.1.110:7878"
-api_key = "eef7841842cc4a25a75bae282c08db89"
+enabled = false
+url = "http://your-radarr-host:7878"
+api_key = "your-radarr-api-key"
 auto_import = true
 
 [indexer]
@@ -29,6 +29,6 @@ enabled = true
 api_key = "flasharr-default-key"
 
 [external]
-tmdb_api_key = "8d95150f3391194ca66fef44df497ad6"
+tmdb_api_key = "your-tmdb-api-key"
 tmdb_cache_ttl_secs = 3600
 fshare_cache_ttl_secs = 300
