@@ -33,6 +33,19 @@ impl DownloadTaskManager {
         let mut tasks = self.tasks.write().unwrap();
         tasks.insert(task.id, task);
     }
+    
+    /// Restore multiple tasks from database (used on startup)
+    /// Loads QUEUED/PAUSED tasks into HashMap so resume/pause operations work
+    pub fn restore_tasks(&self, tasks_to_restore: Vec<DownloadTask>) -> usize {
+        let mut tasks = self.tasks.write().unwrap();
+        let count = tasks_to_restore.len();
+        for task in tasks_to_restore {
+            tasks.insert(task.id, task);
+        }
+        tracing::info!("Restored {} tasks from database into TaskManager", count);
+        count
+    }
+
 
     /// Get all tasks (deprecated - use get_active_tasks for real-time + DB for full list)
     pub fn get_tasks(&self) -> Vec<DownloadTask> {
@@ -217,6 +230,8 @@ impl DownloadTaskManager {
         let mut queued = 0;
         let mut completed = 0;
         let mut failed = 0;
+        let mut paused = 0;
+        let mut cancelled = 0;
         let mut total_speed = 0.0;
         
         for task in tasks.values() {
@@ -231,6 +246,10 @@ impl DownloadTaskManager {
                 completed += 1;
             } else if task.state == DownloadState::Failed {
                 failed += 1;
+            } else if task.state == DownloadState::Paused {
+                paused += 1;
+            } else if task.state == DownloadState::Cancelled {
+                cancelled += 1;
             }
         }
         
@@ -239,7 +258,10 @@ impl DownloadTaskManager {
             queued,
             completed,
             failed,
+            paused,
+            cancelled,
             total_speed,
+            db_counts: None, // Will be populated by orchestrator from database
         };
 
         stats
@@ -266,11 +288,12 @@ impl DownloadTaskManager {
                 })
                 .map(|t| t.id);
             
-            // Collect queued task data for sorting (ID, remaining_bytes, progress, created_at)
-            let queued: Vec<(Uuid, u64, f32, chrono::DateTime<Utc>)> = tasks.values()
+            // Collect queued task data for sorting (ID, priority, remaining_bytes, progress, created_at)
+            let queued: Vec<(Uuid, i32, u64, f32, chrono::DateTime<Utc>)> = tasks.values()
                 .filter(|t| t.state == DownloadState::Queued && !processing.contains(&t.id))
                 .map(|t| (
                     t.id,
+                    t.priority,
                     t.size.saturating_sub(t.downloaded),
                     t.progress,
                     t.created_at
@@ -299,27 +322,47 @@ impl DownloadTaskManager {
         // Step 3: Sort queued candidates WITHOUT holding any lock
         let mut sorted_candidates = queued_data;
         sorted_candidates.sort_by(|a, b| {
-            // 1. Remaining Size (ASC)
+            // 1. Priority (DESC) - higher priority first
             if a.1 != b.1 {
-                return a.1.cmp(&b.1);
+                return b.1.cmp(&a.1); // Reverse order for DESC
             }
-            // 2. Progress (DESC)
-            if a.2 > b.2 {
+            // 2. Remaining Size (ASC) - smaller files first
+            if a.2 != b.2 {
+                return a.2.cmp(&b.2);
+            }
+            // 3. Progress (DESC) - more complete first
+            if a.3 > b.3 {
                 return std::cmp::Ordering::Less;
             }
-            if a.2 < b.2 {
+            if a.3 < b.3 {
                 return std::cmp::Ordering::Greater;
             }
-            // 3. Date Added (ASC)
-            a.3.cmp(&b.3)
+            // 4. Date Added (ASC) - older first
+            a.4.cmp(&b.4)
         });
         
         // Step 4: Claim the first task (needs write lock, but very brief)
-        if let Some((task_id, _, _, _)) = sorted_candidates.first() {
+        if let Some((task_id, _, _, _, _)) = sorted_candidates.first() {
             let mut tasks = self.tasks.write().unwrap();
             let mut processing = self.processing_tasks.write().unwrap();
             
             if let Some(task) = tasks.get_mut(task_id) {
+                // CRITICAL: Re-check state since another worker may have claimed it
+                // between our read and this write
+                if task.state != DownloadState::Queued {
+                    tracing::debug!(
+                        "Task {} already claimed by another worker (state: {:?})",
+                        task_id,
+                        task.state
+                    );
+                    return None;
+                }
+                
+                if processing.contains(task_id) {
+                    tracing::debug!("Task {} already in processing set", task_id);
+                    return None;
+                }
+                
                 tracing::debug!(
                     "Claiming task {} (current state: {:?}, changing to Starting)",
                     task_id,
@@ -393,5 +436,124 @@ impl DownloadTaskManager {
 impl Default for DownloadTaskManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ============================================================================
+// Phase 4: Event-Driven Cache
+// ============================================================================
+
+impl DownloadTaskManager {
+    /// Start event listener for auto-updating cache (Phase 4)
+    /// TaskManager subscribes to EventBus and auto-updates on events
+    pub fn start_event_listener(
+        self: Arc<Self>,
+        mut event_rx: tokio::sync::broadcast::Receiver<super::events::TaskEvent>,
+    ) {
+        tokio::spawn(async move {
+            tracing::info!("TaskManager event listener started (Phase 4)");
+            
+            while let Ok(event) = event_rx.recv().await {
+                match event {
+                    super::events::TaskEvent::Created { task, .. } => {
+                        tracing::debug!("Event: Task created {}", task.id);
+                        self.add_task(task);
+                    }
+                    super::events::TaskEvent::StateChanged { task, .. } => {
+                        tracing::debug!("Event: Task state changed {} -> {:?}", task.id, task.state);
+                        self.update_task(task);
+                    }
+                    super::events::TaskEvent::Completed { task, .. } => {
+                        tracing::info!("Event: Task completed {}", task.id);
+                        self.update_task(task.clone());
+                        
+                        // Auto-evict completed tasks after 5 minutes
+                        let manager = Arc::clone(&self);
+                        let task_id = task.id;
+                        tokio::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+                            if manager.remove_task(task_id).is_some() {
+                                tracing::info!("Auto-evicted completed task {} from cache", task_id);
+                            }
+                        });
+                    }
+                    super::events::TaskEvent::Failed { task, .. } => {
+                        tracing::warn!("Event: Task failed {}", task.id);
+                        self.update_task(task.clone());
+                        
+                        // Auto-evict failed tasks after 5 minutes
+                        let manager = Arc::clone(&self);
+                        let task_id = task.id;
+                        tokio::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+                            if manager.remove_task(task_id).is_some() {
+                                tracing::info!("Auto-evicted failed task {} from cache", task_id);
+                            }
+                        });
+                    }
+                    super::events::TaskEvent::Removed { task_id, .. } => {
+                        tracing::debug!("Event: Task removed {}", task_id);
+                        self.remove_task(task_id);
+                    }
+                    _ => {}
+                }
+            }
+            
+            tracing::warn!("TaskManager event listener stopped");
+        });
+    }
+    
+    /// Start background cleanup loop (additional safety mechanism)
+    /// Periodically evicts old completed/failed tasks that might have been missed by events
+    pub fn start_cleanup_loop(self: Arc<Self>) {
+        tokio::spawn(async move {
+            tracing::info!("TaskManager background cleanup loop started");
+            
+            loop {
+                // Run cleanup every 10 minutes
+                tokio::time::sleep(tokio::time::Duration::from_secs(600)).await;
+                
+                let mut evicted_count = 0;
+                let now = Utc::now();
+                
+                // Get all tasks
+                let tasks_to_check: Vec<(Uuid, DownloadTask)> = {
+                    let tasks = self.tasks.read().unwrap();
+                    tasks.iter().map(|(id, task)| (*id, task.clone())).collect()
+                };
+                
+                // Check each task
+                for (task_id, task) in tasks_to_check {
+                    let should_evict = match task.state {
+                        DownloadState::Completed | DownloadState::Failed => {
+                            // Evict if older than 5 minutes
+                            if let Some(completed_at) = task.completed_at {
+                                let age = now.signed_duration_since(completed_at);
+                                age > chrono::Duration::minutes(5)
+                            } else {
+                                false
+                            }
+                        }
+                        _ => false,
+                    };
+                    
+                    if should_evict {
+                        if self.remove_task(task_id).is_some() {
+                            evicted_count += 1;
+                            tracing::info!(
+                                "Background cleanup: Evicted old {:?} task {} (age: {:?})",
+                                task.state,
+                                task_id,
+                                task.completed_at.map(|c| now.signed_duration_since(c))
+                            );
+                        }
+                    }
+                }
+                
+                if evicted_count > 0 {
+                    tracing::info!("Background cleanup: Evicted {} old tasks", evicted_count);
+                }
+            }
+        });
     }
 }

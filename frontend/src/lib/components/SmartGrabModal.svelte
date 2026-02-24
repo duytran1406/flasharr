@@ -2,7 +2,45 @@
   import { untrack } from "svelte";
   import { smartGrabStore } from "$lib/stores/smartGrab";
   import { toasts } from "$lib/stores/toasts";
-  import { slide, fade } from "svelte/transition";
+  import { animeSlideDown } from "$lib/animations";
+  import Badge, { type BadgeVariant } from "$lib/components/ui/Badge.svelte";
+  import Modal from "$lib/components/ui/Modal.svelte";
+  import Button from "$lib/components/ui/Button.svelte";
+
+  /** Extract display tags from a file object (same flags the search API returns) */
+  function getFileTags(
+    file: any,
+  ): { text: string; variant: BadgeVariant; noDot?: boolean }[] {
+    const name = (file.name || "").toLowerCase();
+    const tags: { text: string; variant: BadgeVariant; noDot?: boolean }[] = [];
+    if (
+      file.vietdub ||
+      (name.includes("vietsub") && name.includes("vie")) ||
+      (!file.vietsub &&
+        (name.includes(".vie.") ||
+          name.includes("[vie]") ||
+          name.match(/\.vie[. \[\-_]/i)))
+    )
+      tags.push({ text: "VIE", variant: "language" });
+    if (file.vietsub || name.includes("vietsub") || name.includes(".sub."))
+      tags.push({ text: "SUB", variant: "success" });
+    if (
+      file.hdr ||
+      name.includes(".hdr.") ||
+      name.includes("[hdr]") ||
+      name.match(/\.hdr[. \[\-_]/i)
+    )
+      tags.push({ text: "HDR", variant: "hdr", noDot: true });
+    if (
+      file.dolby_vision ||
+      name.includes(".dv.") ||
+      name.includes("[dv]") ||
+      name.match(/\.dv[. \[\-_]/i)
+    )
+      tags.push({ text: "DV", variant: "dv", noDot: true });
+    if (file.quality) tags.push({ text: file.quality, variant: "quality" });
+    return tags;
+  }
 
   // Types
   interface GrabSet {
@@ -43,10 +81,22 @@
   let totalAvailableEpisodes = $state(0);
   let allExpectedEpisodes = $state<number[]>([]); // All episode numbers expected
   let tmdbEpisodeCount = $state(0); // TMDB official episode count
+  let downloadedCount = $state(0); // Episodes already downloaded
 
   let expandedSection = $state<string | null>("quick");
   let expandedSet = $state<string | null>(null); // Track which set is expanded to show files
   let isGrabbing = $state(false);
+  let skipDownloaded = $state(true); // Toggle: skip already-downloaded episodes
+
+  // Get existing downloads from the store
+  function getExistingDownloads(): Set<string> {
+    return $smartGrabStore.data?.existingDownloads ?? new Set();
+  }
+
+  function isEpisodeDownloaded(seasonNum: number, epNum: number): boolean {
+    const key = `S${String(seasonNum).padStart(2, "0")}E${String(epNum).padStart(2, "0")}`;
+    return getExistingDownloads().has(key);
+  }
 
   // Helpers
   function formatSize(bytes: number) {
@@ -100,11 +150,14 @@
   // Build all groupings when data changes - use untrack to prevent infinite loop
   $effect(() => {
     const storeValue = $smartGrabStore;
+    const _skip = skipDownloaded; // Track this reactive dependency
     console.log(
       "[SmartGrabModal] Effect triggered - isOpen:",
       storeValue.isOpen,
       "hasData:",
       !!storeValue.data,
+      "skipDownloaded:",
+      _skip,
     );
     const seasons = storeValue.data?.seasons;
     if (seasons && Array.isArray(seasons)) {
@@ -112,6 +165,8 @@
         "[SmartGrabModal] Building sets for",
         seasons.length,
         "seasons",
+        "skipDownloaded:",
+        _skip,
       );
       // Use untrack to avoid reactive loop when we write to state variables inside buildAllSets
       untrack(() => {
@@ -151,6 +206,9 @@
     tmdbEpisodeCount = officialEpisodeCount;
 
     // First pass: collect all episode numbers and build sets
+    const existing = getExistingDownloads();
+    let dlCount = 0;
+
     for (const season of seasons) {
       if (season.season === 0) continue;
 
@@ -160,6 +218,13 @@
         const epNum = ep.episode_number;
         // Skip episode 0 - usually specials or trash results
         if (epNum === 0 || epNum > officialEpisodeCount) continue;
+
+        // Skip episodes already downloaded (if toggle is on)
+        const epKey = `S${String(season.season).padStart(2, "0")}E${String(epNum).padStart(2, "0")}`;
+        if (skipDownloaded && existing.has(epKey)) {
+          dlCount++;
+          continue;
+        }
 
         allEpisodeNumbers.push(epNum);
 
@@ -342,6 +407,7 @@
     };
 
     totalAvailableEpisodes = totalEps;
+    downloadedCount = dlCount;
   }
 
   // Get fallback count for a set
@@ -359,9 +425,24 @@
     files: { seasonNum: number; epNum: number; file: any }[],
     fallbackCount: number,
   ) {
+    // Extra safety: filter out any already-downloaded episodes (only when skip is on)
+    if (skipDownloaded) {
+      const filteredFiles = files.filter(
+        (f) => !isEpisodeDownloaded(f.seasonNum, f.epNum),
+      );
+      if (filteredFiles.length === 0) {
+        toasts.info("All episodes already downloaded!");
+        isGrabbing = false;
+        return;
+      }
+      files = filteredFiles;
+    }
     try {
       // Generate a single batch ID for all downloads in this grab
-      const batchId = crypto.randomUUID();
+      // Fallback for browsers that don't support crypto.randomUUID()
+      const batchId =
+        crypto?.randomUUID?.() ||
+        `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       const batchName = $smartGrabStore.data?.title || "Smart Grab";
 
       const batchSize = 3;
@@ -373,6 +454,11 @@
               tmdb_id: parseInt($smartGrabStore.data?.tmdbId || ""),
               media_type: "tv",
               title: $smartGrabStore.data?.title,
+              year: $smartGrabStore.data?.year
+                ? typeof $smartGrabStore.data.year === "string"
+                  ? parseInt($smartGrabStore.data.year)
+                  : $smartGrabStore.data.year
+                : undefined,
               season: item.seasonNum,
               episode: item.epNum,
             };
@@ -406,8 +492,9 @@
 
       toasts.success(msg);
       smartGrabStore.close();
-    } catch (e) {
-      toasts.error("Smart Grab failed");
+    } catch (e: any) {
+      console.error("Smart Grab error:", e);
+      toasts.error(`Smart Grab failed: ${e?.message || "Unknown error"}`);
     } finally {
       isGrabbing = false;
     }
@@ -460,111 +547,253 @@
   }
 </script>
 
-{#if $smartGrabStore.isOpen && $smartGrabStore.data}
-  <div
-    class="modal-overlay"
-    onclick={(e) => e.target === e.currentTarget && smartGrabStore.close()}
-    onkeydown={(e) => e.key === "Escape" && smartGrabStore.close()}
-    role="button"
-    tabindex="-1"
-    aria-label="Close modal"
-  >
-    <div class="modal-content">
-      <div class="modal-header">
-        <div class="header-info">
-          <div class="smart-badge">SMART GRAB TEST</div>
-          <h2>Test Modal - Click to Close</h2>
+<Modal
+  open={$smartGrabStore.isOpen && !!$smartGrabStore.data}
+  onClose={() => smartGrabStore.close()}
+  maxWidth="900px"
+  accent="var(--color-primary, #00f3ff)"
+  ariaLabel="Smart Grab"
+>
+  {#snippet header()}
+    <div class="header-info">
+      <Badge text="SMART GRAB" variant="smart" size="sm" />
+      <h2>{$smartGrabStore.data?.title || "Smart Grab"}</h2>
+      {#if downloadedCount > 0 || getExistingDownloads().size > 0}
+        <div class="downloaded-controls">
+          <span class="downloaded-info">
+            <span class="material-icons">check_circle</span>
+            {getExistingDownloads().size} already downloaded
+          </span>
+          <label class="toggle-switch">
+            <input type="checkbox" bind:checked={skipDownloaded} />
+            <span class="toggle-slider"></span>
+            <span class="toggle-label"
+              >{skipDownloaded ? "Missing only" : "Grab all"}</span
+            >
+          </label>
         </div>
-        <button class="close-btn" onclick={() => smartGrabStore.close()}>
-          <span class="material-icons">close</span>
+      {/if}
+    </div>
+    <button class="close-btn" onclick={() => smartGrabStore.close()}>
+      <span class="material-icons">close</span>
+    </button>
+  {/snippet}
+
+  {#snippet children()}
+    {#if $smartGrabStore.isOpen && $smartGrabStore.data}
+      <!-- Quick Grab Section -->
+      <div class="grab-section" class:expanded={expandedSection === "quick"}>
+        <button class="section-header" onclick={() => toggleSection("quick")}>
+          <div class="section-left">
+            <span class="material-icons section-icon">auto_awesome</span>
+            <span class="section-title">QUICK GRAB</span>
+            <Badge text="BEST" variant="best" size="xs" />
+          </div>
+          <div class="section-right">
+            <span class="section-meta">{quickGrabInfo.count} episodes</span>
+            <span class="material-icons chevron">
+              {expandedSection === "quick" ? "expand_less" : "expand_more"}
+            </span>
+          </div>
         </button>
+
+        {#if expandedSection === "quick"}
+          <div class="section-content" transition:animeSlideDown>
+            <div class="set-card quick-card">
+              <div class="set-info">
+                <div class="coverage-row">
+                  <div class="coverage-bar-container">
+                    <div
+                      class="coverage-bar"
+                      style="width: 100%; background: {getCoverageGradient(
+                        100,
+                      )}"
+                    ></div>
+                  </div>
+                  <span class="coverage-text">100%</span>
+                </div>
+                <div class="set-stats">
+                  <span
+                    >{quickGrabInfo.count}/{totalAvailableEpisodes} episodes</span
+                  >
+                  <span class="dot">•</span>
+                  <span>~{formatSize(quickGrabInfo.avgSize)} avg</span>
+                  <span class="dot">•</span>
+                  <span
+                    >~{formatSize(quickGrabInfo.avgSize * quickGrabInfo.count)} total</span
+                  >
+                </div>
+                <Badge
+                  text="Complete - Best quality per episode"
+                  variant="success"
+                  size="xs"
+                />
+              </div>
+              <div class="set-actions">
+                <button
+                  class="expand-files-btn"
+                  onclick={() =>
+                    (expandedSet =
+                      expandedSet === "quick-grab" ? null : "quick-grab")}
+                >
+                  <span class="material-icons">
+                    {expandedSet === "quick-grab"
+                      ? "expand_less"
+                      : "expand_more"}
+                  </span>
+                  {quickGrabInfo.files.length} files
+                </button>
+                <Button
+                  icon={isGrabbing ? "sync" : "download"}
+                  loading={isGrabbing}
+                  size="md"
+                  onclick={executeQuickGrab}
+                  disabled={isGrabbing}
+                  >GRAB {quickGrabInfo.count}{downloadedCount > 0
+                    ? " MISSING"
+                    : ""}</Button
+                >
+              </div>
+
+              {#if expandedSet === "quick-grab"}
+                <div class="files-list" transition:animeSlideDown>
+                  {#each quickGrabInfo.files as item}
+                    <div class="file-item">
+                      <Badge
+                        text="E{item.epNum}"
+                        variant={item.isFallback ? "warning" : "primary"}
+                        size="xs"
+                      />
+                      {#each getFileTags(item.file) as tag}
+                        <Badge
+                          text={tag.text}
+                          variant={tag.variant}
+                          size="xs"
+                          noDot={tag.noDot ?? false}
+                        />
+                      {/each}
+                      <span class="file-name" title={item.file.name}
+                        >{item.file.name}</span
+                      >
+                      <span class="file-size">{formatSize(item.file.size)}</span
+                      >
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          </div>
+        {/if}
       </div>
 
-      <div class="modal-body custom-scrollbar">
-        <!-- Quick Grab Section -->
-        <div class="grab-section" class:expanded={expandedSection === "quick"}>
-          <button class="section-header" onclick={() => toggleSection("quick")}>
-            <div class="section-left">
-              <span class="material-icons section-icon">auto_awesome</span>
-              <span class="section-title">QUICK GRAB</span>
-              <span class="best-badge">⭐ BEST</span>
-            </div>
-            <div class="section-right">
-              <span class="section-meta">{quickGrabInfo.count} episodes</span>
-              <span class="material-icons chevron">
-                {expandedSection === "quick" ? "expand_less" : "expand_more"}
-              </span>
-            </div>
-          </button>
+      <!-- By Quality Section -->
+      <div class="grab-section" class:expanded={expandedSection === "quality"}>
+        <button class="section-header" onclick={() => toggleSection("quality")}>
+          <div class="section-left">
+            <span class="material-icons section-icon">high_quality</span>
+            <span class="section-title">BY QUALITY</span>
+          </div>
+          <div class="section-right">
+            <span class="section-meta">{qualitySets.length} groups</span>
+            <span class="material-icons chevron">
+              {expandedSection === "quality" ? "expand_less" : "expand_more"}
+            </span>
+          </div>
+        </button>
 
-          {#if expandedSection === "quick"}
-            <div class="section-content" transition:slide>
-              <div class="set-card quick-card">
+        {#if expandedSection === "quality"}
+          <div class="section-content" transition:animeSlideDown>
+            {#each qualitySets as set}
+              <div class="set-card">
+                <div class="set-header">
+                  <Badge text={set.name} variant="quality" size="sm" />
+                  {#if set.missingEpisodes.length > 0}
+                    <Badge
+                      text="+{set.missingEpisodes.length} fallback"
+                      variant="warning"
+                      size="xs"
+                    />
+                  {/if}
+                </div>
                 <div class="set-info">
                   <div class="coverage-row">
                     <div class="coverage-bar-container">
                       <div
                         class="coverage-bar"
-                        style="width: 100%; background: {getCoverageGradient(
-                          100,
+                        style="width: {set.coverage}%; background: {getCoverageGradient(
+                          set.coverage,
                         )}"
                       ></div>
                     </div>
-                    <span class="coverage-text">100%</span>
+                    <span class="coverage-text">{set.coverage.toFixed(0)}%</span
+                    >
                   </div>
                   <div class="set-stats">
-                    <span
-                      >{quickGrabInfo.count}/{totalAvailableEpisodes} episodes</span
-                    >
+                    <span>{set.episodeCount}/{set.totalEpisodes} episodes</span>
                     <span class="dot">•</span>
-                    <span>~{formatSize(quickGrabInfo.avgSize)} avg</span>
-                    <span class="dot">•</span>
-                    <span
-                      >~{formatSize(
-                        quickGrabInfo.avgSize * quickGrabInfo.count,
-                      )} total</span
-                    >
+                    <span>~{formatSize(set.avgSize)} avg</span>
                   </div>
-                  <div class="complete-badge">
-                    <span class="material-icons">check_circle</span>
-                    Complete set - Best quality per episode
-                  </div>
+
+                  <!-- MISSING EPISODES - Red Tags -->
+                  {#if set.missingEpisodes.length > 0}
+                    <div class="missing-section">
+                      <span class="missing-label">Missing:</span>
+                      <div class="missing-tags">
+                        {#each set.missingEpisodes.slice(0, 8) as ep}
+                          <Badge text="E{ep}" variant="danger" size="xs" />
+                        {/each}
+                        {#if set.missingEpisodes.length > 8}
+                          <span class="missing-more"
+                            >+{set.missingEpisodes.length - 8} more</span
+                          >
+                        {/if}
+                      </div>
+                    </div>
+                  {:else}
+                    <Badge text="Complete set" variant="success" size="xs" />
+                  {/if}
                 </div>
                 <div class="set-actions">
                   <button
                     class="expand-files-btn"
                     onclick={() =>
-                      (expandedSet =
-                        expandedSet === "quick-grab" ? null : "quick-grab")}
+                      (expandedSet = expandedSet === set.id ? null : set.id)}
                   >
                     <span class="material-icons">
-                      {expandedSet === "quick-grab"
-                        ? "expand_less"
-                        : "expand_more"}
+                      {expandedSet === set.id ? "expand_less" : "expand_more"}
                     </span>
-                    {quickGrabInfo.files.length} files
+                    {set.files.length} files
                   </button>
-                  <button
-                    class="grab-btn primary"
-                    onclick={executeQuickGrab}
+                  <Button
+                    icon={isGrabbing ? "sync" : "download"}
+                    loading={isGrabbing}
+                    size="md"
+                    onclick={() => grabSet(set)}
                     disabled={isGrabbing}
+                    >GRAB {set.files.length}{downloadedCount > 0
+                      ? " MISSING"
+                      : ""}</Button
                   >
-                    {#if isGrabbing}
-                      <span class="material-icons rotating">sync</span>
-                    {:else}
-                      <span class="material-icons">download</span>
-                    {/if}
-                    GRAB {quickGrabInfo.count}
-                  </button>
                 </div>
 
-                {#if expandedSet === "quick-grab"}
-                  <div class="files-list" transition:slide>
-                    {#each quickGrabInfo.files as item}
+                <!-- Expanded file list -->
+                {#if expandedSet === set.id}
+                  <div class="files-list" transition:animeSlideDown>
+                    {#each set.files as item}
                       <div class="file-item">
-                        <span class="ep-badge" class:fallback={item.isFallback}
-                          >E{item.epNum}</span
-                        >
+                        <Badge
+                          text="E{item.epNum}"
+                          variant={item.isFallback ? "warning" : "primary"}
+                          size="xs"
+                        />
+                        {#each getFileTags(item.file) as tag}
+                          <Badge
+                            text={tag.text}
+                            variant={tag.variant}
+                            size="xs"
+                            noDot={tag.noDot ?? false}
+                          />
+                        {/each}
                         <span class="file-name" title={item.file.name}
                           >{item.file.name}</span
                         >
@@ -576,507 +805,371 @@
                   </div>
                 {/if}
               </div>
-            </div>
-          {/if}
-        </div>
-
-        <!-- By Quality Section -->
-        <div
-          class="grab-section"
-          class:expanded={expandedSection === "quality"}
-        >
-          <button
-            class="section-header"
-            onclick={() => toggleSection("quality")}
-          >
-            <div class="section-left">
-              <span class="material-icons section-icon">high_quality</span>
-              <span class="section-title">BY QUALITY</span>
-            </div>
-            <div class="section-right">
-              <span class="section-meta">{qualitySets.length} groups</span>
-              <span class="material-icons chevron">
-                {expandedSection === "quality" ? "expand_less" : "expand_more"}
-              </span>
-            </div>
-          </button>
-
-          {#if expandedSection === "quality"}
-            <div class="section-content" transition:slide>
-              {#each qualitySets as set}
-                <div class="set-card">
-                  <div class="set-header">
-                    <span
-                      class="quality-badge"
-                      style="background: {getQualityColor(set.name)}"
-                    >
-                      {set.name}
-                    </span>
-                    {#if set.missingEpisodes.length > 0}
-                      <span class="fallback-badge">
-                        +{set.missingEpisodes.length} fallback
-                      </span>
-                    {/if}
-                  </div>
-                  <div class="set-info">
-                    <div class="coverage-row">
-                      <div class="coverage-bar-container">
-                        <div
-                          class="coverage-bar"
-                          style="width: {set.coverage}%; background: {getCoverageGradient(
-                            set.coverage,
-                          )}"
-                        ></div>
-                      </div>
-                      <span class="coverage-text"
-                        >{set.coverage.toFixed(0)}%</span
-                      >
-                    </div>
-                    <div class="set-stats">
-                      <span
-                        >{set.episodeCount}/{set.totalEpisodes} episodes</span
-                      >
-                      <span class="dot">•</span>
-                      <span>~{formatSize(set.avgSize)} avg</span>
-                    </div>
-
-                    <!-- MISSING EPISODES - Red Tags -->
-                    {#if set.missingEpisodes.length > 0}
-                      <div class="missing-section">
-                        <span class="missing-label">Missing:</span>
-                        <div class="missing-tags">
-                          {#each set.missingEpisodes.slice(0, 8) as ep}
-                            <span class="missing-tag">E{ep}</span>
-                          {/each}
-                          {#if set.missingEpisodes.length > 8}
-                            <span class="missing-more"
-                              >+{set.missingEpisodes.length - 8} more</span
-                            >
-                          {/if}
-                        </div>
-                      </div>
-                    {:else}
-                      <div class="complete-badge">
-                        <span class="material-icons">check_circle</span>
-                        Complete set
-                      </div>
-                    {/if}
-                  </div>
-                  <div class="set-actions">
-                    <button
-                      class="expand-files-btn"
-                      onclick={() =>
-                        (expandedSet = expandedSet === set.id ? null : set.id)}
-                    >
-                      <span class="material-icons">
-                        {expandedSet === set.id ? "expand_less" : "expand_more"}
-                      </span>
-                      {set.files.length} files
-                    </button>
-                    <button
-                      class="grab-btn"
-                      onclick={() => grabSet(set)}
-                      disabled={isGrabbing}
-                    >
-                      {#if isGrabbing}
-                        <span class="material-icons rotating">sync</span>
-                      {:else}
-                        <span class="material-icons">download</span>
-                      {/if}
-                      GRAB {set.totalEpisodes}
-                    </button>
-                  </div>
-
-                  <!-- Expanded file list -->
-                  {#if expandedSet === set.id}
-                    <div class="files-list" transition:slide>
-                      {#each set.files as item}
-                        <div class="file-item">
-                          <span
-                            class="ep-badge"
-                            class:fallback={item.isFallback}>E{item.epNum}</span
-                          >
-                          <span class="file-name" title={item.file.name}
-                            >{item.file.name}</span
-                          >
-                          <span class="file-size"
-                            >{formatSize(item.file.size)}</span
-                          >
-                        </div>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
-
-        <!-- By Release Group Section -->
-        <div
-          class="grab-section"
-          class:expanded={expandedSection === "release"}
-        >
-          <button
-            class="section-header"
-            onclick={() => toggleSection("release")}
-          >
-            <div class="section-left">
-              <span class="material-icons section-icon">group_work</span>
-              <span class="section-title">BY RELEASE GROUP</span>
-            </div>
-            <div class="section-right">
-              <span class="section-meta">{releaseGroupSets.length} groups</span>
-              <span class="material-icons chevron">
-                {expandedSection === "release" ? "expand_less" : "expand_more"}
-              </span>
-            </div>
-          </button>
-
-          {#if expandedSection === "release"}
-            <div class="section-content" transition:slide>
-              {#each releaseGroupSets as set}
-                <div class="set-card">
-                  <div class="set-header">
-                    <span class="group-badge">{set.name}</span>
-                    {#if set.missingEpisodes.length > 0}
-                      <span class="fallback-badge">
-                        +{set.missingEpisodes.length} fallback
-                      </span>
-                    {/if}
-                  </div>
-                  <div class="set-info">
-                    <div class="coverage-row">
-                      <div class="coverage-bar-container">
-                        <div
-                          class="coverage-bar"
-                          style="width: {set.coverage}%; background: {getCoverageGradient(
-                            set.coverage,
-                          )}"
-                        ></div>
-                      </div>
-                      <span class="coverage-text"
-                        >{set.coverage.toFixed(0)}%</span
-                      >
-                    </div>
-                    <div class="set-stats">
-                      <span
-                        >{set.episodeCount}/{set.totalEpisodes} episodes</span
-                      >
-                      <span class="dot">•</span>
-                      <span>~{formatSize(set.avgSize)} avg</span>
-                    </div>
-
-                    <!-- MISSING EPISODES - Red Tags -->
-                    {#if set.missingEpisodes.length > 0}
-                      <div class="missing-section">
-                        <span class="missing-label">Missing:</span>
-                        <div class="missing-tags">
-                          {#each set.missingEpisodes.slice(0, 8) as ep}
-                            <span class="missing-tag">E{ep}</span>
-                          {/each}
-                          {#if set.missingEpisodes.length > 8}
-                            <span class="missing-more"
-                              >+{set.missingEpisodes.length - 8} more</span
-                            >
-                          {/if}
-                        </div>
-                      </div>
-                    {:else}
-                      <div class="complete-badge">
-                        <span class="material-icons">check_circle</span>
-                        Complete set
-                      </div>
-                    {/if}
-                  </div>
-                  <div class="set-actions">
-                    <button
-                      class="expand-files-btn"
-                      onclick={() =>
-                        (expandedSet = expandedSet === set.id ? null : set.id)}
-                    >
-                      <span class="material-icons">
-                        {expandedSet === set.id ? "expand_less" : "expand_more"}
-                      </span>
-                      {set.files.length} files
-                    </button>
-                    <button
-                      class="grab-btn"
-                      onclick={() => grabSet(set)}
-                      disabled={isGrabbing}
-                    >
-                      {#if isGrabbing}
-                        <span class="material-icons rotating">sync</span>
-                      {:else}
-                        <span class="material-icons">download</span>
-                      {/if}
-                      GRAB {set.totalEpisodes}
-                    </button>
-                  </div>
-
-                  {#if expandedSet === set.id}
-                    <div class="files-list" transition:slide>
-                      {#each set.files as item}
-                        <div class="file-item">
-                          <span
-                            class="ep-badge"
-                            class:fallback={item.isFallback}>E{item.epNum}</span
-                          >
-                          <span class="file-name" title={item.file.name}
-                            >{item.file.name}</span
-                          >
-                          <span class="file-size"
-                            >{formatSize(item.file.size)}</span
-                          >
-                        </div>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
-
-        <!-- By Pattern Section (with Uncut Detection) -->
-        <div
-          class="grab-section"
-          class:expanded={expandedSection === "pattern"}
-        >
-          <button
-            class="section-header"
-            onclick={() => toggleSection("pattern")}
-          >
-            <div class="section-left">
-              <span class="material-icons section-icon">fingerprint</span>
-              <span class="section-title">BY UPLOADER PATTERN</span>
-              {#if tmdbEpisodeCount > 0}
-                <span class="tmdb-count-badge"
-                  >{tmdbEpisodeCount} official eps</span
-                >
-              {/if}
-            </div>
-            <div class="section-right">
-              <span class="section-meta"
-                >{patternSets.filter((s) => s.coverage >= 80).length} patterns</span
-              >
-              <span class="material-icons chevron">
-                {expandedSection === "pattern" ? "expand_less" : "expand_more"}
-              </span>
-            </div>
-          </button>
-
-          {#if expandedSection === "pattern"}
-            <div class="section-content" transition:slide>
-              {#each patternSets
-                .filter((s) => s.coverage >= 80)
-                .slice(0, 10) as set}
-                <div class="set-card" class:uncut-card={set.isUncut}>
-                  <div class="set-header">
-                    <span class="pattern-badge" title={set.name}
-                      >{set.name}</span
-                    >
-                    {#if set.isUncut}
-                      <span class="uncut-badge">
-                        <span class="material-icons">warning</span>
-                        UNCUT
-                      </span>
-                    {:else if set.missingEpisodes.length > 0}
-                      <span class="fallback-badge">
-                        +{set.missingEpisodes.length} fallback
-                      </span>
-                    {/if}
-                  </div>
-                  <div class="set-info">
-                    <div class="coverage-row">
-                      <div class="coverage-bar-container">
-                        <div
-                          class="coverage-bar"
-                          style="width: {set.coverage}%; background: {set.isUncut
-                            ? 'linear-gradient(90deg, #f59e0b, #d97706)'
-                            : getCoverageGradient(set.coverage)}"
-                        ></div>
-                      </div>
-                      <span class="coverage-text"
-                        >{set.coverage.toFixed(0)}%</span
-                      >
-                    </div>
-                    <div class="set-stats">
-                      <span
-                        >{set.episodeCount}/{set.totalEpisodes} episodes</span
-                      >
-                      {#if set.maxEpisodeNumber && set.maxEpisodeNumber > tmdbEpisodeCount}
-                        <span class="dot">•</span>
-                        <span class="uncut-info"
-                          >max E{set.maxEpisodeNumber}</span
-                        >
-                      {/if}
-                      <span class="dot">•</span>
-                      <span>~{formatSize(set.avgSize)} avg</span>
-                    </div>
-
-                    {#if set.isUncut}
-                      <div class="uncut-warning">
-                        <span class="material-icons">info</span>
-                        {set.uncutReason}
-                      </div>
-                    {:else if set.missingEpisodes.length > 0}
-                      <div class="missing-section">
-                        <span class="missing-label">Missing:</span>
-                        <div class="missing-tags">
-                          {#each set.missingEpisodes.slice(0, 8) as ep}
-                            <span class="missing-tag">E{ep}</span>
-                          {/each}
-                          {#if set.missingEpisodes.length > 8}
-                            <span class="missing-more"
-                              >+{set.missingEpisodes.length - 8} more</span
-                            >
-                          {/if}
-                        </div>
-                      </div>
-                    {:else}
-                      <div class="complete-badge">
-                        <span class="material-icons">check_circle</span>
-                        Official release - Complete set
-                      </div>
-                    {/if}
-                  </div>
-                  <div class="set-actions">
-                    <button
-                      class="expand-files-btn"
-                      onclick={() =>
-                        (expandedSet = expandedSet === set.id ? null : set.id)}
-                    >
-                      <span class="material-icons">
-                        {expandedSet === set.id ? "expand_less" : "expand_more"}
-                      </span>
-                      {set.files.length} files
-                    </button>
-                    <button
-                      class="grab-btn"
-                      class:uncut-grab={set.isUncut}
-                      onclick={() => grabSet(set)}
-                      disabled={isGrabbing}
-                      title={set.isUncut
-                        ? "Warning: This appears to be an uncut version"
-                        : ""}
-                    >
-                      {#if isGrabbing}
-                        <span class="material-icons rotating">sync</span>
-                      {:else}
-                        <span class="material-icons">download</span>
-                      {/if}
-                      GRAB {set.totalEpisodes}
-                    </button>
-                  </div>
-
-                  {#if expandedSet === set.id}
-                    <div class="files-list" transition:slide>
-                      {#each set.files as item}
-                        <div class="file-item">
-                          <span
-                            class="ep-badge"
-                            class:fallback={item.isFallback}>E{item.epNum}</span
-                          >
-                          <span class="file-name" title={item.file.name}
-                            >{item.file.name}</span
-                          >
-                          <span class="file-size"
-                            >{formatSize(item.file.size)}</span
-                          >
-                        </div>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
+            {/each}
+          </div>
+        {/if}
       </div>
-    </div>
-  </div>
-{/if}
+
+      <!-- By Release Group Section -->
+      <div class="grab-section" class:expanded={expandedSection === "release"}>
+        <button class="section-header" onclick={() => toggleSection("release")}>
+          <div class="section-left">
+            <span class="material-icons section-icon">group_work</span>
+            <span class="section-title">BY RELEASE GROUP</span>
+          </div>
+          <div class="section-right">
+            <span class="section-meta">{releaseGroupSets.length} groups</span>
+            <span class="material-icons chevron">
+              {expandedSection === "release" ? "expand_less" : "expand_more"}
+            </span>
+          </div>
+        </button>
+
+        {#if expandedSection === "release"}
+          <div class="section-content" transition:animeSlideDown>
+            {#each releaseGroupSets as set}
+              <div class="set-card">
+                <div class="set-header">
+                  <Badge text={set.name} variant="source" size="sm" />
+                  {#if set.missingEpisodes.length > 0}
+                    <Badge
+                      text="+{set.missingEpisodes.length} fallback"
+                      variant="warning"
+                      size="xs"
+                    />
+                  {/if}
+                </div>
+                <div class="set-info">
+                  <div class="coverage-row">
+                    <div class="coverage-bar-container">
+                      <div
+                        class="coverage-bar"
+                        style="width: {set.coverage}%; background: {getCoverageGradient(
+                          set.coverage,
+                        )}"
+                      ></div>
+                    </div>
+                    <span class="coverage-text">{set.coverage.toFixed(0)}%</span
+                    >
+                  </div>
+                  <div class="set-stats">
+                    <span>{set.episodeCount}/{set.totalEpisodes} episodes</span>
+                    <span class="dot">•</span>
+                    <span>~{formatSize(set.avgSize)} avg</span>
+                  </div>
+
+                  <!-- MISSING EPISODES - Red Tags -->
+                  {#if set.missingEpisodes.length > 0}
+                    <div class="missing-section">
+                      <span class="missing-label">Missing:</span>
+                      <div class="missing-tags">
+                        {#each set.missingEpisodes.slice(0, 8) as ep}
+                          <Badge text="E{ep}" variant="danger" size="xs" />
+                        {/each}
+                        {#if set.missingEpisodes.length > 8}
+                          <span class="missing-more"
+                            >+{set.missingEpisodes.length - 8} more</span
+                          >
+                        {/if}
+                      </div>
+                    </div>
+                  {:else}
+                    <Badge text="Complete set" variant="success" size="xs" />
+                  {/if}
+                </div>
+                <div class="set-actions">
+                  <button
+                    class="expand-files-btn"
+                    onclick={() =>
+                      (expandedSet = expandedSet === set.id ? null : set.id)}
+                  >
+                    <span class="material-icons">
+                      {expandedSet === set.id ? "expand_less" : "expand_more"}
+                    </span>
+                    {set.files.length} files
+                  </button>
+                  <button
+                    class="grab-btn"
+                    onclick={() => grabSet(set)}
+                    disabled={isGrabbing}
+                  >
+                    {#if isGrabbing}
+                      <span class="material-icons rotating">sync</span>
+                    {:else}
+                      <span class="material-icons">download</span>
+                    {/if}
+                    GRAB {set.files.length}{downloadedCount > 0
+                      ? " MISSING"
+                      : ""}
+                  </button>
+                </div>
+
+                {#if expandedSet === set.id}
+                  <div class="files-list" transition:animeSlideDown>
+                    {#each set.files as item}
+                      <div class="file-item">
+                        <Badge
+                          text="E{item.epNum}"
+                          variant={item.isFallback ? "warning" : "primary"}
+                          size="xs"
+                        />
+                        {#each getFileTags(item.file) as tag}
+                          <Badge
+                            text={tag.text}
+                            variant={tag.variant}
+                            size="xs"
+                            noDot={tag.noDot ?? false}
+                          />
+                        {/each}
+                        <span class="file-name" title={item.file.name}
+                          >{item.file.name}</span
+                        >
+                        <span class="file-size"
+                          >{formatSize(item.file.size)}</span
+                        >
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <!-- By Pattern Section (with Uncut Detection) -->
+      <div class="grab-section" class:expanded={expandedSection === "pattern"}>
+        <button class="section-header" onclick={() => toggleSection("pattern")}>
+          <div class="section-left">
+            <span class="material-icons section-icon">fingerprint</span>
+            <span class="section-title">BY UPLOADER PATTERN</span>
+            {#if tmdbEpisodeCount > 0}
+              <Badge
+                text="{tmdbEpisodeCount} official eps"
+                variant="info"
+                size="xs"
+              />
+            {/if}
+          </div>
+          <div class="section-right">
+            <span class="section-meta"
+              >{patternSets.filter((s) => s.coverage >= 80).length} patterns</span
+            >
+            <span class="material-icons chevron">
+              {expandedSection === "pattern" ? "expand_less" : "expand_more"}
+            </span>
+          </div>
+        </button>
+
+        {#if expandedSection === "pattern"}
+          <div class="section-content" transition:animeSlideDown>
+            {#each patternSets
+              .filter((s) => s.coverage >= 80)
+              .slice(0, 10) as set}
+              <div class="set-card" class:uncut-card={set.isUncut}>
+                <div class="set-header">
+                  <Badge text={set.name} variant="purple" size="sm" noDot />
+                  {#if set.isUncut}
+                    <Badge text="UNCUT" variant="warning" size="xs" />
+                  {:else if set.missingEpisodes.length > 0}
+                    <Badge
+                      text="+{set.missingEpisodes.length} fallback"
+                      variant="warning"
+                      size="xs"
+                    />
+                  {/if}
+                </div>
+                <div class="set-info">
+                  <div class="coverage-row">
+                    <div class="coverage-bar-container">
+                      <div
+                        class="coverage-bar"
+                        style="width: {set.coverage}%; background: {set.isUncut
+                          ? 'linear-gradient(90deg, #f59e0b, #d97706)'
+                          : getCoverageGradient(set.coverage)}"
+                      ></div>
+                    </div>
+                    <span class="coverage-text">{set.coverage.toFixed(0)}%</span
+                    >
+                  </div>
+                  <div class="set-stats">
+                    <span>{set.episodeCount}/{set.totalEpisodes} episodes</span>
+                    {#if set.maxEpisodeNumber && set.maxEpisodeNumber > tmdbEpisodeCount}
+                      <span class="dot">•</span>
+                      <span class="uncut-info">max E{set.maxEpisodeNumber}</span
+                      >
+                    {/if}
+                    <span class="dot">•</span>
+                    <span>~{formatSize(set.avgSize)} avg</span>
+                  </div>
+
+                  {#if set.isUncut}
+                    <div class="uncut-warning">
+                      <span class="material-icons">info</span>
+                      {set.uncutReason}
+                    </div>
+                  {:else if set.missingEpisodes.length > 0}
+                    <div class="missing-section">
+                      <span class="missing-label">Missing:</span>
+                      <div class="missing-tags">
+                        {#each set.missingEpisodes.slice(0, 8) as ep}
+                          <Badge text="E{ep}" variant="danger" size="xs" />
+                        {/each}
+                        {#if set.missingEpisodes.length > 8}
+                          <span class="missing-more"
+                            >+{set.missingEpisodes.length - 8} more</span
+                          >
+                        {/if}
+                      </div>
+                    </div>
+                  {:else}
+                    <Badge
+                      text="Official - Complete set"
+                      variant="success"
+                      size="xs"
+                    />
+                  {/if}
+                </div>
+                <div class="set-actions">
+                  <button
+                    class="expand-files-btn"
+                    onclick={() =>
+                      (expandedSet = expandedSet === set.id ? null : set.id)}
+                  >
+                    <span class="material-icons">
+                      {expandedSet === set.id ? "expand_less" : "expand_more"}
+                    </span>
+                    {set.files.length} files
+                  </button>
+                  <button
+                    class="grab-btn"
+                    class:uncut-grab={set.isUncut}
+                    onclick={() => grabSet(set)}
+                    disabled={isGrabbing}
+                    title={set.isUncut
+                      ? "Warning: This appears to be an uncut version"
+                      : ""}
+                  >
+                    {#if isGrabbing}
+                      <span class="material-icons rotating">sync</span>
+                    {:else}
+                      <span class="material-icons">download</span>
+                    {/if}
+                    GRAB {set.files.length}{downloadedCount > 0
+                      ? " MISSING"
+                      : ""}
+                  </button>
+                </div>
+
+                {#if expandedSet === set.id}
+                  <div class="files-list" transition:animeSlideDown>
+                    {#each set.files as item}
+                      <div class="file-item">
+                        <Badge
+                          text="E{item.epNum}"
+                          variant={item.isFallback ? "warning" : "primary"}
+                          size="xs"
+                        />
+                        {#each getFileTags(item.file) as tag}
+                          <Badge
+                            text={tag.text}
+                            variant={tag.variant}
+                            size="xs"
+                            noDot={tag.noDot ?? false}
+                          />
+                        {/each}
+                        <span class="file-name" title={item.file.name}
+                          >{item.file.name}</span
+                        >
+                        <span class="file-size"
+                          >{formatSize(item.file.size)}</span
+                        >
+                      </div>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+    {/if}
+  {/snippet}
+</Modal>
 
 <style>
-  .modal-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.85);
-    backdrop-filter: blur(12px);
-    display: flex;
-    justify-content: center;
+  .downloaded-info {
+    display: inline-flex;
     align-items: center;
-    z-index: 10000;
-    padding: 24px;
-    /* Force visibility - override any transition state */
-    opacity: 1 !important;
-    visibility: visible !important;
-  }
-
-  .modal-content {
-    background: #0a0a0a;
-    width: 100%;
-    max-width: 640px;
-    max-height: 85vh;
-    border-radius: 20px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    box-shadow:
-      0 25px 50px -12px rgba(0, 0, 0, 0.5),
-      0 0 0 1px rgba(255, 255, 255, 0.05);
-  }
-
-  .modal-header {
-    padding: 1.5rem 2rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    background: linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.03) 0%,
-      transparent 100%
-    );
-  }
-
-  .header-info {
-    flex: 1;
-  }
-
-  .smart-badge {
-    display: inline-block;
-    padding: 4px 10px;
-    background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+    gap: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.1);
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    padding: 3px 10px;
     border-radius: 6px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 1px;
-    color: white;
-    margin-bottom: 8px;
+    margin-top: 6px;
   }
 
-  .header-info h2 {
-    margin: 0;
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: #fff;
+  .downloaded-info .material-icons {
+    font-size: 0.85rem;
   }
 
-  .year {
-    color: rgba(255, 255, 255, 0.4);
-    font-weight: 400;
+  .downloaded-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 8px;
+    flex-wrap: wrap;
   }
 
-  .episode-summary {
-    margin-top: 4px;
-    font-size: 13px;
-    color: rgba(255, 255, 255, 0.5);
+  .toggle-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .toggle-switch input {
+    display: none;
+  }
+
+  .toggle-slider {
+    width: 36px;
+    height: 20px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
+    position: relative;
+    transition: background 0.2s;
+  }
+
+  .toggle-slider::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.2s;
+  }
+
+  .toggle-switch input:checked + .toggle-slider {
+    background: #10b981;
+  }
+
+  .toggle-switch input:checked + .toggle-slider::after {
+    transform: translateX(16px);
+  }
+
+  .toggle-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.7);
+    letter-spacing: 0.02em;
   }
 
   .close-btn {
@@ -1096,12 +1189,6 @@
   .close-btn:hover {
     background: rgba(255, 255, 255, 0.1);
     color: white;
-  }
-
-  .modal-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 1rem;
   }
 
   /* Sections */
@@ -1154,15 +1241,6 @@
     color: rgba(255, 255, 255, 0.9);
   }
 
-  .best-badge {
-    padding: 3px 8px;
-    background: linear-gradient(135deg, #f59e0b, #d97706);
-    border-radius: 4px;
-    font-size: 10px;
-    font-weight: 700;
-    color: white;
-  }
-
   .section-right {
     display: flex;
     align-items: center;
@@ -1212,33 +1290,6 @@
     display: flex;
     align-items: center;
     gap: 10px;
-  }
-
-  .quality-badge {
-    padding: 4px 10px;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 700;
-    color: white;
-  }
-
-  .group-badge {
-    padding: 4px 10px;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.9);
-  }
-
-  .fallback-badge {
-    padding: 3px 8px;
-    background: rgba(245, 158, 11, 0.2);
-    border: 1px solid rgba(245, 158, 11, 0.3);
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    color: #f59e0b;
   }
 
   .set-info {
@@ -1307,38 +1358,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-  }
-
-  .missing-tag {
-    display: inline-flex;
-    align-items: center;
-    padding: 3px 8px;
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(239, 68, 68, 0.3);
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 700;
-    color: #ef4444;
-  }
-
-  .missing-more {
-    font-size: 11px;
-    color: rgba(255, 255, 255, 0.5);
-    padding: 3px 0;
-  }
-
-  .complete-badge {
-    margin-top: 10px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: #10b981;
-    font-weight: 500;
-  }
-
-  .complete-badge .material-icons {
-    font-size: 16px;
   }
 
   /* Grab Button */
@@ -1436,23 +1455,6 @@
     border-bottom: none;
   }
 
-  .ep-badge {
-    padding: 2px 8px;
-    background: rgba(139, 92, 246, 0.2);
-    border: 1px solid rgba(139, 92, 246, 0.3);
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    color: #a78bfa;
-    flex-shrink: 0;
-  }
-
-  .ep-badge.fallback {
-    background: rgba(239, 68, 68, 0.2);
-    border: 1px solid rgba(239, 68, 68, 0.4);
-    color: #f87171;
-  }
-
   .file-name {
     flex: 1;
     font-size: 12px;
@@ -1468,14 +1470,6 @@
     flex-shrink: 0;
   }
 
-  .files-more {
-    padding: 10px 0 4px;
-    text-align: center;
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.4);
-    font-style: italic;
-  }
-
   /* Rotating animation */
   @keyframes rotate {
     from {
@@ -1488,69 +1482,6 @@
 
   .rotating {
     animation: rotate 1s linear infinite;
-  }
-
-  /* Custom scrollbar */
-  .custom-scrollbar::-webkit-scrollbar {
-    width: 6px;
-  }
-
-  .custom-scrollbar::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 3px;
-  }
-
-  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
-  }
-
-  /* Uncut Detection Styles */
-  .tmdb-count-badge {
-    padding: 3px 8px;
-    background: rgba(16, 185, 129, 0.2);
-    border: 1px solid rgba(16, 185, 129, 0.3);
-    border-radius: 4px;
-    font-size: 10px;
-    font-weight: 600;
-    color: #10b981;
-    margin-left: 8px;
-  }
-
-  .pattern-badge {
-    padding: 4px 10px;
-    background: rgba(139, 92, 246, 0.15);
-    border: 1px solid rgba(139, 92, 246, 0.3);
-    border-radius: 6px;
-    font-size: 11px;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.85);
-    max-width: 300px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .uncut-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    padding: 3px 8px;
-    background: rgba(239, 68, 68, 0.2);
-    border: 1px solid rgba(239, 68, 68, 0.4);
-    border-radius: 4px;
-    font-size: 10px;
-    font-weight: 700;
-    color: #ef4444;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .uncut-badge .material-icons {
-    font-size: 12px;
   }
 
   .uncut-card {
@@ -1589,5 +1520,65 @@
 
   .grab-btn.uncut-grab:hover:not(:disabled) {
     background: rgba(245, 158, 11, 0.25);
+  }
+
+  /* ---- Mobile Responsive ---- */
+  @media (max-width: 768px) {
+    .section-header {
+      min-height: 48px;
+      padding: 0.75rem;
+    }
+
+    .section-title {
+      font-size: 0.75rem;
+    }
+
+    .set-card {
+      padding: 0.75rem;
+      border-radius: 14px;
+    }
+
+    .set-actions {
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .grab-btn {
+      width: 100%;
+      min-height: 48px;
+      justify-content: center;
+      border-radius: 8px;
+    }
+
+    .expand-files-btn {
+      min-height: 40px;
+    }
+
+    .file-item {
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      padding: 0.5rem;
+      border-radius: 6px;
+    }
+
+    .file-item .file-name {
+      flex-basis: 100%;
+      order: 2;
+      font-size: 0.65rem;
+    }
+
+    .coverage-row {
+      gap: 0.5rem;
+    }
+
+    .missing-tags {
+      flex-wrap: wrap;
+      gap: 0.25rem;
+    }
+
+    .uncut-warning {
+      font-size: 0.7rem;
+      padding: 6px 10px;
+    }
   }
 </style>

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Button from "$lib/components/ui/Button.svelte";
+
   interface Props {
     title?: string;
     message?: string;
@@ -21,10 +23,7 @@
   <h3 class="error-title">{title}</h3>
   <p class="error-message">{message}</p>
   {#if showRetry && onRetry}
-    <button class="retry-btn" onclick={onRetry}>
-      <span class="material-icons">refresh</span>
-      Try Again
-    </button>
+    <Button icon="refresh" size="md" onclick={onRetry}>Try Again</Button>
   {/if}
 </div>
 

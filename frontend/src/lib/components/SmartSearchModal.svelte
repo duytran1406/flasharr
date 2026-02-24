@@ -1,21 +1,29 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import { ui } from "$lib/stores/ui.svelte";
+  import { smartGrabStore } from "$lib/stores/smartGrab";
   import { toasts } from "$lib/stores/toasts";
   import { onMount } from "svelte";
-  import { fade, slide } from "svelte/transition";
+  import { animeFade, animeSlideDown } from "$lib/animations";
   import { getPosterUrl } from "$lib/services/tmdb";
+  import Badge from "$lib/components/ui/Badge.svelte";
+  import Modal from "$lib/components/ui/Modal.svelte";
+  import Button from "$lib/components/ui/Button.svelte";
 
   let loading = $state(true);
   let results = $state<any>(null);
   let error = $state<string | null>(null);
+  let existingDownloads = $state<Set<string>>(new Set());
 
   async function performSearch() {
     if (!ui.smartSearchData) return;
     loading = true;
     error = null;
+    existingDownloads = new Set();
 
     try {
-      const resp = await fetch("/api/search/smart", {
+      // Fetch search results, Flasharr downloads, and Sonarr/Radarr library in parallel
+      const searchPromise = fetch("/api/search/smart", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -28,16 +36,106 @@
         }),
       });
 
+      // Fetch existing downloads from Flasharr DB (if we have a TMDB ID)
+      const tmdbId = ui.smartSearchData.tmdbId;
+      const downloadsPromise = tmdbId
+        ? fetch(`/api/media/${tmdbId}/downloads`)
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null)
+        : Promise.resolve(null);
+
+      // Fetch Sonarr/Radarr library status to check which episodes have files on disk
+      const mediaType = ui.smartSearchData.type;
+      const arrPromise = tmdbId
+        ? fetchArrLibraryStatus(tmdbId, mediaType)
+        : Promise.resolve(new Set<string>());
+
+      const [resp, dlData, arrExisting] = await Promise.all([
+        searchPromise,
+        downloadsPromise,
+        arrPromise,
+      ]);
+
       if (resp.ok) {
         results = await resp.json();
       } else {
         error = `Search failed with status ${resp.status}`;
+      }
+
+      // Build set of existing episode keys from both sources
+      const downloaded = new Set<string>();
+
+      // Source 1: Flasharr download records
+      if (dlData?.episodes) {
+        for (const key of Object.keys(dlData.episodes)) {
+          downloaded.add(key);
+        }
+      }
+
+      // Source 2: Sonarr/Radarr library (episodes with files on disk)
+      for (const key of arrExisting) {
+        downloaded.add(key);
+      }
+
+      existingDownloads = downloaded;
+      if (downloaded.size > 0) {
+        console.log(
+          `[Smart Search] Found ${downloaded.size} existing (Flasharr DB + Sonarr/Radarr library):`,
+          [...downloaded],
+        );
       }
     } catch (e: any) {
       error = e.message || "Network error";
     } finally {
       loading = false;
     }
+  }
+
+  /** Fetch episode file status from Sonarr/Radarr by TMDB ID */
+  async function fetchArrLibraryStatus(
+    tmdbId: string,
+    mediaType: string,
+  ): Promise<Set<string>> {
+    const existing = new Set<string>();
+    try {
+      if (mediaType === "tv") {
+        // Fetch all series from Sonarr and find the one matching this TMDB ID
+        const seriesResp = await fetch("/api/arr/series");
+        if (!seriesResp.ok) return existing;
+        const allSeries: any[] = await seriesResp.json();
+        const match = allSeries.find(
+          (s) => s.tmdbId === Number(tmdbId) || s.tvdbId === Number(tmdbId),
+        );
+        if (!match) return existing;
+
+        // Fetch episodes for this series
+        const epsResp = await fetch(`/api/arr/episodes?series_id=${match.id}`);
+        if (!epsResp.ok) return existing;
+        const episodes: any[] = await epsResp.json();
+
+        for (const ep of episodes) {
+          if (ep.hasFile) {
+            const key = `S${String(ep.seasonNumber).padStart(2, "0")}E${String(ep.episodeNumber).padStart(2, "0")}`;
+            existing.add(key);
+          }
+        }
+        console.log(
+          `[Smart Search] Sonarr: ${existing.size} episodes with files for series '${match.title}' (ID: ${match.id})`,
+        );
+      } else if (mediaType === "movie") {
+        // For movies, check if Radarr has the file
+        const moviesResp = await fetch("/api/arr/movies");
+        if (!moviesResp.ok) return existing;
+        const allMovies: any[] = await moviesResp.json();
+        const match = allMovies.find((m) => m.tmdbId === Number(tmdbId));
+        if (match?.hasFile) {
+          existing.add("MOVIE");
+        }
+      }
+    } catch (e) {
+      console.warn("[Smart Search] Failed to fetch arr library status:", e);
+    }
+    return existing;
   }
 
   async function downloadItem(
@@ -318,12 +416,21 @@
     const toDownload: any[] = [];
     let patternMatches = 0;
     let fallbacks = 0;
+    let skippedExisting = 0;
 
     results.seasons.forEach((season: any) => {
       if (season.season === 0) return; // Skip specials/trash
 
       season.episodes_grouped.forEach((ep: any) => {
         if (!ep.files || ep.files.length === 0) return;
+
+        // Skip episodes that are already downloaded
+        const epKey = `S${String(season.season).padStart(2, "0")}E${String(ep.episode_number).padStart(2, "0")}`;
+        if (existingDownloads.has(epKey)) {
+          skippedExisting++;
+          console.log(`[Smart Grab] Skipping ${epKey} — already downloaded`);
+          return;
+        }
 
         // Try to find a file matching the selected pattern
         const patternMatch = ep.files.find((file: any) =>
@@ -377,9 +484,26 @@
           ? `✨ ${coveragePercent}% coverage - perfect match!`
           : `${patternMatches} matched, ${fallbacks} fallbacks`;
 
-      toasts.info(
-        `Smart Grab: ${toDownload.length} episodes (${consistencyMsg})`,
-      );
+      // Calculate total and aired episode counts from backend response
+      const totalEpisodes = results.seasons
+        .filter((s: any) => s.season !== 0)
+        .reduce((sum: number, s: any) => sum + (s.episode_count || 0), 0);
+      const airedEpisodes = results.seasons
+        .filter((s: any) => s.season !== 0)
+        .reduce(
+          (sum: number, s: any) =>
+            sum + (s.aired_episode_count || s.episodes_grouped?.length || 0),
+          0,
+        );
+
+      const skippedMsg =
+        skippedExisting > 0 ? `, ${skippedExisting} already downloaded` : "";
+      const episodeLabel =
+        totalEpisodes > airedEpisodes
+          ? `${toDownload.length}/${totalEpisodes} (${airedEpisodes} released${skippedMsg})`
+          : `${toDownload.length} episodes${skippedMsg}`;
+
+      toasts.info(`Smart Grab: ${episodeLabel} (${consistencyMsg})`);
 
       // Batch processing for smoother UI feedback
       const batchSize = 3;
@@ -388,9 +512,16 @@
         await Promise.all(
           batch.map(async (item) => {
             const tmdbMetadata = {
-              tmdb_id: parseInt(ui.smartSearchData?.tmdbId || ""),
+              tmdb_id: ui.smartSearchData?.tmdbId
+                ? parseInt(ui.smartSearchData.tmdbId)
+                : undefined,
               media_type: "tv",
-              title: ui.smartSearchData?.title,
+              title: ui.smartSearchData?.title, // Include title to avoid TMDB API fetching
+              year: ui.smartSearchData?.year
+                ? typeof ui.smartSearchData.year === "string"
+                  ? parseInt(ui.smartSearchData.year)
+                  : ui.smartSearchData.year
+                : undefined,
               season: item.seasonNum,
               episode: item.epNum,
             };
@@ -437,352 +568,346 @@
   }
 </script>
 
-{#if ui.smartSearchModalOpen}
-  <div
-    class="modal-overlay"
-    transition:fade={{ duration: 200 }}
-    onclick={(e) => e.target === e.currentTarget && ui.closeSmartSearch()}
-    onkeydown={(e) => e.key === "Escape" && ui.closeSmartSearch()}
-    role="button"
-    tabindex="-1"
-    aria-label="Close modal"
-  >
-    <div class="modal-content">
-      <div class="modal-header">
-        <div class="header-main">
-          <div class="search-badge">SMART SEARCH</div>
-          <h2>
-            {loading
-              ? "Scanning Fshare..."
-              : ui.smartSearchData?.title || "Results"}
-            {#if ui.smartSearchData?.year && !loading}
-              <span class="year">({ui.smartSearchData.year})</span>
-            {/if}
-          </h2>
-        </div>
-        <div class="header-actions">
-          {#if results && results.seasons && !loading}
-            <button
-              class="smart-grab-btn"
-              onclick={smartGrab}
-              disabled={isGrabbing}
-              transition:fade
-            >
-              <span class="btn-glow"></span>
-              <span class="btn-shine"></span>
-              <span class="btn-content">
-                <span class="material-icons" class:rotating={isGrabbing}
-                  >{isGrabbing ? "sync" : "auto_awesome"}</span
-                >
-                <span class="btn-label"
-                  >{isGrabbing ? "Grabbing..." : "Smart Grab"}</span
-                >
-              </span>
-            </button>
-          {/if}
-          <button class="close-btn" onclick={() => ui.closeSmartSearch()}>
-            <span class="material-icons">close</span>
-          </button>
-        </div>
+<Modal
+  open={ui.smartSearchModalOpen}
+  onClose={() => ui.closeSmartSearch()}
+  maxWidth="900px"
+  accent="var(--color-primary, #00f3ff)"
+  ariaLabel="Smart Search"
+>
+  {#snippet header()}
+    <div class="header-main">
+      <Badge text="SMART SEARCH" variant="smart" size="sm" />
+      <h2>
+        {loading
+          ? "Scanning Fshare..."
+          : ui.smartSearchData?.title || "Results"}
+        {#if ui.smartSearchData?.year && !loading}
+          <span class="year">({ui.smartSearchData.year})</span>
+        {/if}
+      </h2>
+    </div>
+    <div class="header-actions">
+      {#if results && results.seasons && !loading && ui.smartSearchData?.type === "tv"}
+        <span transition:animeFade style="display:contents">
+          <Button
+            icon="auto_awesome"
+            size="md"
+            onclick={async () => {
+              const grabData = {
+                tmdbId: ui.smartSearchData?.tmdbId || "",
+                type: "tv" as const,
+                title: ui.smartSearchData?.title || "",
+                year: ui.smartSearchData?.year,
+                seasons: results.seasons,
+                existingDownloads: existingDownloads,
+              };
+              ui.closeSmartSearch();
+              await tick();
+              smartGrabStore.open(grabData);
+            }}>Smart Grab</Button
+          >
+        </span>
+      {/if}
+      <button class="close-btn" onclick={() => ui.closeSmartSearch()}>
+        <span class="material-icons">close</span>
+      </button>
+    </div>
+  {/snippet}
+
+  {#snippet children()}
+    {#if loading}
+      <div class="loading-state">
+        <div class="loading-spinner"></div>
+        <p>Scanning indexes for high-quality releases...</p>
       </div>
-
-      <div class="modal-body custom-scrollbar">
-        {#if loading}
-          <div class="loading-state">
-            <div class="loading-spinner"></div>
-            <p>Scanning indexes for high-quality releases...</p>
-          </div>
-        {:else if error}
-          <div class="error-state">
-            <span class="material-icons">error_outline</span>
-            <p>{error}</p>
-          </div>
-        {:else if results && results.total_found > 0}
-          <div class="results-container">
-            {#if results.groups}
-              <!-- Movie Layout -->
-              {#each results.groups as group}
-                <div
-                  class="quality-card glass-panel"
-                  class:expanded={expandedGroups[group.quality]}
-                >
-                  <div
-                    class="card-trigger"
-                    onclick={() => toggleGroup(group.quality)}
-                    onkeydown={(e) =>
-                      e.key === "Enter" && toggleGroup(group.quality)}
-                    role="button"
-                    tabindex="0"
-                  >
-                    <div class="trigger-left">
-                      <span class="material-icons">layers</span>
-                      <span class="quality-label">{group.quality}</span>
-                    </div>
-                    <div class="trigger-right">
-                      <div class="score-track large">
-                        <div
-                          class="score-bar {getScoreClass(group.score)}"
-                          style="width: {group.score}%; background: {getScoreGradient(
-                            group.score,
-                          )}"
-                        ></div>
-                        <span class="score-text"
-                          >Score {group.score.toFixed(1)}</span
-                        >
-                      </div>
-                      <span class="count-badge">{group.count} files</span>
-                      <span class="material-icons chevron"
-                        >{expandedGroups[group.quality]
-                          ? "expand_less"
-                          : "expand_more"}</span
-                      >
-                    </div>
-                  </div>
-
-                  {#if expandedGroups[group.quality]}
-                    <div class="file-list" transition:slide>
-                      {#each group.files as file}
-                        <div class="file-row">
-                          <div class="file-info">
-                            <div class="file-name" title={file.name}>
-                              {file.name}
-                            </div>
-                            <div class="file-meta">
-                              <span class="size">{formatSize(file.size)}</span>
-                              <span class="divider">•</span>
-                              <div class="badges">
-                                {#if file.vietdub || file.name
-                                    .toLowerCase()
-                                    .includes("vie")}<span
-                                    class="status-pill dub">ViE</span
-                                  >{/if}
-                                {#if file.vietsub}<span class="status-pill sub"
-                                    >SUB</span
-                                  >{/if}
-                                {#if file.hdr || file.name
-                                    .toLowerCase()
-                                    .includes("hdr")}<span
-                                    class="status-pill hdr">HDR</span
-                                  >{/if}
-                                {#if file.dolby_vision || file.name
-                                    .toLowerCase()
-                                    .includes("dv")}<span class="status-pill dv"
-                                    >DV</span
-                                  >{/if}
-                              </div>
-                            </div>
-                          </div>
-                          <button
-                            class="get-btn"
-                            onclick={(e) =>
-                              downloadItem(file.url, file.name, e)}
-                          >
-                            <span class="material-icons">download</span>
-                            GET
-                          </button>
-                        </div>
-                      {/each}
-                    </div>
-                  {/if}
+    {:else if error}
+      <div class="error-state">
+        <span class="material-icons">error_outline</span>
+        <p>{error}</p>
+      </div>
+    {:else if results && results.total_found > 0}
+      <div class="results-container">
+        {#if results.groups}
+          <!-- Movie Layout -->
+          {#each results.groups as group}
+            <div
+              class="quality-card glass-panel"
+              class:expanded={expandedGroups[group.quality]}
+            >
+              <div
+                class="card-trigger"
+                onclick={() => toggleGroup(group.quality)}
+                onkeydown={(e) =>
+                  e.key === "Enter" && toggleGroup(group.quality)}
+                role="button"
+                tabindex="0"
+              >
+                <div class="trigger-left">
+                  <span class="material-icons">layers</span>
+                  <span class="quality-label">{group.quality}</span>
                 </div>
-              {/each}
-            {:else if results.seasons}
-              <!-- TV Series Layout -->
-              {#each results.seasons.filter((s: any) => s.season !== 0) as season}
-                <div class="season-section">
-                  <h3 class="season-title">
-                    {season.season === 0
-                      ? "Specials"
-                      : `Season ${season.season}`}
-                  </h3>
-                  <div class="episode-list">
-                    {#each season.episodes_grouped.filter((e: any) => e.episode_number !== 0) as ep}
-                      {@const epId = `ep-${season.season}-${ep.episode_number}`}
-                      {@const bestScore =
-                        ep.files && ep.files.length > 0
-                          ? ep.files[0].score || 85
-                          : 0}
-                      <div
-                        class="episode-card glass-panel"
-                        class:expanded={expandedEpisodes[epId]}
-                      >
-                        <div
-                          class="episode-trigger"
-                          onclick={() => toggleEpisode(epId)}
-                          onkeydown={(e) =>
-                            e.key === "Enter" && toggleEpisode(epId)}
-                          role="button"
-                          tabindex="0"
-                        >
-                          <div class="episode-thumb">
-                            {#if ep.still_path}
-                              <img
-                                src={getPosterUrl(ep.still_path, "w500")}
-                                alt=""
-                                class="ep-img"
-                              />
-                            {:else}
-                              <div class="thumb-placeholder">
-                                <span class="material-icons">movie</span>
-                              </div>
+                <div class="trigger-right">
+                  <div class="score-track large">
+                    <div
+                      class="score-bar {getScoreClass(group.score)}"
+                      style="width: {group.score}%; background: {getScoreGradient(
+                        group.score,
+                      )}"
+                    ></div>
+                    <span class="score-text"
+                      >Score {group.score.toFixed(1)}</span
+                    >
+                  </div>
+                  <Badge
+                    text="{group.count} files"
+                    variant="count"
+                    size="xs"
+                    noDot
+                  />
+                  <span class="material-icons chevron"
+                    >{expandedGroups[group.quality]
+                      ? "expand_less"
+                      : "expand_more"}</span
+                  >
+                </div>
+              </div>
+
+              {#if expandedGroups[group.quality]}
+                <div class="file-list" transition:animeSlideDown>
+                  {#each group.files as file}
+                    <div class="file-row">
+                      <div class="file-info">
+                        <div class="file-name" title={file.name}>
+                          {file.name}
+                        </div>
+                        <div class="file-meta">
+                          <span class="size">{formatSize(file.size)}</span>
+                          <span class="divider">•</span>
+                          <div class="badges">
+                            {#if file.vietdub || file.name
+                                .toLowerCase()
+                                .includes("vie")}
+                              <Badge text="VIE" variant="language" size="xs" />
                             {/if}
-                            <div class="ep-badge">E{ep.episode_number}</div>
-                          </div>
-                          <div class="episode-main">
-                            <div class="ep-header-row">
-                              <span class="ep-num">E{ep.episode_number}</span>
-                              <h4>
-                                {ep.name || `Episode ${ep.episode_number}`}
-                              </h4>
-                            </div>
-                            <div class="ep-meta-row">
-                              {#if ep.air_date}
-                                <span class="ep-date"
-                                  >{new Date(ep.air_date).getFullYear()}</span
-                                >
-                                <span class="dot">•</span>
-                              {/if}
-                              <span class="ep-files"
-                                >{ep.files.length} files available</span
-                              >
-                            </div>
-                            {#if ep.overview}
-                              <p class="ep-overview">{ep.overview}</p>
+                            {#if file.vietsub}
+                              <Badge text="SUB" variant="success" size="xs" />
                             {/if}
-                          </div>
-                          <div class="episode-right">
-                            <span class="material-icons chevron"
-                              >{expandedEpisodes[epId]
-                                ? "expand_less"
-                                : "expand_more"}</span
-                            >
+                            {#if file.hdr || file.name
+                                .toLowerCase()
+                                .includes("hdr")}
+                              <Badge text="HDR" variant="hdr" size="xs" noDot />
+                            {/if}
+                            {#if file.dolby_vision || file.name
+                                .toLowerCase()
+                                .includes("dv")}
+                              <Badge text="DV" variant="dv" size="xs" noDot />
+                            {/if}
                           </div>
                         </div>
-
-                        {#if expandedEpisodes[epId]}
-                          <div class="file-list nested" transition:slide>
-                            {#each ep.files as file, i}
-                              {@const displayScore = file.score || 85 - i * 5}
-                              <div class="tv-file-row">
-                                <div class="tv-file-content">
-                                  <div class="tv-file-name" title={file.name}>
-                                    {file.name}
-                                  </div>
-                                  <div class="tv-file-meta">
-                                    <span class="tv-file-size">
-                                      <span class="material-icons">storage</span
-                                      >
-                                      {formatSize(file.size)}
-                                    </span>
-                                    <div class="tv-badges">
-                                      {#if file.vietdub || file.name
-                                          .toLowerCase()
-                                          .includes("vie")}
-                                        <span class="tv-badge vie">ViE</span>
-                                      {/if}
-                                      {#if file.vietsub}
-                                        <span class="tv-badge sub">SUB</span>
-                                      {/if}
-                                      {#if file.hdr || file.name
-                                          .toLowerCase()
-                                          .includes("hdr")}
-                                        <span class="tv-badge hdr">HDR</span>
-                                      {/if}
-                                      {#if file.dolby_vision || file.name
-                                          .toLowerCase()
-                                          .includes("dv")}
-                                        <span class="tv-badge dv">DV</span>
-                                      {/if}
-                                      {#if file.quality}
-                                        <span class="tv-badge quality"
-                                          >{file.quality}</span
-                                        >
-                                      {/if}
-                                    </div>
-                                    <div class="tv-score-container">
-                                      <div class="tv-score-track">
-                                        <div
-                                          class="tv-score-bar {getScoreClass(
-                                            displayScore,
-                                          )}"
-                                          style="width: {displayScore}%; background: {getScoreGradient(
-                                            displayScore,
-                                          )}"
-                                        ></div>
-                                      </div>
-                                      <span class="tv-score-value"
-                                        >{displayScore.toFixed(1)}</span
-                                      >
-                                    </div>
-                                  </div>
-                                </div>
-                                <button
-                                  class="tv-get-btn"
-                                  onclick={(e) =>
-                                    downloadItem(file.url, file.name, e)}
-                                >
-                                  <span class="material-icons">download</span>
-                                  <span class="btn-text">GET</span>
-                                </button>
-                              </div>
-                            {/each}
+                      </div>
+                      <Button
+                        size="sm"
+                        icon="download"
+                        onclick={(e) => downloadItem(file.url, file.name, e)}
+                        >Get</Button
+                      >
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/each}
+        {:else if results.seasons}
+          <!-- TV Series Layout -->
+          {#each results.seasons.filter((s: any) => s.season !== 0) as season}
+            <div class="season-section">
+              <h3 class="season-title">
+                {season.season === 0 ? "Specials" : `Season ${season.season}`}
+              </h3>
+              <div class="episode-list">
+                {#each season.episodes_grouped.filter((e: any) => e.episode_number !== 0) as ep}
+                  {@const epId = `ep-${season.season}-${ep.episode_number}`}
+                  {@const epKey = `S${String(season.season).padStart(2, "0")}E${String(ep.episode_number).padStart(2, "0")}`}
+                  {@const isDownloaded = existingDownloads.has(epKey)}
+                  {@const bestScore =
+                    ep.files && ep.files.length > 0
+                      ? ep.files[0].score || 85
+                      : 0}
+                  <div
+                    class="episode-card glass-panel"
+                    class:expanded={expandedEpisodes[epId]}
+                    class:downloaded={isDownloaded}
+                  >
+                    <div
+                      class="episode-trigger"
+                      onclick={() => toggleEpisode(epId)}
+                      onkeydown={(e) =>
+                        e.key === "Enter" && toggleEpisode(epId)}
+                      role="button"
+                      tabindex="0"
+                    >
+                      <div class="episode-thumb">
+                        {#if ep.still_path}
+                          <img
+                            src={getPosterUrl(ep.still_path, "w500")}
+                            alt=""
+                            class="ep-img"
+                          />
+                        {:else}
+                          <div class="thumb-placeholder">
+                            <span class="material-icons">movie</span>
+                          </div>
+                        {/if}
+                        <div class="ep-badge">E{ep.episode_number}</div>
+                        {#if isDownloaded}
+                          <div class="downloaded-overlay">
+                            <span class="material-icons">check_circle</span>
                           </div>
                         {/if}
                       </div>
-                    {/each}
+                      <div class="episode-main">
+                        <div class="ep-header-row">
+                          <span class="ep-num">E{ep.episode_number}</span>
+                          <h4>{ep.name || `Episode ${ep.episode_number}`}</h4>
+                          {#if isDownloaded}
+                            <Badge
+                              text="DOWNLOADED"
+                              variant="downloaded"
+                              size="xs"
+                            />
+                          {/if}
+                        </div>
+                        <div class="ep-meta-row">
+                          {#if ep.air_date}
+                            <span class="ep-date"
+                              >{new Date(ep.air_date).getFullYear()}</span
+                            >
+                            <span class="dot">•</span>
+                          {/if}
+                          <span class="ep-files"
+                            >{ep.files.length} files available</span
+                          >
+                        </div>
+                        {#if ep.overview}
+                          <p class="ep-overview">{ep.overview}</p>
+                        {/if}
+                      </div>
+                      <div class="episode-right">
+                        <span class="material-icons chevron"
+                          >{expandedEpisodes[epId]
+                            ? "expand_less"
+                            : "expand_more"}</span
+                        >
+                      </div>
+                    </div>
+
+                    {#if expandedEpisodes[epId]}
+                      <div class="file-list nested" transition:animeSlideDown>
+                        {#each ep.files as file, i}
+                          {@const displayScore = file.score || 85 - i * 5}
+                          <div class="tv-file-row">
+                            <div class="tv-file-content">
+                              <div class="tv-file-name" title={file.name}>
+                                {file.name}
+                              </div>
+                              <div class="tv-file-meta">
+                                <span class="tv-file-size">
+                                  <span class="material-icons">storage</span>
+                                  {formatSize(file.size)}
+                                </span>
+                                <div class="tv-badges">
+                                  {#if file.vietdub || file.name
+                                      .toLowerCase()
+                                      .includes("vie")}
+                                    <Badge
+                                      text="VIE"
+                                      variant="language"
+                                      size="xs"
+                                    />
+                                  {/if}
+                                  {#if file.vietsub}
+                                    <Badge
+                                      text="SUB"
+                                      variant="success"
+                                      size="xs"
+                                    />
+                                  {/if}
+                                  {#if file.hdr || file.name
+                                      .toLowerCase()
+                                      .includes("hdr")}
+                                    <Badge
+                                      text="HDR"
+                                      variant="hdr"
+                                      size="xs"
+                                      noDot
+                                    />
+                                  {/if}
+                                  {#if file.dolby_vision || file.name
+                                      .toLowerCase()
+                                      .includes("dv")}
+                                    <Badge
+                                      text="DV"
+                                      variant="dv"
+                                      size="xs"
+                                      noDot
+                                    />
+                                  {/if}
+                                  {#if file.quality}
+                                    <Badge
+                                      text={file.quality}
+                                      variant="quality"
+                                      size="xs"
+                                    />
+                                  {/if}
+                                </div>
+                                <div class="tv-score-container">
+                                  <div class="tv-score-track">
+                                    <div
+                                      class="tv-score-bar {getScoreClass(
+                                        displayScore,
+                                      )}"
+                                      style="width: {displayScore}%; background: {getScoreGradient(
+                                        displayScore,
+                                      )}"
+                                    ></div>
+                                  </div>
+                                  <span class="tv-score-value"
+                                    >{displayScore.toFixed(1)}</span
+                                  >
+                                </div>
+                              </div>
+                            </div>
+                            <Button
+                              size="sm"
+                              icon="download"
+                              onclick={(e) =>
+                                downloadItem(file.url, file.name, e)}
+                              >Get</Button
+                            >
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
                   </div>
-                </div>
-              {/each}
-            {/if}
-          </div>
-        {:else}
-          <div class="empty-state">
-            <span class="material-icons">search_off</span>
-            <p>No high-quality matches found on Fshare for this title.</p>
-          </div>
+                {/each}
+              </div>
+            </div>
+          {/each}
         {/if}
       </div>
-    </div>
-  </div>
-{/if}
+    {:else}
+      <div class="empty-state">
+        <span class="material-icons">search_off</span>
+        <p>No high-quality matches found on Fshare for this title.</p>
+      </div>
+    {/if}
+  {/snippet}
+</Modal>
 
 <style>
-  .modal-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.85);
-    backdrop-filter: blur(12px);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    z-index: 9999;
-    padding: 24px;
-    opacity: 1 !important;
-    visibility: visible !important;
-  }
-
-  .modal-content {
-    background: #121212;
-    width: 100%;
-    max-width: 900px;
-    max-height: 85vh;
-    border-radius: 20px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-  }
-
-  .modal-header {
-    padding: 1.5rem 2rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+  .header-main {
+    flex: 1;
   }
 
   .header-main h2 {
@@ -796,17 +921,6 @@
     color: rgba(255, 255, 255, 0.4);
     font-weight: 400;
     margin-left: 0.5rem;
-  }
-
-  .search-badge {
-    background: var(--color-primary);
-    color: #000;
-    font-size: 0.6rem;
-    font-weight: 900;
-    padding: 2px 8px;
-    border-radius: 4px;
-    display: inline-block;
-    letter-spacing: 0.1em;
   }
 
   .header-actions {
@@ -949,10 +1063,6 @@
     75% {
       transform: scale(1.1) rotate(5deg);
     }
-  }
-
-  .smart-grab-btn .material-icons.rotating {
-    animation: spin 1.2s linear infinite;
   }
 
   .smart-grab-btn .btn-label {
@@ -1100,6 +1210,42 @@
     border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 12px;
     overflow: hidden;
+  }
+
+  .episode-card.downloaded {
+    border-color: rgba(16, 185, 129, 0.3);
+    background: rgba(16, 185, 129, 0.03);
+    opacity: 0.7;
+  }
+
+  .downloaded-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(16, 185, 129, 0.25);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .downloaded-overlay .material-icons {
+    font-size: 1.5rem;
+    color: #10b981;
+    text-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+  }
+
+  .downloaded-badge {
+    font-size: 0.55rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    color: #10b981;
+    background: rgba(16, 185, 129, 0.12);
+    border: 1px solid rgba(16, 185, 129, 0.25);
+    padding: 1px 6px;
+    border-radius: 3px;
+    margin-left: 8px;
   }
 
   .episode-trigger {
@@ -1678,8 +1824,44 @@
     }
   }
 
-  /* Responsive adjustments for TV file row */
-  @media (max-width: 600px) {
+  @media (max-width: 768px) {
+    .modal-overlay {
+      padding: 0;
+      align-items: flex-end;
+    }
+
+    .modal-content {
+      max-width: 100%;
+      width: 100%;
+      max-height: 100dvh;
+      height: 100dvh;
+      border-radius: 0;
+      border: none;
+    }
+
+    .modal-header {
+      padding: 1rem 1rem;
+      padding-top: calc(env(safe-area-inset-top, 0px) + 0.75rem);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: #121212;
+    }
+
+    .header-main h2 {
+      font-size: 1rem;
+    }
+
+    .smart-grab-btn {
+      padding: 0.5rem 1rem;
+      font-size: 0.65rem;
+    }
+
+    .modal-body {
+      padding: 1rem;
+    }
+
+    /* TV file rows */
     .tv-file-row {
       flex-direction: column;
       align-items: stretch;
@@ -1692,11 +1874,73 @@
 
     .tv-score-container {
       margin-left: 0;
+      width: 100%;
     }
 
     .tv-get-btn {
       width: 100%;
       justify-content: center;
+      min-height: 48px;
+      border-radius: 8px;
+    }
+
+    /* Movie file rows */
+    .file-row {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.5rem;
+      padding: 0.75rem;
+    }
+
+    .file-info {
+      width: 100%;
+    }
+
+    .file-name {
+      font-size: 0.7rem;
+      word-break: break-all;
+      white-space: normal;
+      line-height: 1.4;
+    }
+
+    .get-btn {
+      width: 100%;
+      min-height: 48px;
+      justify-content: center;
+      border-radius: 8px;
+    }
+
+    /* Episode cards */
+    .episode-trigger {
+      padding: 0.75rem;
+      gap: 0.75rem;
+    }
+
+    .episode-thumb {
+      width: 72px;
+      height: 48px;
+    }
+
+    .ep-overview {
+      display: none;
+    }
+
+    .episode-main h4 {
+      font-size: 0.8rem;
+    }
+
+    /* Quality cards */
+    .card-trigger {
+      padding: 0.75rem;
+      min-height: 48px;
+    }
+
+    .quality-label {
+      font-size: 0.85rem;
+    }
+
+    .score-track.large {
+      max-width: 100px;
     }
   }
 </style>

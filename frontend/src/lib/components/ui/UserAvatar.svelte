@@ -7,7 +7,7 @@
   }
 
   let {
-    src = "/images/logo_fshare.png",
+    src = "/images/flasharr_logo.png",
     size = 48,
     status = "GUEST",
     glow = true,

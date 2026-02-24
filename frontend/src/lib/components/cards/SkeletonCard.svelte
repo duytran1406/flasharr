@@ -43,14 +43,30 @@
   .skeleton-image {
     position: absolute;
     inset: 0;
-    background: linear-gradient(
-      110deg,
-      rgba(255, 255, 255, 0.02) 0%,
-      rgba(255, 255, 255, 0.05) 50%,
-      rgba(255, 255, 255, 0.02) 100%
+    /* Halftone dot-wave: a dot grid with sweeping opacity mask */
+    background-image: radial-gradient(
+      circle,
+      rgba(0, 243, 255, 0.06) 1px,
+      transparent 1px
     );
-    background-size: 200% 100%;
-    animation: shimmer 1.5s infinite;
+    background-size: 8px 8px;
+    mask-image: linear-gradient(
+      110deg,
+      transparent 25%,
+      rgba(0, 0, 0, 0.5) 45%,
+      rgba(0, 0, 0, 0.5) 55%,
+      transparent 75%
+    );
+    -webkit-mask-image: linear-gradient(
+      110deg,
+      transparent 25%,
+      rgba(0, 0, 0, 0.5) 45%,
+      rgba(0, 0, 0, 0.5) 55%,
+      transparent 75%
+    );
+    mask-size: 250% 100%;
+    -webkit-mask-size: 250% 100%;
+    animation: dot-wave 2s infinite;
   }
 
   .skeleton-content {
@@ -96,6 +112,17 @@
     background: rgba(0, 243, 255, 0.15);
     animation: pulse 1.5s ease-in-out infinite;
     animation-delay: 0.2s;
+  }
+
+  @keyframes dot-wave {
+    0% {
+      mask-position: 200% 0;
+      -webkit-mask-position: 200% 0;
+    }
+    100% {
+      mask-position: -50% 0;
+      -webkit-mask-position: -50% 0;
+    }
   }
 
   @keyframes shimmer {

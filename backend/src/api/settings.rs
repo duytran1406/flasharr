@@ -182,20 +182,11 @@ async fn update_downloads_settings(
 async fn get_sonarr_settings(
     State(state): State<Arc<AppState>>,
 ) -> Json<ArrSettings> {
-    let settings = state.config.sonarr.as_ref()
-        .map(|s| ArrSettings {
-            enabled: s.enabled,
-            url: s.url.clone(),
-            api_key: mask_api_key(&s.api_key),
-            auto_import: s.auto_import,
-        })
-        .unwrap_or(ArrSettings {
-            enabled: false,
-            url: "http://localhost:8989".to_string(),
-            api_key: String::new(),
-            auto_import: true,
-        });
-    Json(settings)
+    let url = state.db.get_setting("sonarr_url").ok().flatten().unwrap_or_else(|| "http://localhost:8989".to_string());
+    let api_key = state.db.get_setting("sonarr_api_key").ok().flatten().unwrap_or_else(|| String::new());
+    let enabled = !url.is_empty() && !api_key.is_empty();
+
+    Json(ArrSettings { enabled, url, api_key, auto_import: true })
 }
 
 /// PUT /api/settings/sonarr - Update Sonarr settings
@@ -231,6 +222,10 @@ async fn update_sonarr_settings(
     // Save to config.toml
     match crate::config::save_config(&config) {
         Ok(_) => {
+            // Also save to database so GET endpoints can read them back
+            let _ = state.db.save_setting("sonarr_url", &payload.url);
+            let _ = state.db.save_setting("sonarr_api_key", &payload.api_key);
+            
             // Reload arr_client dynamically (no restart needed!)
             state.download_orchestrator.reload_arr_client(
                 sonarr_config,
@@ -256,20 +251,11 @@ async fn update_sonarr_settings(
 async fn get_radarr_settings(
     State(state): State<Arc<AppState>>,
 ) -> Json<ArrSettings> {
-    let settings = state.config.radarr.as_ref()
-        .map(|r| ArrSettings {
-            enabled: r.enabled,
-            url: r.url.clone(),
-            api_key: mask_api_key(&r.api_key),
-            auto_import: r.auto_import,
-        })
-        .unwrap_or(ArrSettings {
-            enabled: false,
-            url: "http://localhost:7878".to_string(),
-            api_key: String::new(),
-            auto_import: true,
-        });
-    Json(settings)
+    let url = state.db.get_setting("radarr_url").ok().flatten().unwrap_or_else(|| "http://localhost:7878".to_string());
+    let api_key = state.db.get_setting("radarr_api_key").ok().flatten().unwrap_or_else(|| String::new());
+    let enabled = !url.is_empty() && !api_key.is_empty();
+
+    Json(ArrSettings { enabled, url, api_key, auto_import: true })
 }
 
 /// PUT /api/settings/radarr - Update Radarr settings
@@ -305,6 +291,10 @@ async fn update_radarr_settings(
     // Save to config.toml
     match crate::config::save_config(&config) {
         Ok(_) => {
+            // Also save to database so GET endpoints can read them back
+            let _ = state.db.save_setting("radarr_url", &payload.url);
+            let _ = state.db.save_setting("radarr_api_key", &payload.api_key);
+            
             // Reload arr_client dynamically (no restart needed!)
             state.download_orchestrator.reload_arr_client(
                 config.sonarr.clone(),
@@ -332,31 +322,39 @@ async fn get_indexer_settings(
 ) -> Json<IndexerSettings> {
     let host = &state.config.server.host;
     let port = state.config.server.port;
-    let indexer_url = format!("http://{}:{}/api/indexer", host, port);
+    let indexer_url = format!("http://{}:{}/newznab", host, port);
     
-    let settings = state.config.indexer.as_ref()
-        .map(|i| IndexerSettings {
-            enabled: i.enabled,
-            api_key: i.api_key.clone(),
-            indexer_url: indexer_url.clone(),
-        })
-        .unwrap_or(IndexerSettings {
-            enabled: false,
-            api_key: String::new(),
-            indexer_url,
-        });
-    Json(settings)
+    // Read API key from database
+    let api_key = state.db.get_setting("indexer_api_key")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "flasharr-default-key".to_string());
+    
+    Json(IndexerSettings {
+        enabled: true,
+        api_key,
+        indexer_url,
+    })
 }
 
 /// PUT /api/settings/indexer - Update indexer settings
 async fn update_indexer_settings(
-    State(_state): State<Arc<AppState>>,
-    Json(_payload): Json<IndexerSettings>,
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<IndexerSettings>,
 ) -> Json<ActionResponse> {
-    // TODO: Implement config file persistence
+    // Save API key to database
+    if let Err(e) = state.db.save_setting("indexer_api_key", &payload.api_key) {
+        return Json(ActionResponse {
+            success: false,
+            message: Some(format!("Failed to save indexer settings: {}", e)),
+        });
+    }
+    
+    tracing::info!("Indexer settings updated: API key saved to database");
+    
     Json(ActionResponse {
-        success: false,
-        message: Some("Indexer settings update not yet implemented. Edit config.toml directly.".to_string()),
+        success: true,
+        message: Some("Indexer settings updated successfully".to_string()),
     })
 }
 
@@ -386,32 +384,22 @@ fn mask_api_key(key: &str) -> String {
 
 /// POST /api/settings/sonarr/test - Test Sonarr connection
 async fn test_sonarr_connection(
+    State(_state): State<Arc<AppState>>,
     Json(payload): Json<ArrSettings>,
 ) -> Result<Json<ActionResponse>, StatusCode> {
     match crate::arr::ArrClient::test_sonarr_connection(&payload.url, &payload.api_key).await {
-        Ok(message) => Ok(Json(ActionResponse {
-            success: true,
-            message: Some(message),
-        })),
-        Err(e) => Ok(Json(ActionResponse {
-            success: false,
-            message: Some(format!("Connection failed: {}", e)),
-        })),
+        Ok(message) => Ok(Json(ActionResponse { success: true, message: Some(message) })),
+        Err(e) => Ok(Json(ActionResponse { success: false, message: Some(format!("Connection failed: {}", e)) })),
     }
 }
 
 /// POST /api/settings/radarr/test - Test Radarr connection
 async fn test_radarr_connection(
+    State(_state): State<Arc<AppState>>,
     Json(payload): Json<ArrSettings>,
 ) -> Result<Json<ActionResponse>, StatusCode> {
     match crate::arr::ArrClient::test_radarr_connection(&payload.url, &payload.api_key).await {
-        Ok(message) => Ok(Json(ActionResponse {
-            success: true,
-            message: Some(message),
-        })),
-        Err(e) => Ok(Json(ActionResponse {
-            success: false,
-            message: Some(format!("Connection failed: {}", e)),
-        })),
+        Ok(message) => Ok(Json(ActionResponse { success: true, message: Some(message) })),
+        Err(e) => Ok(Json(ActionResponse { success: false, message: Some(format!("Connection failed: {}", e)) })),
     }
 }

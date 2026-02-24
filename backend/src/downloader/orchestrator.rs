@@ -15,28 +15,12 @@ use super::stats::EngineStats;
 use super::engine_simple::SimpleDownloadEngine;
 use super::manager::DownloadTaskManager;
 use super::task::{DownloadTask, DownloadState, UrlMetadata};
-use super::progress::ProgressUpdate;
+use super::progress::{ProgressUpdate, TaskEvent};
+use super::path_builder::{TmdbDownloadMetadata, PathBuilder};
+use super::duplicate_detector::DuplicateDetector;
 use crate::hosts::registry::HostRegistry;
 use crate::db::Db;
-
-/// TMDB metadata for organizing downloads into folder structures
-#[derive(Debug, Clone)]
-pub struct TmdbDownloadMetadata {
-    /// TMDB ID
-    pub tmdb_id: Option<i64>,
-    /// Media type: "movie" or "tv"
-    pub media_type: Option<String>,
-    /// Movie/Show title
-    pub title: Option<String>,
-    /// Release year
-    pub year: Option<String>,
-    /// Collection name (for movies in a collection)
-    pub collection_name: Option<String>,
-    /// Season number (for TV)
-    pub season: Option<i32>,
-    /// Episode number (for TV)
-    pub episode: Option<i32>,
-}
+use crate::utils::parser::FilenameParser;
 
 /// Download orchestrator - coordinates all download operations
 pub struct DownloadOrchestrator {
@@ -52,8 +36,11 @@ pub struct DownloadOrchestrator {
     /// Database connection
     db: Option<Arc<Db>>,
     
-    /// Progress broadcast channel
+    /// Progress broadcast channel (legacy, will be deprecated)
     progress_tx: broadcast::Sender<ProgressUpdate>,
+    
+    /// Event bus for event-driven architecture
+    event_bus: Arc<super::events::EventBus>,
     
     /// Worker handles
     workers: Mutex<Vec<JoinHandle<()>>>,
@@ -69,6 +56,14 @@ pub struct DownloadOrchestrator {
     
     /// *arr API client for bi-directional sync (wrapped for dynamic updates)
     arr_client: Arc<RwLock<Option<Arc<crate::arr::ArrClient>>>>,
+    
+    /// *arr artifact manager for Series/Movie metadata (Phase 1: Artifact Management)
+    artifact_manager: Arc<RwLock<Option<Arc<crate::arr::ArrArtifactManager>>>>,
+    
+
+    
+    /// Track announced batches to prevent duplicate announcements
+    announced_batches: Arc<RwLock<std::collections::HashSet<String>>>,
 }
 
 impl DownloadOrchestrator {
@@ -84,12 +79,38 @@ impl DownloadOrchestrator {
         let download_engine = Arc::new(SimpleDownloadEngine::with_config(config.clone()));
         let (progress_tx, _) = broadcast::channel(1000);
         
+        // Create event bus for event-driven architecture
+        let event_bus = Arc::new(super::events::EventBus::new(1000));
+        
+        // Phase 4: Start TaskManager event listener for auto-updating cache
+        let event_rx = event_bus.subscribe();
+        Arc::clone(&task_manager).start_event_listener(event_rx);
+        Arc::clone(&task_manager).start_cleanup_loop();
+        tracing::info!("Phase 4 activated: TaskManager event-driven cache with auto-eviction + background cleanup");
+        
         // Create arr client if either Sonarr or Radarr is configured
+        tracing::info!("Arr Config Check: sonarr={}, radarr={}", 
+            sonarr_config.is_some(), radarr_config.is_some());
         let arr_client = if sonarr_config.is_some() || radarr_config.is_some() {
+            tracing::info!("Creating ArrClient with Sonarr/Radarr configuration");
             Some(Arc::new(crate::arr::ArrClient::new(sonarr_config, radarr_config)))
+        } else {
+            tracing::warn!("No Sonarr or Radarr configuration found - arr_client will be None");
+            None
+        };
+        
+        // Create artifact manager for Series/Movie metadata management
+        let artifact_manager = if let (Some(ref client), Some(ref database)) = (&arr_client, &db) {
+            tracing::info!("Creating ArrArtifactManager for artifact lifecycle management");
+            Some(Arc::new(crate::arr::ArrArtifactManager::new(
+                Arc::clone(client),
+                Arc::clone(database),
+            )))
         } else {
             None
         };
+        
+
         
         Self {
             task_manager,
@@ -97,11 +118,15 @@ impl DownloadOrchestrator {
             host_registry,
             db,
             progress_tx,
+            event_bus,
             workers: Mutex::new(Vec::new()),
             config: Arc::new(RwLock::new(config)),
             running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             task_notify: Arc::new(Notify::new()),
             arr_client: Arc::new(RwLock::new(arr_client)),
+            artifact_manager: Arc::new(RwLock::new(artifact_manager)),
+
+            announced_batches: Arc::new(RwLock::new(std::collections::HashSet::new())),
         }
     }
     
@@ -159,7 +184,7 @@ impl DownloadOrchestrator {
         host: String,
         category: String,
     ) -> Result<DownloadTask, anyhow::Error> {
-        self.add_download_with_metadata(url, Some(filename), host, category, None).await
+        self.add_download_with_metadata(url, Some(filename), host, category, None, None, None).await
     }
     
     /// Add a new download with TMDB metadata for organized folder structure
@@ -169,7 +194,9 @@ impl DownloadOrchestrator {
         filename_override: Option<String>,
         host: String,
         category: String,
-        tmdb_metadata: Option<TmdbDownloadMetadata>,
+        mut tmdb_metadata: Option<TmdbDownloadMetadata>,
+        batch_id: Option<String>,
+        batch_name: Option<String>,
     ) -> Result<DownloadTask, anyhow::Error> {
         // === DEBUG: Log orchestrator input ===
         tracing::info!("=== [ORCHESTRATOR] add_download_with_metadata called ===");
@@ -186,11 +213,53 @@ impl DownloadOrchestrator {
         let fshare_code = Self::extract_fshare_code(&url);
         tracing::info!("[ORCHESTRATOR] Extracted fshare_code: {:?}", fshare_code);
         
-        // Check for duplicates if we have a Fshare code
+        // Check for duplicates in memory first (fast path)
         if let Some(code) = &fshare_code {
             if let Some(existing) = self.find_task_by_fshare_code(code) {
                 let filename = filename_override.unwrap_or_else(|| "unknown".to_string());
                 return self.handle_duplicate(existing, url, filename, host, category, code.clone()).await;
+            }
+        }
+        
+        // Check for duplicates in database (slow path - catches evicted tasks)
+        if let (Some(code), Some(db)) = (&fshare_code, &self.db) {
+            match db.find_task_by_fshare_code_async(code).await {
+                Ok(Some((existing_id, existing_state))) => {
+                    // Found existing task in database with same fshare code
+                    match existing_state.as_str() {
+                        "QUEUED" | "STARTING" | "DOWNLOADING" | "PAUSED" | "COMPLETED" => {
+                            tracing::info!(
+                                "Duplicate detected in DB [fshare_code: {}]: Task {} already exists in state {}, skipping",
+                                code, existing_id, existing_state
+                            );
+                            return Err(anyhow::anyhow!("Download already exists ({})", existing_state));
+                        }
+                        "FAILED" | "CANCELLED" => {
+                            tracing::info!(
+                                "Duplicate detected in DB [fshare_code: {}]: Task {} is {}, deleting old and creating new",
+                                code, existing_id, existing_state
+                            );
+                            // Delete old task from database
+                            if let Ok(old_id) = uuid::Uuid::parse_str(&existing_id) {
+                                let _ = db.delete_task(old_id);
+                            }
+                        }
+                        _ => {
+                            tracing::info!(
+                                "Duplicate detected in DB [fshare_code: {}]: Task {} in state {}, skipping",
+                                code, existing_id, existing_state
+                            );
+                            return Err(anyhow::anyhow!("Download already exists ({})", existing_state));
+                        }
+                    }
+                }
+                Ok(None) => {
+                    // No duplicate found in DB, proceed
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to check DB for duplicate fshare code: {}", e);
+                    // Continue anyway - better to have a potential duplicate than fail
+                }
             }
         }
         
@@ -218,13 +287,132 @@ impl DownloadOrchestrator {
         let download_dir = {
             self.config.read().await.download_dir.clone()
         };
-        let destination = self.build_destination_path(&filename, &category, &tmdb_metadata, &download_dir);
+        
+        // Create Sonarr/Radarr compatible filename if TMDB metadata exists
+        let final_filename = if let Some(mut meta) = tmdb_metadata.clone() {
+            // Extract file extension from original filename
+            let extension = std::path::Path::new(&filename)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("mkv");
+            
+            // For TV shows: Always create clean filename if we have season/episode
+            if let (Some(season), Some(episode)) = (meta.season, meta.episode) {
+                // Fetch title from TMDB if missing
+                let title = if meta.title.is_none() {
+                    if let Some(tmdb_id) = &meta.tmdb_id {
+                        let media_type = meta.media_type.as_deref().unwrap_or("tv");
+                        tracing::info!("Fetching TMDB title for ID: {}, type: {}", tmdb_id, media_type);
+                        let fetched_title = crate::api::indexer::fetch_tmdb_title(&tmdb_id.to_string(), media_type).await;
+                        if let Some(ref t) = fetched_title {
+                            tracing::info!("Fetched TMDB title: {}", t);
+                            meta.title = fetched_title.clone();
+                        }
+                        fetched_title
+                    } else {
+                        None
+                    }
+                } else {
+                    meta.title.clone()
+                };
+                
+                // Create clean filename: "Series - S##E##.ext"
+                if let Some(title_str) = title {
+                    let clean_filename = format!("{} - S{:02}E{:02}.{}", title_str, season, episode, extension);
+                    tracing::info!("Generated clean filename: {} (from: {})", clean_filename, filename);
+                    
+                    // Update tmdb_metadata with fetched title for folder organization
+                    if let Some(ref mut original_meta) = tmdb_metadata {
+                        original_meta.title = Some(title_str);
+                    }
+                    
+                    clean_filename
+                } else {
+                    tracing::warn!("Could not fetch TMDB title, using original filename: {}", filename);
+                    filename.clone()
+                }
+            }
+            // For movies: Create clean filename if we have title
+            else if let Some(ref title) = meta.title {
+                let clean_filename = if let Some(year) = meta.year {
+                    format!("{} ({}).{}", title, year, extension)
+                } else {
+                    format!("{}.{}", title, extension)
+                };
+                tracing::info!("Generated clean movie filename: {} (from: {})", clean_filename, filename);
+                clean_filename
+            } else {
+                filename.clone()
+            }
+        } else {
+            filename.clone()
+        };
+        
+        // Build destination with Sonarr-compatible filename
+        let destination = self.build_destination_path(&final_filename, &category, &tmdb_metadata, &download_dir);
         
         // Create new task with file size
-        let mut task = DownloadTask::new(url, filename.clone(), host, category);
+        let mut task = DownloadTask::new(url, final_filename, host, category);
         task.fshare_code = fshare_code;
         task.destination = destination;
         task.size = file_size;
+        task.batch_id = batch_id;
+        task.batch_name = batch_name;
+        
+        // Parse quality metadata from filename
+        let quality_attrs = FilenameParser::extract_quality_attributes(&task.filename);
+        task.quality = Some(quality_attrs.quality_name());
+        task.resolution = quality_attrs.resolution.clone();
+        
+        // Store TMDB metadata for Sonarr/Radarr matching
+        if let Some(ref meta) = tmdb_metadata {
+            task.tmdb_id = meta.tmdb_id;
+            task.tmdb_title = meta.title.clone();
+            task.tmdb_season = meta.season.map(|s| s as u32);
+            task.tmdb_episode = meta.episode.map(|e| e as u32);
+            
+            // ── Persist to media_items (TMDB-centric data model) ──────────
+            if let (Some(tmdb_id), Some(db)) = (meta.tmdb_id, &self.db) {
+                let media_type = meta.media_type.clone().unwrap_or_else(|| {
+                    if meta.season.is_some() || meta.episode.is_some() { "tv".to_string() } else { "movie".to_string() }
+                });
+                let title = meta.title.clone().unwrap_or_else(|| "Unknown".to_string());
+                let mut media_item = crate::db::media::MediaItem::new(tmdb_id, &media_type, &title);
+                media_item.year = meta.year;
+                
+                // Check if item already exists to preserve existing arr state
+                if let Ok(Some(existing)) = db.get_media_item(tmdb_id) {
+                    media_item.arr_id = existing.arr_id;
+                    media_item.arr_type = existing.arr_type;
+                    media_item.arr_path = existing.arr_path;
+                    media_item.arr_monitored = existing.arr_monitored;
+                    media_item.arr_status = existing.arr_status;
+                    media_item.arr_quality_profile_id = existing.arr_quality_profile_id;
+                    media_item.arr_has_file = existing.arr_has_file;
+                    media_item.arr_size_on_disk = existing.arr_size_on_disk;
+                    media_item.tvdb_id = existing.tvdb_id;
+                    media_item.imdb_id = existing.imdb_id;
+                    media_item.arr_synced_at = existing.arr_synced_at;
+                    media_item.created_at = existing.created_at;
+                }
+                
+                if let Err(e) = db.upsert_media_item(&media_item) {
+                    tracing::warn!("[ORCHESTRATOR] Failed to upsert media_item for tmdb_id={}: {}", tmdb_id, e);
+                } else {
+                    tracing::info!("[ORCHESTRATOR] Upserted media_item: tmdb_id={}, type={}, title={}", tmdb_id, media_type, title);
+                }
+                
+                // For TV episodes, also upsert media_episodes row
+                if media_type == "tv" {
+                    if let (Some(season), Some(episode)) = (meta.season, meta.episode) {
+                        let ep = crate::db::media::MediaEpisode::new(tmdb_id, season, episode);
+                        if let Err(e) = db.upsert_media_episode(&ep) {
+                            tracing::warn!("[ORCHESTRATOR] Failed to upsert media_episode for tmdb_id={} S{:02}E{:02}: {}", tmdb_id, season, episode, e);
+                        }
+                    }
+                }
+            }
+        }
         
         // Add to manager (SSOT)
         self.task_manager.add_task(task.clone());
@@ -237,117 +425,180 @@ impl DownloadOrchestrator {
             db.save_task(&task)?;
         }
         
-        // Broadcast task added event
+        // Broadcast task added event (legacy)
         let _ = self.progress_tx.send(ProgressUpdate {
+            event: TaskEvent::Added,
             task_id: task.id.to_string(),
             downloaded_bytes: 0,
-            total_bytes: 0,
+            total_bytes: task.size,
             speed_bytes_per_sec: 0.0,
             eta_seconds: 0.0,
             percentage: 0.0,
             state: "QUEUED".to_string(),
         });
         
+        // Emit TaskEvent::Created (event-driven architecture)
+        self.event_bus.publish(super::events::TaskEvent::Created {
+            task: task.clone(),
+        });
+        
+        // Phase 1: Manage Arr Artifact (Series/Movie metadata)
+        // This happens when download is ADDED, not completed
+        // Only manage ONCE per series/movie (not per episode)
+        tracing::debug!("Artifact management check: tmdb_id={:?}, artifact_manager_exists={}", 
+            task.tmdb_id, self.artifact_manager.read().await.is_some());
+        
+        if task.tmdb_id.is_some() {
+            let artifact_manager_guard = self.artifact_manager.read().await;
+            if let Some(ref artifact_manager) = *artifact_manager_guard {
+                // Check if we should manage artifact based on batch_id
+                let should_manage = if let Some(ref batch_id) = task.batch_id {
+                    // Check if this batch has already been managed
+                    let mut announced = self.announced_batches.write().await;
+                    if announced.contains(batch_id) {
+                        tracing::debug!("Batch {} already managed - skipping artifact creation", batch_id);
+                        false
+                    } else {
+                        // Mark this batch as managed
+                        announced.insert(batch_id.clone());
+                        tracing::info!("First task in batch {} - will manage artifact in Sonarr/Radarr", batch_id);
+                        true
+                    }
+                } else {
+                    // No batch, manage immediately (movies or standalone episodes)
+                    tracing::debug!("No batch_id - managing artifact immediately");
+                    true
+                };
+                
+                tracing::info!("Should manage artifact: {} for task: {}", should_manage, task.filename);
+                
+                if should_manage {
+                    tracing::info!("Managing artifact for: {} (TMDB ID: {:?})", task.filename, task.tmdb_id);
+                    
+                    // Spawn artifact management in background to avoid blocking
+                    let artifact_manager_clone = Arc::clone(artifact_manager);
+                    let task_clone = task.clone();
+                    let task_manager_clone = Arc::clone(&self.task_manager);
+                    let db_clone = self.db.clone();
+                    tokio::spawn(async move {
+                        match artifact_manager_clone.manage_artifact(&task_clone).await {
+                            Ok(status) => {
+                                use crate::arr::ArtifactStatus;
+                                match status {
+                                    ArtifactStatus::Created { arr_id } | 
+                                    ArtifactStatus::AlreadyMonitored { arr_id } => {
+                                        let status_name = match status {
+                                            ArtifactStatus::Created { .. } => "created",
+                                            ArtifactStatus::AlreadyMonitored { .. } => "found",
+                                            _ => unreachable!(),
+                                        };
+                                        tracing::info!(
+                                            "Successfully {} artifact for {} (Arr ID: {})",
+                                            status_name,
+                                            task_clone.filename,
+                                            arr_id
+                                        );
+                                        
+                                        // Update in-memory tasks with arr_series_id/arr_movie_id
+                                        if let Some(tmdb_id) = task_clone.tmdb_id {
+                                            let all_tasks = task_manager_clone.get_tasks();
+                                            let mut updated_count = 0;
+                                            
+                                            for mut task in all_tasks {
+                                                if task.tmdb_id == Some(tmdb_id) {
+                                                    // Update appropriate ID based on media type
+                                                    match task.detect_media_type() {
+                                                        crate::downloader::MediaType::TvSeries | 
+                                                        crate::downloader::MediaType::TvEpisode => {
+                                                            task.arr_series_id = Some(arr_id as i64);
+                                                        }
+                                                        crate::downloader::MediaType::Movie => {
+                                                            task.arr_movie_id = Some(arr_id as i64);
+                                                        }
+                                                    }
+                                                    task_manager_clone.update_task(task);
+                                                    updated_count += 1;
+                                                }
+                                            }
+                                            
+                                            tracing::info!("Updated {} in-memory tasks with arr_id={}", updated_count, arr_id);
+                                            
+                                            // Persist arr state to media_items table
+                                            if let Some(ref db) = db_clone {
+                                                let arr_type = match task_clone.detect_media_type() {
+                                                    crate::downloader::MediaType::TvSeries |
+                                                    crate::downloader::MediaType::TvEpisode => "sonarr",
+                                                    crate::downloader::MediaType::Movie => "radarr",
+                                                };
+                                                if let Err(e) = db.update_media_arr_state(
+                                                    tmdb_id, arr_id, arr_type,
+                                                    None, true, None, None,
+                                                ) {
+                                                    tracing::warn!("Failed to update media_items arr state for tmdb_id={}: {}", tmdb_id, e);
+                                                } else {
+                                                    tracing::info!("Updated media_items arr state: tmdb_id={}, arr_id={}, type={}", tmdb_id, arr_id, arr_type);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ArtifactStatus::Skipped { reason } => {
+                                        tracing::debug!(
+                                            "Skipped artifact management for {}: {}",
+                                            task_clone.filename,
+                                            reason
+                                        );
+                                    }
+                                    ArtifactStatus::Failed { error } => {
+                                        tracing::warn!(
+                                            "Failed to manage artifact for {}: {}",
+                                            task_clone.filename,
+                                            error
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "Error managing artifact for {}: {}",
+                                    task_clone.filename,
+                                    e
+                                );
+                            }
+                        }
+                    });
+                } else {
+                    tracing::debug!("Skipping artifact management for {} - already managed for this batch", task.filename);
+                }
+            }
+        }
+        
         tracing::info!("Added download: {} ({}) [code: {:?}] -> {}", task.filename, task.id, task.fshare_code, task.destination);
         Ok(task)
     }
     
     /// Build organized destination path based on TMDB metadata
-    /// Movies: collection_name/movie_name (year)/file OR movie_name (year)/file
-    /// TV: series_name/season_xx/file
+    /// Delegates to PathBuilder module
     fn build_destination_path(&self, filename: &str, category: &str, tmdb: &Option<TmdbDownloadMetadata>, root_dir: &std::path::Path) -> String {
-        let base_dir = root_dir;
-        
-        if let Some(meta) = tmdb {
-            let media_type = meta.media_type.as_deref().unwrap_or(category);
-            
-            match media_type {
-                "movie" => {
-                    // Build: [Collection]/MovieName (Year)/filename
-                    let movie_folder = if let Some(ref title) = meta.title {
-                        if let Some(ref year) = meta.year {
-                            format!("{} ({})", Self::sanitize_filename(title), year)
-                        } else {
-                            Self::sanitize_filename(title)
-                        }
-                    } else {
-                        "Unknown Movie".to_string()
-                    };
-                    
-                    if let Some(ref collection) = meta.collection_name {
-                        base_dir.join(Self::sanitize_filename(collection))
-                            .join(&movie_folder)
-                            .join(filename)
-                            .to_string_lossy()
-                            .to_string()
-                    } else {
-                        base_dir.join(&movie_folder)
-                            .join(filename)
-                            .to_string_lossy()
-                            .to_string()
-                    }
-                }
-                "tv" => {
-                    // Build: SeriesName/Season XX/filename
-                    let series_folder = if let Some(ref title) = meta.title {
-                        Self::sanitize_filename(title)
-                    } else {
-                        "Unknown Series".to_string()
-                    };
-                    
-                    let season_folder = if let Some(season) = meta.season {
-                        format!("Season {:02}", season)
-                    } else {
-                        "Season 01".to_string()
-                    };
-                    
-                    base_dir.join(&series_folder)
-                        .join(&season_folder)
-                        .join(filename)
-                        .to_string_lossy()
-                        .to_string()
-                }
-                _ => {
-                    // Default: just use base dir
-                    base_dir.join(filename).to_string_lossy().to_string()
-                }
-            }
-        } else {
-            // No TMDB metadata, use simple path
-            base_dir.join(filename).to_string_lossy().to_string()
-        }
+        PathBuilder::build_destination_path(filename, category, tmdb, root_dir)
     }
     
     /// Sanitize a string for use as a folder/file name
+    /// Delegates to PathBuilder module
+    #[allow(dead_code)] // May be used by future code
     fn sanitize_filename(name: &str) -> String {
-        name.chars()
-            .map(|c| match c {
-                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-                _ => c,
-            })
-            .collect::<String>()
-            .trim()
-            .to_string()
+        PathBuilder::sanitize_filename(name)
     }
     
     /// Extract Fshare file code from URL
-    /// Example: https://www.fshare.vn/file/8DW6WQOV5R551DL -> Some("8DW6WQOV5R551DL")
+    /// Delegates to DuplicateDetector module
     fn extract_fshare_code(url: &str) -> Option<String> {
-        if url.contains("fshare.vn/file/") {
-            url.split("/file/")
-                .nth(1)
-                .and_then(|s| s.split('?').next())
-                .map(|s| s.to_string())
-        } else {
-            None
-        }
+        DuplicateDetector::extract_fshare_code(url)
     }
     
     /// Find task by Fshare code
+    /// Delegates to DuplicateDetector module
     fn find_task_by_fshare_code(&self, code: &str) -> Option<DownloadTask> {
-        self.task_manager.get_tasks()
-            .into_iter()
-            .find(|t| t.fshare_code.as_deref() == Some(code))
+        DuplicateDetector::find_task_by_fshare_code(&self.task_manager, code)
     }
     
     /// Handle duplicate download based on existing task state
@@ -398,6 +649,11 @@ impl DownloadOrchestrator {
                 let download_dir = self.config.read().await.download_dir.clone();
                 task.destination = download_dir.join(&task.filename).to_string_lossy().to_string();
                 
+                // Parse quality metadata from filename
+                let quality_attrs = FilenameParser::extract_quality_attributes(&task.filename);
+                task.quality = Some(quality_attrs.quality_name());
+                task.resolution = quality_attrs.resolution.clone();
+                
                 // Add to manager
                 self.task_manager.add_task(task.clone());
                 
@@ -408,9 +664,10 @@ impl DownloadOrchestrator {
                 
                 // Broadcast task added event
                 let _ = self.progress_tx.send(ProgressUpdate {
+                    event: TaskEvent::Added,
                     task_id: task.id.to_string(),
                     downloaded_bytes: 0,
-                    total_bytes: 0,
+                    total_bytes: task.size,
                     speed_bytes_per_sec: 0.0,
                     eta_seconds: 0.0,
                     percentage: 0.0,
@@ -437,14 +694,54 @@ impl DownloadOrchestrator {
         &self.task_manager
     }
 
-    /// Get aggregate engine statistics
+    /// Get aggregate engine statistics (with database counts for filter dropdown)
     pub async fn get_stats(&self) -> EngineStats {
-        self.task_manager.get_stats()
+        let mut stats = self.task_manager.get_stats();
+        
+        // Query database for accurate status counts (for filter dropdown)
+        if let Some(db) = &self.db {
+            match db.get_status_counts() {
+                Ok(counts) => {
+                    use crate::downloader::stats::DbStatusCounts;
+                    
+                    // Aggregate counts by UI category
+                    let downloading = *counts.get("DOWNLOADING").unwrap_or(&0) 
+                        + *counts.get("STARTING").unwrap_or(&0);
+                    let queued = *counts.get("QUEUED").unwrap_or(&0) 
+                        + *counts.get("WAITING").unwrap_or(&0);
+                    let paused = *counts.get("PAUSED").unwrap_or(&0);
+                    let completed = *counts.get("COMPLETED").unwrap_or(&0);
+                    let failed = *counts.get("FAILED").unwrap_or(&0);
+                    let cancelled = *counts.get("CANCELLED").unwrap_or(&0);
+                    let all: usize = counts.values().sum();
+                    
+                    stats.db_counts = Some(DbStatusCounts {
+                        all,
+                        downloading,
+                        queued,
+                        paused,
+                        completed,
+                        failed,
+                        cancelled,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to get status counts from DB: {}", e);
+                }
+            }
+        }
+        
+        stats
     }
     
-    /// Subscribe to progress updates
+    /// Subscribe to progress updates (legacy)
     pub fn subscribe_progress(&self) -> broadcast::Receiver<ProgressUpdate> {
         self.progress_tx.subscribe()
+    }
+    
+    /// Subscribe to task events (event-driven architecture)
+    pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<super::events::TaskEvent> {
+        self.event_bus.subscribe()
     }
     
     /// Broadcast a task update to all WebSocket clients
@@ -452,7 +749,9 @@ impl DownloadOrchestrator {
     pub fn broadcast_task_update(&self, task: &DownloadTask) {
         let state_str = format!("{:?}", task.state).to_uppercase();
         
+        // Legacy progress broadcast
         let _ = self.progress_tx.send(ProgressUpdate {
+            event: TaskEvent::Updated,
             task_id: task.id.to_string(),
             downloaded_bytes: task.downloaded,
             total_bytes: task.size,
@@ -462,7 +761,295 @@ impl DownloadOrchestrator {
             state: state_str,
         });
         
+        // Emit StateChanged event (event-driven architecture)
+        // Note: We don't have old_state here, so we'll use the current state for both
+        // This is acceptable as the task object contains the new state
+        self.event_bus.publish(super::events::TaskEvent::StateChanged {
+            task: task.clone(),
+            old_state: task.state.clone(),
+            new_state: task.state.clone(),
+            timestamp: chrono::Utc::now(),
+        });
+        
         tracing::debug!("Broadcast task update: {} -> {:?}", task.id, task.state);
+    }
+    
+    /// Broadcast a task removal to all WebSocket clients
+    /// Used when a task is deleted
+    pub fn broadcast_task_removed(&self, task_id: &str) {
+        let _ = self.progress_tx.send(ProgressUpdate {
+            event: TaskEvent::Removed,
+            task_id: task_id.to_string(),
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            speed_bytes_per_sec: 0.0,
+            eta_seconds: 0.0,
+            percentage: 0.0,
+            state: "REMOVED".to_string(),
+        });
+        
+        tracing::debug!("Broadcast task removed: {}", task_id);
+    }
+    
+    /// Wake idle workers to process new tasks
+    /// Call this when tasks are added to the queue
+    pub fn wake_workers(&self) {
+        self.task_notify.notify_waiters();
+    }
+    
+    /// Get task from memory or database (unified lookup)
+    /// 
+    /// This method provides a unified way to retrieve tasks that works regardless
+    /// of whether the task is currently in the TaskManager cache or only in the database.
+    /// 
+    /// **Lookup Strategy:**
+    /// 1. Fast path: Check TaskManager (in-memory cache)
+    /// 2. Slow path: Query Database if not in cache
+    /// 
+    /// This is critical for WebSocket broadcasts where tasks may exist in the DB
+    /// but not in the active TaskManager (e.g., completed tasks, tasks from before restart).
+    pub async fn get_task_unified(&self, task_id: uuid::Uuid) -> Option<DownloadTask> {
+        // Fast path: check memory first
+        if let Some(task) = self.task_manager.get_task(task_id) {
+            tracing::trace!("Task {} found in TaskManager (cache hit)", task_id);
+            return Some(task);
+        }
+        
+        // Slow path: check database
+        if let Some(db) = &self.db {
+            tracing::trace!("Task {} not in TaskManager, querying database (cache miss)", task_id);
+            match db.get_task_by_id(task_id) {
+                Ok(task) => {
+                    if task.is_some() {
+                        tracing::debug!("Task {} found in database", task_id);
+                    }
+                    task
+                }
+                Err(e) => {
+                    tracing::error!("Failed to query database for task {}: {}", task_id, e);
+                    None
+                }
+            }
+        } else {
+            tracing::trace!("Task {} not found (no database configured)", task_id);
+            None
+        }
+    }
+    
+    /// Load pending tasks (QUEUED, PAUSED) from database into TaskManager
+    /// Call this on startup to ensure resume/pause operations work correctly
+    pub async fn load_pending_tasks(&self) -> usize {
+        let Some(db) = &self.db else {
+            tracing::debug!("No database configured, skipping pending tasks load");
+            return 0;
+        };
+        
+        // Only load QUEUED and PAUSED tasks
+        // DOWNLOADING/STARTING are transient states - if server restarts during download,
+        // those tasks should be re-queued, not restored with stale state
+        let states = vec![
+            "QUEUED".to_string(),
+            "PAUSED".to_string(),
+        ];
+        
+        match db.get_tasks_by_states_async(states).await {
+            Ok(tasks) => {
+                let count = self.task_manager.restore_tasks(tasks);
+                tracing::info!("Loaded {} pending tasks from database into TaskManager", count);
+                
+                // Wake workers to process any queued tasks
+                if count > 0 {
+                    self.wake_workers();
+                }
+                count
+            }
+            Err(e) => {
+                tracing::error!("Failed to load pending tasks from database: {}", e);
+                0
+            }
+        }
+    }
+
+    /// Validate if download should be allowed based on library state
+    /// Returns Ok(()) if allowed, Err if duplicate/exists
+    async fn validate_download_request(&self, tmdb: &Option<TmdbDownloadMetadata>) -> Result<(), anyhow::Error> {
+        let Some(meta) = tmdb else {
+            return Ok(()); // No TMDB metadata, can't validate against library
+        };
+        
+        let client_guard = self.arr_client.read().await;
+        let Some(client) = client_guard.as_ref() else {
+            return Ok(()); // Arr integration disabled
+        };
+        
+        let tmdb_id = meta.tmdb_id.unwrap_or(0);
+        if tmdb_id == 0 { return Ok(()); }
+        
+        match meta.media_type.as_deref() {
+            Some("movie") => {
+                // Check Radarr
+                match client.get_movie_by_tmdb(tmdb_id).await {
+                    Ok(Some(movie)) => {
+                        if movie.has_file.unwrap_or(false) {
+                            tracing::warn!("Rejecting download: Movie already exists in library (Radarr ID: {})", movie.id);
+                            return Err(anyhow::anyhow!("Movie already exists in library"));
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => tracing::warn!("Failed to check Radarr for validation: {}", e),
+                }
+            }
+            Some("tv") | Some("episode") => {
+                // Check Sonarr
+                if let Some(season) = meta.season {
+                    if let Some(episode) = meta.episode {
+                        // 1. Resolve Series ID
+                        match client.series_exists(tmdb_id).await {
+                            Ok(Some(series_id)) => {
+                                // 2. Check Episode
+                                match client.get_episode_by_details(series_id, season as i32, episode as i32).await {
+                                    Ok(Some(ep_info)) => {
+                                        if ep_info.has_file {
+                                            tracing::warn!("Rejecting download: Episode already exists in library (S{}E{})", season, episode);
+                                            return Err(anyhow::anyhow!("Episode already exists in library"));
+                                        }
+                                    }
+                                    Ok(None) => {} // Episode not monitored/found
+                                    Err(e) => tracing::warn!("Failed to get episode details for validation: {}", e),
+                                }
+                            }
+                            Ok(None) => {} // Series not in Sonarr
+                            Err(e) => tracing::warn!("Failed to check Sonarr series for validation: {}", e),
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        
+        Ok(())
+    }
+
+
+    
+    // =========================================================================
+    // Encapsulated Task Operations (DB + TaskManager + Broadcast)
+    // =========================================================================
+    
+    /// Pause all pauseable tasks atomically
+    /// Handles: DB update (atomic) → TaskManager update → Broadcast
+    pub async fn pause_all_async(&self) -> usize {
+        // Need db connection
+        let db = match &self.db {
+            Some(db) => db,
+            None => {
+                tracing::error!("No database connection for pause_all");
+                return 0;
+            }
+        };
+        
+        let pauseable_states = vec![
+            "QUEUED".to_string(),
+            "DOWNLOADING".to_string(),
+            "STARTING".to_string(),
+            "WAITING".to_string(),
+        ];
+        
+        // 1. Query pauseable tasks from DB
+        let tasks = match db.get_tasks_by_states_async(pauseable_states).await {
+            Ok(tasks) => tasks,
+            Err(e) => {
+                tracing::error!("Failed to get pauseable tasks: {}", e);
+                return 0;
+            }
+        };
+        
+        if tasks.is_empty() {
+            return 0;
+        }
+        
+        let task_ids: Vec<uuid::Uuid> = tasks.iter().map(|t| t.id).collect();
+        
+        // 2. Atomic batch update in DB (single transaction)
+        if let Err(e) = db.batch_update_states_async(task_ids.clone(), "PAUSED".to_string()).await {
+            tracing::error!("Failed to batch pause tasks: {}", e);
+            return 0;
+        }
+        
+        let affected = tasks.len();
+        
+        // 3. Update TaskManager and broadcast for each task
+        for task in tasks {
+            // Try to pause in TaskManager (for active downloads)
+            if let Some(paused_task) = self.task_manager.pause_task(task.id) {
+                self.broadcast_task_update(&paused_task);
+            } else {
+                // Task was only in DB (queued), add to TaskManager and broadcast
+                let mut paused = task.clone();
+                paused.state = DownloadState::Paused;
+                self.task_manager.add_task(paused.clone());
+                self.broadcast_task_update(&paused);
+            }
+        }
+        
+        tracing::info!("Paused {} tasks atomically", affected);
+        affected
+    }
+    
+    /// Resume all paused tasks atomically
+    /// Handles: DB update (atomic) → TaskManager add → Broadcast → Wake workers
+    pub async fn resume_all_async(&self) -> usize {
+        // Need db connection
+        let db = match &self.db {
+            Some(db) => db,
+            None => {
+                tracing::error!("No database connection for resume_all");
+                return 0;
+            }
+        };
+        
+        let resumable_states = vec!["PAUSED".to_string()];
+        
+        // 1. Query paused tasks from DB
+        let tasks = match db.get_tasks_by_states_async(resumable_states).await {
+            Ok(tasks) => tasks,
+            Err(e) => {
+                tracing::error!("Failed to get paused tasks: {}", e);
+                return 0;
+            }
+        };
+        
+        if tasks.is_empty() {
+            return 0;
+        }
+        
+        let task_ids: Vec<uuid::Uuid> = tasks.iter().map(|t| t.id).collect();
+        
+        // 2. Atomic batch update in DB (single transaction)
+        if let Err(e) = db.batch_update_states_async(task_ids.clone(), "QUEUED".to_string()).await {
+            tracing::error!("Failed to batch resume tasks: {}", e);
+            return 0;
+        }
+        
+        let affected = tasks.len();
+        
+        // 3. Add tasks to TaskManager and broadcast
+        for task in tasks {
+            let mut queued_task = task.clone();
+            queued_task.state = DownloadState::Queued;
+            
+            // Add to TaskManager so workers can pick it up
+            self.task_manager.add_task(queued_task.clone());
+            
+            // Broadcast the state change
+            self.broadcast_task_update(&queued_task);
+        }
+        
+        // 4. Wake workers to process new queued tasks
+        self.wake_workers();
+        
+        tracing::info!("Resumed {} tasks atomically", affected);
+        affected
     }
     
     /// Spawn a worker
@@ -473,9 +1060,10 @@ impl DownloadOrchestrator {
         let host_registry = self.host_registry.clone();
         let db = self.db.clone();
         let progress_tx = self.progress_tx.clone();
+        let event_bus = self.event_bus.clone();
         let config = self.config.clone();
-        let arr_client = self.arr_client.clone();
         let task_notify = self.task_notify.clone();
+        let arr_client = self.arr_client.clone();
         
         tokio::spawn(async move {
             tracing::debug!("Worker {} started", worker_id);
@@ -496,12 +1084,11 @@ impl DownloadOrchestrator {
                 if let Some(task) = task_manager.pop_next_queued() {
                     tracing::info!("Worker {}: Processing task {}", worker_id, task.id);
                     
-                    // Acquire locks for current config, engine, and arr_client
-                    let (current_engine, current_config, current_arr_client) = {
+                    // Acquire locks for current config and engine
+                    let (current_engine, current_config) = {
                         let engine_guard = download_engine.read().await;
                         let config_guard = config.read().await;
-                        let arr_guard = arr_client.read().await;
-                        (engine_guard.clone(), config_guard.clone(), arr_guard.clone())
+                        (engine_guard.clone(), config_guard.clone())
                     };
 
                     // Process task
@@ -513,8 +1100,9 @@ impl DownloadOrchestrator {
                         &host_registry,
                         db.as_ref(),
                         &progress_tx,
+                        &event_bus,
                         &current_config,
-                        current_arr_client.as_ref(),
+                        &arr_client,
                     ).await;
                 } else {
                     // No tasks - wait for notification or timeout
@@ -539,23 +1127,21 @@ impl DownloadOrchestrator {
         host_registry: &Arc<HostRegistry>,
         db: Option<&Arc<Db>>,
         progress_tx: &broadcast::Sender<ProgressUpdate>,
+        event_bus: &Arc<super::events::EventBus>,
         config: &DownloadConfig,
-        arr_client: Option<&Arc<crate::arr::ArrClient>>,
+        arr_client: &Arc<tokio::sync::RwLock<Option<Arc<crate::arr::ArrClient>>>>,
     ) {
         // Update state to Starting
         task.state = DownloadState::Starting;
         task.started_at = Some(Utc::now());
         task_manager.update_task(task.clone());
         
-        // Broadcast Starting state to UI
-        let _ = progress_tx.send(ProgressUpdate {
-            task_id: task.id.to_string(),
-            downloaded_bytes: task.downloaded,
-            total_bytes: task.size,
-            speed_bytes_per_sec: 0.0,
-            eta_seconds: 0.0,
-            percentage: task.progress as f64,
-            state: "STARTING".to_string(),
+        // Publish StateChanged event (QUEUED -> STARTING)
+        event_bus.publish(super::events::TaskEvent::StateChanged {
+            task: task.clone(),
+            old_state: DownloadState::Queued,
+            new_state: DownloadState::Starting,
+            timestamp: Utc::now(),
         });
         
         if let Some(db) = db {
@@ -579,6 +1165,19 @@ impl DownloadOrchestrator {
                     Err(e) => {
                         tracing::error!("Worker {}: Failed to resolve URL: {}", worker_id, e);
                         task_manager.mark_failed(task.id, format!("URL resolution failed: {}", e));
+                        
+                        // Broadcast FAILED state to WebSocket
+                        let _ = progress_tx.send(ProgressUpdate {
+                            event: TaskEvent::Updated,
+                            task_id: task.id.to_string(),
+                            downloaded_bytes: 0,
+                            total_bytes: task.size,
+                            speed_bytes_per_sec: 0.0,
+                            eta_seconds: 0.0,
+                            percentage: 0.0,
+                            state: "FAILED".to_string(),
+                        });
+                        
                         if let Some(db) = db {
                             if let Some(failed_task) = task_manager.get_task(task.id) {
                                 let _ = db.save_task(&failed_task);
@@ -623,6 +1222,7 @@ impl DownloadOrchestrator {
                 
                 // Broadcast progress (WebSocket handler will just read the task, not update again)
                 let _ = progress_tx_clone.send(ProgressUpdate {
+                    event: TaskEvent::Updated,
                     task_id: task_id.to_string(),
                     downloaded_bytes: progress.downloaded_bytes,
                     total_bytes: progress.total_bytes,
@@ -641,27 +1241,28 @@ impl DownloadOrchestrator {
                 tracing::info!("Worker {}: Download completed for {}", worker_id, task_id);
                 task_manager.mark_completed(task_id);
                 
-                if let Some(db) = db {
-                    if let Some(completed_task) = task_manager.get_task(task_id) {
+                // Post-completion: Move file to Sonarr/Radarr's series/movie folder
+                // This allows Sonarr/Radarr's disk scan to detect and import the file
+                if let Some(completed_task) = task_manager.get_task(task_id) {
+                    let moved_task = Self::move_to_arr_path(
+                        &completed_task,
+                        arr_client,
+                    ).await;
+                    
+                    // Update task with new destination if file was moved
+                    if let Some(updated_task) = moved_task {
+                        task_manager.update_task(updated_task.clone());
+                        if let Some(db) = db {
+                            let _ = db.save_task(&updated_task);
+                        }
+                    } else if let Some(db) = db {
                         let _ = db.save_task(&completed_task);
-                    }
-                }
-                
-                // Trigger *arr sync if configured
-                if let Some(arr_client) = arr_client {
-                    if let Some(completed_task) = task_manager.get_task(task_id) {
-                        let filename = completed_task.filename.clone();
-                        let destination = PathBuf::from(&completed_task.destination);
-                        let arr_client = Arc::clone(arr_client);
-                        
-                        tokio::spawn(async move {
-                            arr_client.notify_completion(&filename, &destination).await;
-                        });
                     }
                 }
                 
                 // Broadcast completion
                 let _ = progress_tx.send(ProgressUpdate {
+                    event: TaskEvent::Updated,
                     task_id: task_id.to_string(),
                     downloaded_bytes: 0,
                     total_bytes: 0,
@@ -682,6 +1283,7 @@ impl DownloadOrchestrator {
                         
                         // Broadcast paused state
                         let _ = progress_tx.send(ProgressUpdate {
+                            event: TaskEvent::Updated,
                             task_id: task_id.to_string(),
                             downloaded_bytes: task.downloaded,
                             total_bytes: task.size,
@@ -713,6 +1315,18 @@ impl DownloadOrchestrator {
                     // True cancellation (delete/stop), not pause
                     task_manager.mark_failed(task_id, "Download cancelled".to_string());
                     
+                    // Broadcast FAILED state to WebSocket
+                    let _ = progress_tx.send(ProgressUpdate {
+                        event: TaskEvent::Updated,
+                        task_id: task_id.to_string(),
+                        downloaded_bytes: 0,
+                        total_bytes: 0,
+                        speed_bytes_per_sec: 0.0,
+                        eta_seconds: 0.0,
+                        percentage: 0.0,
+                        state: "FAILED".to_string(),
+                    });
+                    
                     if let Some(db) = db {
                         if let Some(updated_task) = task_manager.get_task(task_id) {
                             let _ = db.save_task(&updated_task);
@@ -734,6 +1348,18 @@ impl DownloadOrchestrator {
                         tracing::warn!("Worker {}: Will retry task {} in {:?}", worker_id, task_id, delay);
                     } else {
                         task_manager.mark_failed(task_id, format!("Max retries exceeded: {}", error_string));
+                        
+                        // Broadcast FAILED state to WebSocket
+                        let _ = progress_tx.send(ProgressUpdate {
+                            event: TaskEvent::Updated,
+                            task_id: task_id.to_string(),
+                            downloaded_bytes: 0,
+                            total_bytes: 0,
+                            speed_bytes_per_sec: 0.0,
+                            eta_seconds: 0.0,
+                            percentage: 0.0,
+                            state: "FAILED".to_string(),
+                        });
                     }
                     
                     if let Some(db) = db {
@@ -843,6 +1469,170 @@ impl DownloadOrchestrator {
     }
 
     
+    /// Move completed download to Sonarr/Radarr's series/movie folder
+    /// Returns updated task if file was moved successfully, None otherwise
+    async fn move_to_arr_path(
+        task: &DownloadTask,
+        arr_client: &Arc<tokio::sync::RwLock<Option<Arc<crate::arr::ArrClient>>>>,
+    ) -> Option<DownloadTask> {
+        use crate::downloader::MediaType;
+        
+        // Get arr_client (may not be configured)
+        let client = {
+            let guard = arr_client.read().await;
+            guard.clone()?
+        };
+        
+        let media_type = task.detect_media_type();
+        
+        // Get the target folder path from Sonarr/Radarr
+        // Always query by tmdb_id — no dependency on cached arr_series_id
+        let (arr_folder, arr_id) = match media_type {
+            MediaType::TvSeries | MediaType::TvEpisode => {
+                let series_id = match task.arr_series_id {
+                    Some(id) => id,
+                    None => {
+                        let tmdb_id = task.tmdb_id?;
+                        tracing::info!("Looking up series by TMDB ID: {}", tmdb_id);
+                        match client.series_exists(tmdb_id).await {
+                            Ok(Some(id)) => {
+                                tracing::info!("Found series in Sonarr by TMDB {}: ID {}", tmdb_id, id);
+                                id as i64
+                            }
+                            Ok(None) => {
+                                tracing::warn!("Series not found in Sonarr for TMDB {}", tmdb_id);
+                                return None;
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to look up series by TMDB {}: {}", tmdb_id, e);
+                                return None;
+                            }
+                        }
+                    }
+                };
+                let path = match client.get_series_path(series_id).await {
+                    Ok(path) => path,
+                    Err(e) => {
+                        tracing::warn!("Failed to get series path for ID {}: {}", series_id, e);
+                        return None;
+                    }
+                };
+                (path, series_id)
+            }
+            MediaType::Movie => {
+                let movie_id = match task.arr_movie_id {
+                    Some(id) => id,
+                    None => {
+                        let tmdb_id = task.tmdb_id?;
+                        tracing::info!("Looking up movie by TMDB ID: {}", tmdb_id);
+                        match client.movie_exists(tmdb_id).await {
+                            Ok(Some(id)) => {
+                                tracing::info!("Found movie in Radarr by TMDB {}: ID {}", tmdb_id, id);
+                                id as i64
+                            }
+                            Ok(None) => {
+                                tracing::warn!("Movie not found in Radarr for TMDB {}", tmdb_id);
+                                return None;
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to look up movie by TMDB {}: {}", tmdb_id, e);
+                                return None;
+                            }
+                        }
+                    }
+                };
+                let path = match client.get_movie_path(movie_id).await {
+                    Ok(path) => path,
+                    Err(e) => {
+                        tracing::warn!("Failed to get movie path for ID {}: {}", movie_id, e);
+                        return None;
+                    }
+                };
+                (path, movie_id)
+            }
+        };
+        
+        // Build target path
+        let source = std::path::Path::new(&task.destination);
+        let filename = source.file_name()?;
+        
+        let target_dir = match media_type {
+            MediaType::TvSeries | MediaType::TvEpisode => {
+                // TV: {series_path}/Season XX/
+                let season = task.tmdb_season.unwrap_or(1);
+                std::path::PathBuf::from(&arr_folder).join(format!("Season {:02}", season))
+            }
+            MediaType::Movie => {
+                // Movie: {movie_path}/
+                std::path::PathBuf::from(&arr_folder)
+            }
+        };
+        
+        let target_path = target_dir.join(filename);
+        
+        // Don't move if source and target are the same
+        if source == target_path {
+            tracing::debug!("File already at target path: {:?}", target_path);
+            return None;
+        }
+        
+        // Create target directory
+        if let Err(e) = tokio::fs::create_dir_all(&target_dir).await {
+            tracing::error!("Failed to create target directory {:?}: {}", target_dir, e);
+            return None;
+        }
+        
+        // Move (rename) file to target
+        tracing::info!(
+            "Moving completed file to arr path: {:?} -> {:?}",
+            source, target_path
+        );
+        
+        // Move file and trigger Arr rescan on success
+        let move_result = match tokio::fs::rename(&source, &target_path).await {
+            Ok(()) => {
+                tracing::info!("Successfully moved file to {:?}", target_path);
+                let mut updated = task.clone();
+                updated.destination = target_path.to_string_lossy().to_string();
+                Some(updated)
+            }
+            Err(e) => {
+                // rename fails across filesystems, fall back to copy+delete
+                tracing::warn!("rename failed (cross-device?): {}, trying copy+delete", e);
+                match tokio::fs::copy(&source, &target_path).await {
+                    Ok(_) => {
+                        let _ = tokio::fs::remove_file(&source).await;
+                        tracing::info!("Successfully copied file to {:?}", target_path);
+                        let mut updated = task.clone();
+                        updated.destination = target_path.to_string_lossy().to_string();
+                        Some(updated)
+                    }
+                    Err(copy_err) => {
+                        tracing::error!("Failed to copy file to {:?}: {}", target_path, copy_err);
+                        None
+                    }
+                }
+            }
+        };
+        
+        // Trigger Arr rescan for instant import (fire-and-forget)
+        if move_result.is_some() {
+            let rescan_result = match media_type {
+                MediaType::TvSeries | MediaType::TvEpisode => {
+                    client.trigger_series_rescan(arr_id).await
+                }
+                MediaType::Movie => {
+                    client.trigger_movie_refresh(arr_id).await
+                }
+            };
+            if let Err(e) = rescan_result {
+                tracing::warn!("Arr rescan trigger failed (non-fatal): {}", e);
+            }
+        }
+        
+        move_result
+    }
+
     /// Reload *arr client with new configuration (dynamic update without restart)
     pub async fn reload_arr_client(
         &self,
@@ -855,12 +1645,35 @@ impl DownloadOrchestrator {
             None
         };
         
+        // Create new artifact manager if client exists and db is available
+        let new_artifact_manager = if let (Some(ref client), Some(ref database)) = (&new_client, &self.db) {
+            Some(Arc::new(crate::arr::ArrArtifactManager::new(
+                Arc::clone(client),
+                Arc::clone(database),
+            )))
+        } else {
+            None
+        };
+
         {
             let mut arr_guard = self.arr_client.write().await;
             *arr_guard = new_client;
         }
         
-        tracing::info!("Reloaded *arr client: sonarr={}, radarr={}", 
+        {
+            let mut artifact_guard = self.artifact_manager.write().await;
+            *artifact_guard = new_artifact_manager;
+        }
+        
+        tracing::info!("Reloaded *arr client and managers: sonarr={}, radarr={}", 
             sonarr_config.is_some(), radarr_config.is_some());
     }
+
+    /// Get access to the arr client for API proxying
+    pub async fn get_arr_client(&self) -> Option<Arc<crate::arr::ArrClient>> {
+        let guard = self.arr_client.read().await;
+        guard.clone()
+    }
+    
+
 }

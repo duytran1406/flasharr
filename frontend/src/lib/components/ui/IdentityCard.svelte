@@ -1,5 +1,6 @@
 <script lang="ts">
   import UserAvatar from "./UserAvatar.svelte";
+  import Badge from "$lib/components/ui/Badge.svelte";
 
   interface Props {
     email: string;
@@ -40,14 +41,11 @@
         <span class="email">{email}</span>
       </div>
       <div class="status-row">
-        <span
-          class="status-pill"
-          class:vip={isVIP}
-          class:premium={isPremium}
-          class:guest={!isVIP && !isPremium}
-        >
-          {isVIP ? "VIP" : isPremium ? "PREMIUM" : "FREE"}
-        </span>
+        <Badge
+          text={isVIP ? "VIP" : isPremium ? "PREMIUM" : "FREE"}
+          variant={isVIP ? "vip" : isPremium ? "warning" : "free"}
+          size="sm"
+        />
         <span class="expiry-text">· {expiry}</span>
       </div>
     </div>
@@ -134,32 +132,6 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-  }
-
-  /* Status Pill Badge */
-  .status-pill {
-    font-size: 0.65rem;
-    font-weight: 800;
-    padding: 4px 10px;
-    border-radius: 20px;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-  }
-
-  .status-pill.vip {
-    background: linear-gradient(135deg, #00f3ff 0%, #4facfe 100%);
-    color: #000;
-    box-shadow: 0 2px 10px rgba(0, 243, 255, 0.3);
-  }
-
-  .status-pill.premium {
-    background: linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%);
-    color: #000;
-  }
-
-  .status-pill.guest {
-    background: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.6);
   }
 
   .expiry-text {

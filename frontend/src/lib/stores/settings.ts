@@ -92,7 +92,7 @@ function createSettingsStore() {
     update(state => ({ ...state, loading: true, error: null }));
 
     try {
-      const response = await fetch(`${API_BASE}/settings`);
+      const response = await fetch(`${API_BASE}/settings?_=${Date.now()}`);
       
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -100,11 +100,34 @@ function createSettingsStore() {
 
       const data = await response.json();
       
-      update(state => ({
-        ...state,
-        settings: data.settings || state.settings,
-        loading: false,
-      }));
+      update(state => {
+        const currentSettings = state.settings;
+        const currentIntegrations = state.integrations;
+        
+        const newSettings: Settings = {
+          ...currentSettings,
+          download_path: data.downloads?.directory || currentSettings.download_path,
+          max_concurrent_downloads: data.downloads?.max_concurrent || currentSettings.max_concurrent_downloads,
+          segments_per_download: data.downloads?.segments_per_download || currentSettings.segments_per_download,
+        };
+
+        const newIntegrations: IntegrationSettings = {
+          ...currentIntegrations,
+          sonarr_enabled: data.sonarr ? data.sonarr.enabled : currentIntegrations.sonarr_enabled,
+          sonarr_url: data.sonarr?.url || currentIntegrations.sonarr_url,
+          sonarr_api_key: data.sonarr?.api_key || currentIntegrations.sonarr_api_key,
+          radarr_enabled: data.radarr ? data.radarr.enabled : currentIntegrations.radarr_enabled,
+          radarr_url: data.radarr?.url || currentIntegrations.radarr_url,
+          radarr_api_key: data.radarr?.api_key || currentIntegrations.radarr_api_key,
+        };
+
+        return {
+          ...state,
+          settings: newSettings,
+          integrations: newIntegrations,
+          loading: false,
+        };
+      });
 
       console.log('[SettingsStore] Fetched settings');
     } catch (err) {

@@ -682,6 +682,19 @@ pub fn smart_parse(filename: &str) -> SmartParsedMedia {
                 }
             }
         }
+
+        // 4. Time descriptions: "28 Years Later", "500 Days of Summer"
+        if classified[i].token_type == TokenType::Episode {
+            let time_keywords = ["years", "year", "days", "day", "weeks", "week", "months", "month", "hours", "hour"];
+            if time_keywords.contains(&next_text.as_str()) {
+                if let Some(val) = &classified[i].value {
+                    if val == &classified[i].text {
+                        classified[i].token_type = TokenType::Unknown;
+                        classified[i].value = None;
+                    }
+                }
+            }
+        }
     }
     
     // Step 3: Find title boundary and extract title
@@ -990,5 +1003,10 @@ mod tests {
         let r = test_parse("Làm.Giàu.Với.Ma.-.Cuộc.Chiến.Hột.Xoàn.2025.1080p.WEB-DL.DDP5.1.H.264-HBO.mkv");
         assert!(r.title.contains("Làm Giàu Với Ma"));
         assert_eq!(r.year, Some(2025));
+
+        // Issue 5: 28 Years Later (Standalone number followed by time descriptions)
+        let r = test_parse("(Sub Viet AI) 28.Years.Later.The.Bone.Temple.2026.2160p.iT.WEB-DL.DDP5.1.Atmos.DV.HDR10.H.265-WADU.mkv");
+        assert_eq!(r.title, "28 Years Later The Bone Temple");
+        assert_eq!(r.year, Some(2026));
     }
 }

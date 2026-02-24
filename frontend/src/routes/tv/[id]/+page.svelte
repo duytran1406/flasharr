@@ -16,6 +16,15 @@
   import { toasts } from "$lib/stores/toasts";
   import { ui } from "$lib/stores/ui.svelte";
   import { MediaCard } from "$lib/components";
+  import Button from "$lib/components/ui/Button.svelte";
+  import {
+    fetchAllSeries,
+    fetchEpisodesBySonarrId,
+    formatDiskSize,
+    findSeriesInList,
+    type SonarrSeries,
+    type SonarrEpisode,
+  } from "$lib/stores/arr";
 
   const tvId = $derived(page.params.id as string);
 
@@ -28,6 +37,10 @@
   let loadingSeason = $state(false);
   let posterLoaded = $state(false);
   let backdropLoaded = $state(false);
+  // Library integration
+  let librarySeries = $state<SonarrSeries | null>(null);
+  let libraryEpisodes = $state<SonarrEpisode[]>([]);
+  let inLibrary = $derived(librarySeries !== null);
   let isUpcoming = $derived(
     !tv ||
       tv.status === "Planned" ||
@@ -57,6 +70,19 @@
         similar = sim.slice(0, 4);
         recommended = reco.slice(0, 4);
       }
+
+      // Parallel: fetch Sonarr library data
+      try {
+        const allSeries = await fetchAllSeries();
+        const tmdbIdNum = Number(tvId);
+        const match = findSeriesInList(allSeries, tmdbIdNum);
+        if (match) {
+          librarySeries = match;
+          libraryEpisodes = await fetchEpisodesBySonarrId(match.id);
+        }
+      } catch {
+        // Library lookup is best-effort
+      }
     } catch (error) {
       console.error("Failed to load TV data:", error);
       toasts.error("Failed to load TV intelligence brief");
@@ -84,6 +110,7 @@
       tmdbId: String(tv.id),
       type: "tv",
       title: tv.name,
+      year: getYear(tv.first_air_date) ?? undefined,
       season: selectedSeason || 1,
     });
   }
@@ -94,9 +121,15 @@
       tmdbId: String(tv.id),
       type: "tv",
       title: tv.name,
+      year: getYear(tv.first_air_date) ?? undefined,
       season: ep.season_number,
       episode: ep.episode_number,
     });
+  }
+
+  function isEpisodeAired(ep: any): boolean {
+    if (!ep.air_date) return false;
+    return new Date(ep.air_date) <= new Date();
   }
 
   // Get Keywords
@@ -106,6 +139,32 @@
   function formatScore(score: number) {
     return Math.round(score * 10);
   }
+
+  // Library helpers
+  function getEpisodeAcquisition(
+    seasonNum: number,
+    epNum: number,
+  ): boolean | null {
+    if (!inLibrary || libraryEpisodes.length === 0) return null;
+    const match = libraryEpisodes.find(
+      (e) => e.seasonNumber === seasonNum && e.episodeNumber === epNum,
+    );
+    return match ? match.hasFile : null;
+  }
+
+  let libraryProgress = $derived.by(() => {
+    if (!librarySeries?.statistics) return null;
+    const stats = librarySeries.statistics;
+    if (!stats.episodeCount || stats.episodeCount === 0) return null;
+    return {
+      acquired: stats.episodeFileCount || 0,
+      total: stats.episodeCount,
+      pct: Math.round(
+        ((stats.episodeFileCount || 0) / stats.episodeCount) * 100,
+      ),
+      sizeOnDisk: stats.sizeOnDisk || 0,
+    };
+  });
 
   // Get Certification/Rating
   let contentRating = $derived.by(() => {
@@ -196,6 +255,23 @@
           {/if}
         </div>
       </div>
+      <!-- Library Progress Bar (overlaid on hero) -->
+      {#if libraryProgress}
+        <div class="library-progress-strip">
+          <div class="lp-bar">
+            <div class="lp-fill" style="width: {libraryProgress.pct}%"></div>
+          </div>
+          <div class="lp-stats">
+            <span class="lp-label">IN LIBRARY</span>
+            <span class="lp-value"
+              >{libraryProgress.acquired}/{libraryProgress.total} episodes</span
+            >
+            <span class="lp-size"
+              >{formatDiskSize(libraryProgress.sizeOnDisk)}</span
+            >
+          </div>
+        </div>
+      {/if}
     </div>
 
     <!-- Content Grid -->
@@ -253,7 +329,10 @@
               {/each}
             {:else if seasonDetails}
               {#each seasonDetails.episodes as ep}
-                <div class="episode-card glass-panel">
+                <div
+                  class="episode-card glass-panel"
+                  class:episode-unreleased={!isEpisodeAired(ep)}
+                >
                   <div class="episode-thumbnail">
                     <img
                       src={getPosterUrl(ep.still_path, "w500") ||
@@ -261,22 +340,52 @@
                       alt={ep.name}
                     />
                     <div class="episode-badge">EP {ep.episode_number}</div>
+                    {#if !isEpisodeAired(ep)}
+                      <div class="coming-soon-overlay">
+                        <span class="material-icons">schedule</span>
+                      </div>
+                    {/if}
                   </div>
                   <div class="episode-info">
                     <div class="episode-header">
                       <div class="episode-title-row">
                         <h4 class="episode-name">{ep.name}</h4>
-                        <span class="episode-date"
-                          >{new Date(ep.air_date).toLocaleDateString()}</span
-                        >
+                        {#if isEpisodeAired(ep)}
+                          <span class="episode-date"
+                            >{new Date(ep.air_date).toLocaleDateString()}</span
+                          >
+                        {:else}
+                          <span class="coming-soon-tag">
+                            <span
+                              class="material-icons"
+                              style="font-size: 0.7rem;">schedule</span
+                            >
+                            {ep.air_date
+                              ? new Date(ep.air_date).toLocaleDateString()
+                              : "TBA"}
+                          </span>
+                        {/if}
                       </div>
-                      <button
-                        class="icon-btn-tiny"
-                        title="Search this episode"
-                        onclick={() => handleEpisodeSearch(ep)}
-                      >
-                        <span class="material-icons">manage_search</span>
-                      </button>
+                      <div class="episode-actions">
+                        {#if getEpisodeAcquisition(ep.season_number, ep.episode_number) === true}
+                          <span class="ep-acquired-badge" title="In library">
+                            <span class="material-icons">check_circle</span>
+                          </span>
+                        {:else if getEpisodeAcquisition(ep.season_number, ep.episode_number) === false}
+                          <span class="ep-missing-badge" title="Missing">
+                            <span class="material-icons">cancel</span>
+                          </span>
+                        {/if}
+                        {#if isEpisodeAired(ep)}
+                          <button
+                            class="icon-btn-tiny"
+                            title="Search this episode"
+                            onclick={() => handleEpisodeSearch(ep)}
+                          >
+                            <span class="material-icons">manage_search</span>
+                          </button>
+                        {/if}
+                      </div>
                     </div>
                     <p class="episode-overview">
                       {ep.overview || "No overview available."}
@@ -368,14 +477,28 @@
       <!-- Sidebar -->
       <aside class="detail-sidebar">
         <div class="action-panel glass-panel">
-          <button
-            class="smart-search-btn"
+          {#if inLibrary}
+            <div class="library-badge">
+              <span class="material-icons">video_library</span>
+              IN LIBRARY
+            </div>
+          {/if}
+          <Button
+            icon="manage_search"
+            size="md"
+            width="100%"
             disabled={loading}
-            onclick={handleSmartSearch}
+            onclick={handleSmartSearch}>Smart Search</Button
           >
-            <span class="material-icons">manage_search</span>
-            SMART SEARCH
-          </button>
+          {#if !inLibrary && !loading}
+            <Button
+              variant="ghost"
+              icon="library_add"
+              size="md"
+              width="100%"
+              disabled>Add to Library</Button
+            >
+          {/if}
         </div>
 
         <div class="stats-panel glass-panel">
@@ -465,6 +588,35 @@
                 </a>
               {/if}
             </div>
+
+            {#if inLibrary && librarySeries}
+              <div class="info-section-label">Library Data</div>
+              <div class="info-row">
+                <span class="label">Monitored</span>
+                <span
+                  class="value"
+                  style="color: {librarySeries.monitored
+                    ? '#34d399'
+                    : '#94a3b8'}"
+                >
+                  {librarySeries.monitored ? "Yes" : "No"}
+                </span>
+              </div>
+              {#if libraryProgress}
+                <div class="info-row">
+                  <span class="label">Acquired</span>
+                  <span class="value"
+                    >{libraryProgress.acquired}/{libraryProgress.total}</span
+                  >
+                </div>
+                <div class="info-row">
+                  <span class="label">On Disk</span>
+                  <span class="value"
+                    >{formatDiskSize(libraryProgress.sizeOnDisk)}</span
+                  >
+                </div>
+              {/if}
+            {/if}
           {/if}
         </div>
 
@@ -824,6 +976,44 @@
     overflow: hidden;
   }
 
+  /* Unreleased Episode Styles */
+  .episode-unreleased {
+    opacity: 0.5;
+    position: relative;
+  }
+
+  .episode-unreleased .episode-thumbnail img {
+    filter: grayscale(0.7);
+  }
+
+  .coming-soon-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 12px;
+  }
+
+  .coming-soon-overlay .material-icons {
+    font-size: 2rem;
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  .coming-soon-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    color: var(--accent-warning, #f59e0b);
+    background: rgba(245, 158, 11, 0.1);
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    border: 1px solid rgba(245, 158, 11, 0.2);
+  }
+
   /* Related Sections */
   .related-section {
     margin-top: 4rem;
@@ -1067,5 +1257,126 @@
     .episode-thumbnail {
       width: 100%;
     }
+  }
+
+  /* Library Integration Styles */
+  .library-progress-strip {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 0.75rem 2rem;
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    z-index: 2;
+  }
+
+  .lp-bar {
+    flex: 1;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .lp-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--color-primary), #34d399);
+    border-radius: 2px;
+    transition: width 0.6s ease;
+  }
+
+  .lp-stats {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-shrink: 0;
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+  }
+
+  .lp-label {
+    color: var(--color-primary);
+    font-weight: 800;
+    letter-spacing: 0.1em;
+  }
+
+  .lp-value {
+    color: var(--text-secondary);
+  }
+
+  .lp-size {
+    color: var(--text-muted);
+  }
+
+  .library-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
+    background: rgba(52, 211, 153, 0.1);
+    border: 1px solid rgba(52, 211, 153, 0.3);
+    border-radius: 8px;
+    color: #34d399;
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    font-family: var(--font-mono);
+    margin-bottom: 0.5rem;
+  }
+
+  .library-badge .material-icons {
+    font-size: 1rem;
+  }
+
+  .add-library-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.85rem 1.5rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    cursor: not-allowed;
+    opacity: 0.5;
+    margin-top: 0.5rem;
+  }
+
+  .episode-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  .ep-acquired-badge {
+    color: #34d399;
+    display: flex;
+    align-items: center;
+  }
+
+  .ep-acquired-badge .material-icons {
+    font-size: 1.1rem;
+  }
+
+  .ep-missing-badge {
+    color: #ef4444;
+    display: flex;
+    align-items: center;
+    opacity: 0.6;
+  }
+
+  .ep-missing-badge .material-icons {
+    font-size: 1.1rem;
   }
 </style>

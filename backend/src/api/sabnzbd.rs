@@ -44,84 +44,6 @@ struct SabParams {
 }
 
 #[derive(Serialize)]
-struct SabResponse {
-    status: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    nzo_ids: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    queue: Option<SabQueue>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    history: Option<SabHistory>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    config: Option<SabConfig>,
-}
-
-#[derive(Serialize)]
-struct SabFullStatusResponse {
-    #[serde(flatten)]
-    queue: SabQueueData,
-}
-
-#[derive(Serialize)]
-struct SabConfig {
-    version: String,
-    paused: bool,
-    #[serde(rename = "pause_int")]
-    pause_int: String,
-    #[serde(rename = "download_dir")]
-    download_dir: String,
-    #[serde(rename = "complete_dir")]
-    complete_dir: String,
-    #[serde(rename = "nzb_backup_dir")]
-    nzb_backup_dir: String,
-    #[serde(rename = "script_dir")]
-    script_dir: String,
-    categories: Vec<SabCategory>,
-    misc: SabMisc,
-}
-
-#[derive(Serialize)]
-struct SabMisc {
-    #[serde(rename = "queue_complete")]
-    queue_complete: String,
-    #[serde(rename = "refresh_rate")]
-    refresh_rate: i32,
-    #[serde(rename = "bandwidth_limit")]
-    bandwidth_limit: String,
-}
-
-#[derive(Serialize)]
-struct SabCategory {
-    name: String,
-    dir: String,
-    newzbin: String,
-    priority: i32,
-}
-
-#[derive(Serialize)]
-struct SabQueue {
-    paused: bool,
-    status: String,
-    noofslots: usize,
-    slots: Vec<SabQueueSlot>,
-    speed: String,
-    size: String,
-    sizeleft: String,
-}
-
-#[derive(Serialize)]
-struct SabQueueData {
-    paused: bool,
-    noofslots: usize,
-    slots: Vec<SabQueueSlot>,
-    speed: String,
-    size: String,
-    sizeleft: String,
-}
-
-#[derive(Serialize)]
 struct SabQueueSlot {
     nzo_id: String,
     filename: String,
@@ -133,14 +55,12 @@ struct SabQueueSlot {
 }
 
 #[derive(Serialize)]
-struct SabHistory {
-    slots: Vec<SabHistorySlot>,
-}
-
-#[derive(Serialize)]
 struct SabHistorySlot {
     nzo_id: String,
     name: String,
+    category: String,
+    path: String,
+    storage: String,
     status: String,
     fail_message: String,
 }
@@ -160,6 +80,14 @@ async fn handle_get(
 
     let result = match mode {
         "addurl" => handle_add_url(state, params).await,
+        "addfile" => {
+            // addfile requires multipart data, return error for now
+            // The actual implementation needs to be in handle_post with multipart
+            Ok(Json(serde_json::json!({ 
+                "status": false, 
+                "error": "addfile mode requires POST with multipart data" 
+            })))
+        },
         "queue" => handle_queue(state).await,
         "fullstatus" => handle_fullstatus(state).await,
         "history" => handle_history(state).await,
@@ -180,12 +108,180 @@ async fn handle_get(
     }
 }
 
-/// Handle POST requests (form data)
+/// Handle POST requests (form data or multipart)
 async fn handle_post(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SabParams>,
+    mut multipart: Option<axum::extract::Multipart>,
 ) -> axum::response::Response {
+    let mode = params.mode.as_deref().unwrap_or("queue");
+    
+    // Handle addfile mode with multipart data
+    if mode == "addfile" {
+        if let Some(ref mut mp) = multipart {
+            return match handle_add_file(state, params, mp).await {
+                Ok(json) => (StatusCode::OK, json).into_response(),
+                Err(status) => status.into_response(),
+            };
+        } else {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "status": false,
+                "error": "addfile requires multipart data"
+            }))).into_response();
+        }
+    }
+    
+    // Otherwise, handle as regular GET request
     handle_get(State(state), Query(params)).await
+}
+
+/// Handle NZB file upload (addfile mode)
+async fn handle_add_file(
+    state: Arc<AppState>,
+    params: SabParams,
+    multipart: &mut axum::extract::Multipart,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    
+    tracing::info!("SABnzbd: Handling addfile request (NZB upload)");
+    
+    // Extract category from params (Sonarr sends it as query param)
+    let category = params.cat.unwrap_or_else(|| "other".to_string());
+    
+    // Parse multipart form data
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        tracing::error!("Failed to read multipart field: {}", e);
+        StatusCode::BAD_REQUEST
+    })? {
+        let field_name = field.name().unwrap_or("");
+        
+        // Look for the NZB file field (usually named "name" or "nzbfile")
+        if field_name == "name" || field_name == "nzbfile" {
+            let data = field.bytes().await.map_err(|e| {
+                tracing::error!("Failed to read field bytes: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            
+            let content = String::from_utf8_lossy(&data);
+            tracing::debug!("NZB content preview: {}", &content[..content.len().min(200)]);
+            
+            // Extract Fshare URL from <meta type="fshare_url"> tag
+            let fshare_url = extract_nzb_metadata(&content, "fshare_url")
+                .ok_or_else(|| {
+                    tracing::error!("No Fshare URL found in NZB metadata");
+                    StatusCode::BAD_REQUEST
+                })?;
+            
+            // Extract TMDB metadata if present
+            let tmdb_id = extract_nzb_metadata(&content, "tmdb_id");
+            let season = extract_nzb_metadata(&content, "season")
+                .and_then(|s| s.parse::<u32>().ok());
+            let episode = extract_nzb_metadata(&content, "episode")
+                .and_then(|e| e.parse::<u32>().ok());
+            
+            // Extract category from NZB metadata (fallback to query param)
+            let nzb_category = extract_nzb_metadata(&content, "category")
+                .unwrap_or(category.clone());
+            
+            tracing::info!(
+                "SABnzbd: Extracted from NZB - URL: {}, category: {}, TMDB: {:?}, S{:?}E{:?}",
+                fshare_url, nzb_category, tmdb_id, season, episode
+            );
+            
+            // Build TMDB metadata if available
+            let tmdb_meta = if let (Some(id), Some(s), Some(e)) = (tmdb_id.clone(), season, episode) {
+                // Parse tmdb_id as i64
+                let tmdb_id_i64 = id.parse::<i64>().ok();
+                
+                // Fetch series title from TMDB for proper folder organization
+                let title = if let Some(tmdb_id_val) = &tmdb_id {
+                    crate::api::indexer::fetch_tmdb_title(tmdb_id_val, "tv").await
+                } else {
+                    None
+                };
+                
+                tracing::info!("SABnzbd: Fetched TMDB title: {:?}", title);
+                
+                Some(crate::downloader::TmdbDownloadMetadata {
+                    tmdb_id: tmdb_id_i64,
+                    media_type: Some("tv".to_string()),
+                    title, // Use fetched title for proper folder structure
+                    year: None,
+                    collection_name: None,
+                    season: Some(s as i32),
+                    episode: Some(e as i32),
+                })
+            } else {
+                None
+            };
+            
+            // Auto-batch: TV episodes should always be in a batch (same logic as downloads API)
+            let (batch_id, batch_name) = if let Some(ref meta) = tmdb_meta {
+                if meta.media_type.as_deref() == Some("tv") && meta.season.is_some() {
+                    let auto_batch_name = format!(
+                        "{} S{:02}",
+                        meta.title.as_deref().unwrap_or("Unknown Show"),
+                        meta.season.unwrap()
+                    );
+                    
+                    let existing_batch_id = state.db
+                        .get_batch_id_by_name_async(&auto_batch_name)
+                        .await
+                        .ok()
+                        .flatten();
+                    
+                    let auto_batch_id = if let Some(existing_id) = existing_batch_id {
+                        tracing::info!("SABnzbd: Reusing existing batch: {} ({})", auto_batch_name, existing_id);
+                        existing_id
+                    } else {
+                        let new_id = uuid::Uuid::new_v4().to_string();
+                        tracing::info!("SABnzbd: Creating new batch: {} ({})", auto_batch_name, new_id);
+                        new_id
+                    };
+                    
+                    (Some(auto_batch_id), Some(auto_batch_name))
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+            
+            // Add to download queue
+            // Pass None for filename to let orchestrator fetch real filename from Fshare API
+            let task = state.download_orchestrator.add_download_with_metadata(
+                fshare_url,
+                None, // Let orchestrator fetch real filename from Fshare API
+                "fshare".to_string(),
+                nzb_category,
+                tmdb_meta,
+                batch_id,
+                batch_name,
+            ).await.map_err(|e| {
+                tracing::error!("Failed to add download: {}", e);
+                StatusCode::INTERNAL_SERVER_ERROR
+            })?;
+            
+            return Ok(Json(serde_json::json!({
+                "status": true,
+                "nzo_ids": [task.id.to_string()]
+            })));
+        }
+    }
+    
+    tracing::error!("No NZB file found in multipart data");
+    Err(StatusCode::BAD_REQUEST)
+}
+
+/// Extract metadata value from NZB XML
+fn extract_nzb_metadata(content: &str, meta_type: &str) -> Option<String> {
+    let tag_start = format!(r#"<meta type="{}">"#, meta_type);
+    if let Some(start) = content.find(&tag_start) {
+        let after_tag = &content[start + tag_start.len()..];
+        if let Some(end) = after_tag.find("</meta>") {
+            return Some(after_tag[..end].to_string());
+        }
+    }
+    None
 }
 
 /// Add URL to download queue
@@ -316,8 +412,11 @@ async fn handle_fullstatus(state: Arc<AppState>) -> Result<Json<serde_json::Valu
     })))
 }
 
-
 /// Get history
+/// 
+/// Returns completed/failed downloads for Sonarr/Radarr to detect and import.
+/// Uses TMDB title for the `name` field so *arr can match to series/movies in its library.
+/// Only returns items where the file actually exists on disk.
 async fn handle_history(state: Arc<AppState>) -> Result<Json<serde_json::Value>, StatusCode> {
     let tasks = state.download_orchestrator.task_manager().get_tasks();
     
@@ -327,7 +426,7 @@ async fn handle_history(state: Arc<AppState>) -> Result<Json<serde_json::Value>,
             DownloadState::Failed |
             DownloadState::Cancelled
         ))
-        .map(|t| {
+        .filter_map(|t| {
             let status = match t.state {
                 DownloadState::Completed => "Completed",
                 DownloadState::Failed => "Failed",
@@ -335,12 +434,69 @@ async fn handle_history(state: Arc<AppState>) -> Result<Json<serde_json::Value>,
                 _ => "Unknown",
             };
             
-            SabHistorySlot {
+            // Map container path to Sonarr path
+            // Container sees: /downloads/...
+            // Sonarr sees: /data/downloads/...
+            let sonarr_path = if t.destination.starts_with("/downloads/") {
+                format!("/data{}", t.destination)
+            } else {
+                t.destination.clone()
+            };
+            
+            // Only return completed items where the file actually exists on disk
+            // This prevents "No files found are eligible for import" errors
+            if status == "Completed" {
+                let check_path = std::path::Path::new(&t.destination);
+                if !check_path.exists() {
+                    tracing::debug!("SABnzbd history: skipping {} - file not found at {}", t.filename, t.destination);
+                    return None;
+                }
+            }
+            
+            // Extract storage directory from destination path
+            let storage = if let Some(parent) = std::path::Path::new(&sonarr_path).parent() {
+                parent.to_string_lossy().to_string()
+            } else {
+                sonarr_path.clone()
+            };
+            
+            // Build a name that Sonarr/Radarr can reliably parse for series/movie matching.
+            // Use scene-release-like format: "Series.Name.S01E07.WEB-DL.Flasharr"
+            // This strips special chars, replaces spaces with dots, matching scene naming
+            // conventions that Sonarr's parser is optimized for.
+            let name = if let Some(ref tmdb_title) = t.tmdb_title {
+                // Normalize title: strip special chars, replace spaces with dots
+                let clean_title: String = tmdb_title.chars()
+                    .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+                    .collect::<String>()
+                    .split_whitespace()
+                    .collect::<Vec<&str>>()
+                    .join(".");
+                
+                if let (Some(season), Some(episode)) = (t.tmdb_season, t.tmdb_episode) {
+                    // TV: "Series.Name.S01E07.WEB-DL.Flasharr"
+                    format!("{}.S{:02}E{:02}.WEB-DL.Flasharr", clean_title, season, episode)
+                } else {
+                    // Movie: "Movie.Name.WEB-DL.Flasharr"
+                    format!("{}.WEB-DL.Flasharr", clean_title)
+                }
+            } else {
+                // No TMDB metadata: use filename without extension
+                std::path::Path::new(&t.filename)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| t.filename.clone())
+            };
+            
+            Some(SabHistorySlot {
                 nzo_id: t.id.to_string(),
-                name: t.filename.clone(),
+                name,
+                category: t.category.clone(),
+                path: sonarr_path,
+                storage,
                 status: status.to_string(),
                 fail_message: t.error_message.clone().unwrap_or_default(),
-            }
+            })
         })
         .collect();
     
@@ -359,26 +515,30 @@ async fn handle_version() -> Result<Json<serde_json::Value>, StatusCode> {
 }
 
 /// Get config (for *arr compatibility testing)
+/// 
+/// Sonarr/Radarr use complete_dir + category dir to determine where downloads land.
+/// Our downloads go directly into series/movie-named folders under /data/downloads/,
+/// so category dirs must be empty to avoid Sonarr looking in /data/downloads/TV/ etc.
 async fn handle_get_config() -> Result<Json<serde_json::Value>, StatusCode> {
     Ok(Json(serde_json::json!({
         "config": {
             "version": "3.5.0",
             "paused": false,
             "pause_int": "0",
-            "download_dir": "/appData/downloads/incomplete",
-            "complete_dir": "/appData/downloads",
+            "download_dir": "/data/downloads/incomplete",
+            "complete_dir": "/data/downloads",
             "nzb_backup_dir": "/appData/nzb_backup",
             "script_dir": "/appData/scripts",
             "categories": [
                 {
                     "name": "tv",
-                    "dir": "TV",
+                    "dir": "",
                     "newzbin": "",
                     "priority": 0
                 },
                 {
                     "name": "movies",
-                    "dir": "Movies",
+                    "dir": "",
                     "newzbin": "",
                     "priority": 0
                 },

@@ -9,7 +9,7 @@
   } from "$lib/services/tmdb";
   import { toasts } from "$lib/stores/toasts";
   import { MediaCard } from "$lib/components";
-  import { fade, fly } from "svelte/transition";
+  import { animeFade, animeFly } from "$lib/animations";
 
   const collectionId = $derived(page.params.id as string);
 
@@ -85,7 +85,7 @@
         </h1>
 
         {#if stats}
-          <div class="hero-stats" in:fade>
+          <div class="hero-stats" in:animeFade>
             <div class="hero-stat">
               <span class="stat-label">ASSETS_UNDER_COMMAND</span>
               <span class="stat-value">{stats.total_parts}</span>
@@ -134,7 +134,10 @@
               {/each}
             {:else if collection?.parts}
               {#each [...collection.parts].sort((a, b) => new Date(a.release_date || 0).getTime() - new Date(b.release_date || 0).getTime()) as movie}
-                <div class="asset-card-wrapper" in:fly={{ y: 20, delay: 100 }}>
+                <div
+                  class="asset-card-wrapper"
+                  in:animeFly={{ y: 20, delay: 100 }}
+                >
                   <MediaCard
                     id={movie.id}
                     title={movie.title}

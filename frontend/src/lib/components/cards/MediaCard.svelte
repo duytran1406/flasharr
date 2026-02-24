@@ -240,7 +240,7 @@
     z-index: 5;
   }
 
-  /* Overlay System */
+  /* Overlay System — Halftone Dot Gradient */
   .card-overlay {
     position: absolute;
     inset: 0;
@@ -248,6 +248,7 @@
     flex-direction: column;
     justify-content: flex-end;
     padding: 1.25rem;
+    /* Base dark gradient for text readability */
     background: linear-gradient(
       to top,
       rgba(0, 0, 0, 0.95) 0%,
@@ -260,6 +261,35 @@
     transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
 
+  /* Halftone dot texture on the overlay */
+  .card-overlay::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 16px;
+    background-image: radial-gradient(
+      circle,
+      rgba(255, 255, 255, 0.06) 1px,
+      transparent 1px
+    );
+    background-size: 6px 6px;
+    mask-image: linear-gradient(
+      to top,
+      black 0%,
+      rgba(0, 0, 0, 0.4) 40%,
+      transparent 70%
+    );
+    -webkit-mask-image: linear-gradient(
+      to top,
+      black 0%,
+      rgba(0, 0, 0, 0.4) 40%,
+      transparent 70%
+    );
+    pointer-events: none;
+    z-index: 0;
+    transition: opacity 0.3s;
+  }
+
   .media-card-v3:hover .card-overlay {
     background: linear-gradient(
       to top,
@@ -267,6 +297,16 @@
       rgba(0, 0, 0, 0.8) 50%,
       rgba(0, 0, 0, 0.4) 100%
     );
+  }
+
+  /* On hover, dots glow cyan — sci-fi scanner effect */
+  .media-card-v3:hover .card-overlay::before {
+    background-image: radial-gradient(
+      circle,
+      rgba(0, 243, 255, 0.12) 1px,
+      transparent 1px
+    );
+    opacity: 1;
   }
 
   .overlay-main {

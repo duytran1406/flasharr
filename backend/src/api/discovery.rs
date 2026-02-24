@@ -123,6 +123,9 @@ struct PopularItem {
     title: String,
     media_type: String,
     poster_url: Option<String>,
+    backdrop_path: Option<String>,
+    overview: Option<String>,
+    vote_average: f32,
     score: f32,
     fshare_available: bool,
     fshare_count: usize,
@@ -380,14 +383,19 @@ async fn popular_today(
                         .unwrap_or("Unknown")
                         .to_string();
                     let poster_path = item["poster_path"].as_str();
-                    let score = item["vote_average"].as_f64().unwrap_or(0.0) as f32;
+                    let backdrop_path = item["backdrop_path"].as_str().map(|s| s.to_string());
+                    let overview = item["overview"].as_str().map(|s| s.to_string());
+                    let vote_average = item["vote_average"].as_f64().unwrap_or(0.0) as f32;
                     
                     results.push(PopularItem {
                         id,
                         title,
                         media_type: params.media_type.clone(),
                         poster_url: poster_path.map(|p| format!("https://image.tmdb.org/t/p/w500{}", p)),
-                        score,
+                        backdrop_path,
+                        overview,
+                        vote_average,
+                        score: vote_average,
                         fshare_available: true, // Mocked for UI
                         fshare_count: 5,
                     });

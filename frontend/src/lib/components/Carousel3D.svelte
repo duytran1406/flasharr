@@ -120,7 +120,7 @@
     }
 
     const zIndex = totalItems - absDiff * 5; // Aggressive z-index priority
-    const opacity = index === currentIndex ? 1 : 0.3; // Adjusted opacity for side items to 0.3
+    const opacity = index === currentIndex ? 1 : 0.75; // Increased visibility for background items
     const scale = index === currentIndex ? 1.15 : 1 - absDiff * 0.05; // Scaled focused item slightly more to 1.2
     const translateX = diff * space;
     const translateZ = -absDiff * 400;
@@ -224,12 +224,17 @@
 
   .carousel-3d-item.current {
     cursor: default;
-    filter: drop-shadow(0 0 30px rgba(0, 243, 255, 0.4));
+    filter: drop-shadow(0 0 10px rgba(0, 243, 255, 0.4));
     z-index: 100 !important;
   }
 
-  /* Center Item Glow Overlay */
-  .carousel-3d-item.current::after {
+  .item-content-wrapper {
+    width: 100%;
+    height: 100%;
+    position: relative;
+  }
+
+  .carousel-3d-item.current .item-content-wrapper::after {
     content: "";
     position: absolute;
     inset: -2px;

@@ -1,0 +1,177 @@
+<script lang="ts">
+  import { onMount, untrack } from "svelte";
+  import { animeFade } from "$lib/animations";
+  import {
+    fetchHistory,
+    fetchAllSeries,
+    fetchAllMovies,
+    type SonarrSeries,
+    type RadarrMovie,
+  } from "$lib/stores/arr";
+  import MediaCard from "../MediaCard.svelte";
+  import { toasts } from "$lib/stores/toasts";
+
+  interface Props {
+    enabled?: boolean;
+  }
+
+  let { enabled = true }: Props = $props();
+
+  interface RecentItem {
+    id: string; // unique key
+    raw: any;
+    type: "movie" | "series";
+  }
+
+  let items = $state<RecentItem[]>([]);
+  let loading = $state(true);
+
+  $effect(() => {
+    if (enabled) {
+      untrack(async () => {
+        try {
+          const [history, series, movies] = await Promise.all([
+            fetchHistory(50), // Fetch last 50 events
+            fetchAllSeries(),
+            fetchAllMovies(),
+          ]);
+
+          if (history?.records) {
+            // Filter for imports (file moved to library)
+            const imports = history.records.filter(
+              (r: any) => r.eventType === "downloadFolderImported",
+            );
+
+            // Map to display items
+            const mapped: RecentItem[] = [];
+            const seenIds = new Set<string>();
+
+            for (const record of imports) {
+              let item: RecentItem | null = null;
+
+              if (record.seriesId) {
+                // TV Show
+                if (seenIds.has(`tv-${record.seriesId}`)) continue;
+
+                const s = series.find(
+                  (s: SonarrSeries) => s.id === record.seriesId,
+                );
+                if (s) {
+                  item = {
+                    id: `tv-${s.id}`,
+                    raw: s,
+                    type: "series",
+                  };
+                  seenIds.add(`tv-${record.seriesId}`);
+                }
+              } else if (record.movieId) {
+                // Movie
+                if (seenIds.has(`movie-${record.movieId}`)) continue;
+
+                const m = movies.find(
+                  (m: RadarrMovie) => m.id === record.movieId,
+                );
+                if (m) {
+                  item = {
+                    id: `movie-${m.id}`,
+                    raw: m,
+                    type: "movie",
+                  };
+                  seenIds.add(`movie-${record.movieId}`);
+                }
+              }
+
+              if (item) mapped.push(item);
+              if (mapped.length >= 10) break; // Limit to 10 distinct items
+            }
+
+            items = mapped;
+          }
+        } catch (e: any) {
+          console.error("Failed to load Recently Added:", e);
+          toasts.error(`Recently Added Error: ${e.message}`);
+        } finally {
+          loading = false;
+        }
+      });
+    } else {
+      loading = false;
+    }
+  });
+</script>
+
+{#if !loading && items.length > 0}
+  <div class="recently-added premium-card" in:animeFade>
+    <div class="card-header-premium">
+      <span class="material-icons">history</span>
+      <span class="label-text">RECENTLY ADDED</span>
+      <a href="/library" class="view-link-premium">
+        <span class="material-icons">arrow_forward</span>
+      </a>
+    </div>
+
+    <div class="scroller">
+      {#each items as { raw, type, id } (id)}
+        <MediaCard item={raw} {type} viewMode="grid" />
+      {/each}
+    </div>
+  </div>
+{/if}
+
+<style>
+  .recently-added {
+    width: 100%;
+    margin-top: 1.5rem;
+    /* Reset premium-card padding for the scroller to bleed to edges */
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    overflow: visible !important;
+  }
+
+  /* Keep header aligned with card content padding */
+  :global(.recently-added .card-header-premium) {
+    padding-left: 1.25rem !important;
+    padding-right: 1.25rem !important;
+    margin-bottom: 0.75rem;
+  }
+
+  .scroller {
+    display: flex;
+    gap: 1.5rem;
+    overflow-x: auto;
+    overflow-y: visible;
+    /* Bottom padding for title + hover lift */
+    padding: 0.5rem 1.25rem 2.5rem 1.25rem;
+    scroll-behavior: smooth;
+    scrollbar-width: none;
+    position: relative;
+  }
+
+  .scroller::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Direct targeting of MediaCard instances within scroller */
+  :global(.recently-added .scroller .media-card) {
+    flex: 0 0 150px;
+    width: 150px;
+    overflow: visible !important; /* Ensure children can glow/lift */
+  }
+
+  :global(.recently-added .scroller .poster-wrap) {
+    aspect-ratio: 2/3;
+    height: 225px;
+    width: 150px;
+  }
+
+  @media (max-width: 768px) {
+    :global(.recently-added .scroller .media-card),
+    :global(.recently-added .scroller .poster-wrap) {
+      flex: 0 0 120px;
+      width: 120px;
+    }
+    :global(.recently-added .scroller .poster-wrap) {
+      height: 180px;
+    }
+  }
+</style>

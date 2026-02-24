@@ -12,6 +12,7 @@ export type WSMessageType =
   | 'SYNC_ALL'
   | 'TASK_ADDED'
   | 'TASK_UPDATED'
+  | 'TASK_BATCH_UPDATE'
   | 'TASK_REMOVED'
   | 'ENGINE_STATS';
 
@@ -23,7 +24,7 @@ export interface WSMessage {
   [key: string]: any;
 }
 
-/**
+/**Set
  * Message Handler Function
  */
 type MessageHandler = (data: any) => void;

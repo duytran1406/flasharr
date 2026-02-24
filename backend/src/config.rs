@@ -13,6 +13,31 @@ pub struct Config {
     pub sonarr: Option<ArrConfig>,
     pub radarr: Option<ArrConfig>,
     pub indexer: Option<IndexerConfig>,
+    #[serde(default)]
+    pub external: ExternalConfig,
+}
+
+/// External API and cache configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalConfig {
+    /// TMDB API key for metadata enrichment (env: TMDB_API_KEY)
+    pub tmdb_api_key: String,
+    /// Cache TTL for TMDB queries in seconds (default: 3600)
+    pub tmdb_cache_ttl_secs: u64,
+    /// Cache TTL for Fshare search results in seconds (default: 300)
+    pub fshare_cache_ttl_secs: u64,
+}
+
+impl Default for ExternalConfig {
+    fn default() -> Self {
+        Self {
+            // Use env var if set, otherwise fallback to the bundled key
+            tmdb_api_key: env::var("TMDB_API_KEY")
+                .unwrap_or_else(|_| "8d95150f3391194ca66fef44df497ad6".to_string()),
+            tmdb_cache_ttl_secs: 3600,
+            fshare_cache_ttl_secs: 300,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +45,18 @@ pub struct FshareConfig {
     pub email: String,
     pub password: String,
     pub session_id: Option<String>,
+    /// Skip primary API (download.fsharegroup.site) and use api.fshare.vn directly
+    /// Default: true (since primary API is currently down)
+    #[serde(default = "default_prefer_api2")]
+    pub prefer_api2: bool,
+}
+
+fn default_prefer_api2() -> bool {
+    // Check env var, default to true
+    env::var("FSHARE_PREFER_API2")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(true)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +102,7 @@ impl Default for Config {
                 email: "".to_string(),
                 password: "".to_string(),
                 session_id: None,
+                prefer_api2: default_prefer_api2(),
             },
             sonarr: None,
             radarr: None,
@@ -72,6 +110,7 @@ impl Default for Config {
                 enabled: true,
                 api_key: "flasharr-default-key".to_string(),
             }),
+            external: ExternalConfig::default(),
         }
     }
 }
@@ -95,15 +134,18 @@ pub fn get_config_path() -> PathBuf {
     }
 }
 
-/// Get the database file path with fallback
-/// Tries: appData/data/flasharr.db -> flasharr.db (old location)
+/// Get the database file path
+/// Always uses: appData/data/flasharr.db (creates directory if needed)
 pub fn get_db_path() -> PathBuf {
-    let appdata_db = get_appdata_dir().join("data/flasharr.db");
-    if appdata_db.exists() {
-        appdata_db
-    } else {
-        PathBuf::from("flasharr.db")
+    let appdata_dir = get_appdata_dir();
+    let data_dir = appdata_dir.join("data");
+    
+    // Create data directory if it doesn't exist
+    if !data_dir.exists() {
+        std::fs::create_dir_all(&data_dir).ok();
     }
+    
+    data_dir.join("flasharr.db")
 }
 
 /// Create appData directory structure if it doesn't exist

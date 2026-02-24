@@ -1,0 +1,784 @@
+Loading svelte-check in workspace: /Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend
+Getting Svelte diagnostics...
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/lib/components/SmartSearchModal.svelte:1104:3
+Warn: Unused CSS selector ".smart-grab-btn .material-icons.rotating"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .smart-grab-btn .material-icons.rotating {
+    animation: spin 1.2s linear infinite;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/lib/components/SmartGrabModal.svelte:1217:3
+Warn: Unused CSS selector ".year"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .year {
+    color: rgba(255, 255, 255, 0.4);
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/lib/components/SmartGrabModal.svelte:1222:3
+Warn: Unused CSS selector ".episode-summary"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .episode-summary {
+    margin-top: 4px;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/lib/components/SmartGrabModal.svelte:1617:3
+Warn: Unused CSS selector ".files-more"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .files-more {
+    padding: 10px 0 4px;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/lib/components/Carousel3D.svelte:146:1
+Warn: Non-interactive element `<section>` should not be assigned mouse or keyboard event listeners
+https://svelte.dev/e/a11y_no_noninteractive_element_interactions (svelte)
+
+<section
+  class="carousel-3d-container"
+  aria-label="Trending items slider"
+  style="perspective: {perspective}px; height: {height + 13}px;"
+  ontouchstart={handleTouchStart}
+  ontouchmove={handleTouchMove}
+  ontouchend={handleEnd}
+  onmousedown={handleMouseDown}
+  onmousemove={handleMouseMove}
+  onmouseup={handleEnd}
+  onmouseleave={handleEnd}
+>
+  <div class="carousel-3d-slider" style="width: {width}px; height: {height}px;">
+    {#each items as item, i}
+      <div
+        class="carousel-3d-item {i === currentIndex ? 'current' : ''}"
+        style={getItemStyles(i)}
+        onclick={(e) => handleItemClick(i, e)}
+        role="button"
+        tabindex="0"
+        onkeydown={(e) =>
+          (e.key === "Enter" || e.key === " ") && handleItemClick(i, e as any)}
+      >
+        <div
+          class="item-content-wrapper {i === currentIndex ? 'is-focused' : ''}"
+        >
+          {@render children(item)}
+        </div>
+      </div>
+    {/each}
+  </div>
+
+  <div class="carousel-3d-controls">
+    <button class="ctrl-btn prev" onclick={prev} aria-label="Previous">
+      <span class="material-icons">chevron_left</span>
+    </button>
+    <button class="ctrl-btn next" onclick={next} aria-label="Next">
+      <span class="material-icons">chevron_right</span>
+    </button>
+  </div>
+</section>
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/lib/components/ProgressRing.svelte:18:19
+Warn: This reference only captures the initial value of `size`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+
+  const radius = (size - strokeWidth) / 2;
+  const circumference = radius * 2 * Math.PI;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/lib/components/ProgressRing.svelte:18:26
+Warn: This reference only captures the initial value of `strokeWidth`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+
+  const radius = (size - strokeWidth) / 2;
+  const circumference = radius * 2 * Math.PI;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/lib/components/ProgressRing.svelte:20:35
+Warn: This reference only captures the initial value of `progress`. Did you mean to reference it inside a closure instead?
+https://svelte.dev/e/state_referenced_locally (svelte)
+  const circumference = radius * 2 * Math.PI;
+  const offset = circumference - (progress / 100) * circumference;
+</script>
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/lib/components/dashboard/ComingSoonShelf.svelte:33:48
+Error: Property 'tmdbId' does not exist on type '{ id: number; title: string; images?: MediaImage[] | undefined; }'. (ts)
+        // Check if series exists and has tmdbId
+        if (!episode.series || !episode.series.tmdbId) continue;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/lib/components/dashboard/ComingSoonShelf.svelte:35:39
+Error: Property 'tmdbId' does not exist on type '{ id: number; title: string; images?: MediaImage[] | undefined; }'. (ts)
+
+        const tmdbId = episode.series.tmdbId;
+        if (!seriesMap.has(tmdbId)) {
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/lib/components/dashboard/ComingSoonShelf.svelte:42:34
+Error: Property 'year' does not exist on type '{ id: number; title: string; images?: MediaImage[] | undefined; }'. (ts)
+            poster: getSeriesPoster(episode.series),
+            year: episode.series.year || null,
+            status: episode.hasFile ? "available" : "missing",
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:1023:23
+Warn: Visible, non-interactive elements with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events (svelte)
+                      <!-- Backdrop to close on click outside -->
+                      <div
+                        class="dropdown-backdrop"
+                        onclick={() => (isStatusDropdownOpen = false)}
+                      ></div>
+                      <div
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:1023:23
+Warn: `<div>` with a click handler must have an ARIA role
+https://svelte.dev/e/a11y_no_static_element_interactions (svelte)
+                      <!-- Backdrop to close on click outside -->
+                      <div
+                        class="dropdown-backdrop"
+                        onclick={() => (isStatusDropdownOpen = false)}
+                      ></div>
+                      <div
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:1540:9
+Warn: Visible, non-interactive elements with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events (svelte)
+      <div class="mobile-batch-card">
+        <div
+          class="mobile-batch-header"
+          onclick={() => toggleMobileBatch(group.batchId)}
+        >
+          <span class="material-icons expand-icon">
+            {isBatchExpanded ? "expand_less" : "expand_more"}
+          </span>
+          <span class="batch-name">{group.batchName}</span>
+          <span class="batch-count">({group.totalItems} files)</span>
+          <span
+            class="status-badge-v2"
+            style="background: {batchStatus.color}15; color: {batchStatus.color}; border-color: {batchStatus.color}30;"
+          >
+            {group.completedCount}/{group.totalItems}
+          </span>
+        </div>
+        {#if isBatchExpanded}
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:1540:9
+Warn: `<div>` with a click handler must have an ARIA role
+https://svelte.dev/e/a11y_no_static_element_interactions (svelte)
+      <div class="mobile-batch-card">
+        <div
+          class="mobile-batch-header"
+          onclick={() => toggleMobileBatch(group.batchId)}
+        >
+          <span class="material-icons expand-icon">
+            {isBatchExpanded ? "expand_less" : "expand_more"}
+          </span>
+          <span class="batch-name">{group.batchName}</span>
+          <span class="batch-count">({group.totalItems} files)</span>
+          <span
+            class="status-badge-v2"
+            style="background: {batchStatus.color}15; color: {batchStatus.color}; border-color: {batchStatus.color}30;"
+          >
+            {group.completedCount}/{group.totalItems}
+          </span>
+        </div>
+        {#if isBatchExpanded}
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:1562:15
+Warn: Visible, non-interactive elements with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events (svelte)
+              {@const isExpanded = expandedMobileCardId === download.id}
+              <div
+                class="download-card-mobile"
+                class:expanded={isExpanded}
+                onclick={() => toggleMobileCard(download.id)}
+              >
+                <div class="card-header-mobile">
+                  <div class="card-name">
+                    {download.filename}
+                    {#if download.quality}
+                      <span class="quality-badge" title={download.quality}
+                        >{download.resolution || download.quality}</span
+                      >
+                    {/if}
+                  </div>
+                  <span
+                    class="status-badge-v2"
+                    style="background: {color}15; color: {color}; border-color: {color}30;"
+                  >
+                    {download.state}
+                  </span>
+                </div>
+                <div class="card-progress-mobile">
+                  <div
+                    class="progress-fill-v2"
+                    style="width: {download.progress}%; background: {color};"
+                  ></div>
+                </div>
+                <div class="card-meta-mobile">
+                  <div class="meta-item">
+                    <span class="material-icons">storage</span>
+                    <span>{formatBytes(download.size)}</span>
+                  </div>
+                  <div class="meta-item">
+                    <span class="material-icons">speed</span>
+                    <span style="color: {color};"
+                      >{isActive ? formatSpeed(download.speed || 0) : "-"}</span
+                    >
+                  </div>
+                  <div class="meta-item">
+                    <span>{Math.round(download.progress)}%</span>
+                  </div>
+                </div>
+                {#if download.error_message}
+                  <div class="card-error-mobile">
+                    ⚠ {download.error_message}
+                  </div>
+                {/if}
+                <!-- Tap-to-expand action bar -->
+                <div class="mobile-card-actions">
+                  {#if download.state === "DOWNLOADING" || download.state === "STARTING"}
+                    <button
+                      class="mobile-action-btn action-pause"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        handleAction("pause", download.id);
+                      }}
+                    >
+                      <span class="material-icons">pause</span>
+                      Pause
+                    </button>
+                  {:else if download.state === "PAUSED"}
+                    <button
+                      class="mobile-action-btn action-resume"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        handleAction("resume", download.id);
+                      }}
+                    >
+                      <span class="material-icons">play_arrow</span>
+                      Resume
+                    </button>
+                  {:else if download.state === "FAILED"}
+                    <button
+                      class="mobile-action-btn action-retry"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        handleAction("retry", download.id);
+                      }}
+                    >
+                      <span class="material-icons">refresh</span>
+                      Retry
+                    </button>
+                  {:else if download.state === "QUEUED" || download.state === "WAITING"}
+                    <button
+                      class="mobile-action-btn action-start"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        handleAction("resume", download.id);
+                      }}
+                    >
+                      <span class="material-icons">play_arrow</span>
+                      Start
+                    </button>
+                  {/if}
+                  <button
+                    class="mobile-action-btn action-details"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      showTaskDetails(download);
+                    }}
+                  >
+                    <span class="material-icons">info_outline</span>
+                    Details
+                  </button>
+                  <button
+                    class="mobile-action-btn action-delete"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      deleteConfirmTask = download;
+                      expandedMobileCardId = null;
+                    }}
+                  >
+                    <span class="material-icons">delete_outline</span>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            {/each}
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:1562:15
+Warn: `<div>` with a click handler must have an ARIA role
+https://svelte.dev/e/a11y_no_static_element_interactions (svelte)
+              {@const isExpanded = expandedMobileCardId === download.id}
+              <div
+                class="download-card-mobile"
+                class:expanded={isExpanded}
+                onclick={() => toggleMobileCard(download.id)}
+              >
+                <div class="card-header-mobile">
+                  <div class="card-name">
+                    {download.filename}
+                    {#if download.quality}
+                      <span class="quality-badge" title={download.quality}
+                        >{download.resolution || download.quality}</span
+                      >
+                    {/if}
+                  </div>
+                  <span
+                    class="status-badge-v2"
+                    style="background: {color}15; color: {color}; border-color: {color}30;"
+                  >
+                    {download.state}
+                  </span>
+                </div>
+                <div class="card-progress-mobile">
+                  <div
+                    class="progress-fill-v2"
+                    style="width: {download.progress}%; background: {color};"
+                  ></div>
+                </div>
+                <div class="card-meta-mobile">
+                  <div class="meta-item">
+                    <span class="material-icons">storage</span>
+                    <span>{formatBytes(download.size)}</span>
+                  </div>
+                  <div class="meta-item">
+                    <span class="material-icons">speed</span>
+                    <span style="color: {color};"
+                      >{isActive ? formatSpeed(download.speed || 0) : "-"}</span
+                    >
+                  </div>
+                  <div class="meta-item">
+                    <span>{Math.round(download.progress)}%</span>
+                  </div>
+                </div>
+                {#if download.error_message}
+                  <div class="card-error-mobile">
+                    ⚠ {download.error_message}
+                  </div>
+                {/if}
+                <!-- Tap-to-expand action bar -->
+                <div class="mobile-card-actions">
+                  {#if download.state === "DOWNLOADING" || download.state === "STARTING"}
+                    <button
+                      class="mobile-action-btn action-pause"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        handleAction("pause", download.id);
+                      }}
+                    >
+                      <span class="material-icons">pause</span>
+                      Pause
+                    </button>
+                  {:else if download.state === "PAUSED"}
+                    <button
+                      class="mobile-action-btn action-resume"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        handleAction("resume", download.id);
+                      }}
+                    >
+                      <span class="material-icons">play_arrow</span>
+                      Resume
+                    </button>
+                  {:else if download.state === "FAILED"}
+                    <button
+                      class="mobile-action-btn action-retry"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        handleAction("retry", download.id);
+                      }}
+                    >
+                      <span class="material-icons">refresh</span>
+                      Retry
+                    </button>
+                  {:else if download.state === "QUEUED" || download.state === "WAITING"}
+                    <button
+                      class="mobile-action-btn action-start"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        handleAction("resume", download.id);
+                      }}
+                    >
+                      <span class="material-icons">play_arrow</span>
+                      Start
+                    </button>
+                  {/if}
+                  <button
+                    class="mobile-action-btn action-details"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      showTaskDetails(download);
+                    }}
+                  >
+                    <span class="material-icons">info_outline</span>
+                    Details
+                  </button>
+                  <button
+                    class="mobile-action-btn action-delete"
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      deleteConfirmTask = download;
+                      expandedMobileCardId = null;
+                    }}
+                  >
+                    <span class="material-icons">delete_outline</span>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            {/each}
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:1690:7
+Warn: Visible, non-interactive elements with a click event must be accompanied by a keyboard event handler. Consider whether an interactive element such as `<button type="button">` or `<a>` might be more appropriate
+https://svelte.dev/e/a11y_click_events_have_key_events (svelte)
+      {@const isExpanded = expandedMobileCardId === download.id}
+      <div
+        class="download-card-mobile"
+        class:expanded={isExpanded}
+        onclick={() => toggleMobileCard(download.id)}
+      >
+        <div class="card-header-mobile">
+          <div class="card-name">
+            {download.filename}
+            {#if download.quality}
+              <span class="quality-badge" title={download.quality}
+                >{download.resolution || download.quality}</span
+              >
+            {/if}
+          </div>
+          <span
+            class="status-badge-v2"
+            style="background: {color}15; color: {color}; border-color: {color}30;"
+          >
+            {download.state}
+          </span>
+        </div>
+        <div class="card-progress-mobile">
+          <div
+            class="progress-fill-v2"
+            style="width: {download.progress}%; background: {color};"
+          ></div>
+        </div>
+        <div class="card-meta-mobile">
+          <div class="meta-item">
+            <span class="material-icons">storage</span>
+            <span>{formatBytes(download.size)}</span>
+          </div>
+          <div class="meta-item">
+            <span class="material-icons">speed</span>
+            <span style="color: {color};"
+              >{isActive ? formatSpeed(download.speed || 0) : "-"}</span
+            >
+          </div>
+          <div class="meta-item">
+            <span>{Math.round(download.progress)}%</span>
+          </div>
+        </div>
+        {#if download.error_message}
+          <div class="card-error-mobile">
+            ⚠ {download.error_message}
+          </div>
+        {/if}
+        <!-- Tap-to-expand action bar -->
+        <div class="mobile-card-actions">
+          {#if download.state === "DOWNLOADING" || download.state === "STARTING"}
+            <button
+              class="mobile-action-btn action-pause"
+              onclick={(e) => {
+                e.stopPropagation();
+                handleAction("pause", download.id);
+              }}
+            >
+              <span class="material-icons">pause</span>
+              Pause
+            </button>
+          {:else if download.state === "PAUSED"}
+            <button
+              class="mobile-action-btn action-resume"
+              onclick={(e) => {
+                e.stopPropagation();
+                handleAction("resume", download.id);
+              }}
+            >
+              <span class="material-icons">play_arrow</span>
+              Resume
+            </button>
+          {:else if download.state === "FAILED"}
+            <button
+              class="mobile-action-btn action-retry"
+              onclick={(e) => {
+                e.stopPropagation();
+                handleAction("retry", download.id);
+              }}
+            >
+              <span class="material-icons">refresh</span>
+              Retry
+            </button>
+          {:else if download.state === "QUEUED" || download.state === "WAITING"}
+            <button
+              class="mobile-action-btn action-start"
+              onclick={(e) => {
+                e.stopPropagation();
+                handleAction("resume", download.id);
+              }}
+            >
+              <span class="material-icons">play_arrow</span>
+              Start
+            </button>
+          {/if}
+          <button
+            class="mobile-action-btn action-details"
+            onclick={(e) => {
+              e.stopPropagation();
+              showTaskDetails(download);
+            }}
+          >
+            <span class="material-icons">info_outline</span>
+            Details
+          </button>
+          <button
+            class="mobile-action-btn action-delete"
+            onclick={(e) => {
+              e.stopPropagation();
+              deleteConfirmTask = download;
+              expandedMobileCardId = null;
+            }}
+          >
+            <span class="material-icons">delete_outline</span>
+            Delete
+          </button>
+        </div>
+      </div>
+    {/each}
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:1690:7
+Warn: `<div>` with a click handler must have an ARIA role
+https://svelte.dev/e/a11y_no_static_element_interactions (svelte)
+      {@const isExpanded = expandedMobileCardId === download.id}
+      <div
+        class="download-card-mobile"
+        class:expanded={isExpanded}
+        onclick={() => toggleMobileCard(download.id)}
+      >
+        <div class="card-header-mobile">
+          <div class="card-name">
+            {download.filename}
+            {#if download.quality}
+              <span class="quality-badge" title={download.quality}
+                >{download.resolution || download.quality}</span
+              >
+            {/if}
+          </div>
+          <span
+            class="status-badge-v2"
+            style="background: {color}15; color: {color}; border-color: {color}30;"
+          >
+            {download.state}
+          </span>
+        </div>
+        <div class="card-progress-mobile">
+          <div
+            class="progress-fill-v2"
+            style="width: {download.progress}%; background: {color};"
+          ></div>
+        </div>
+        <div class="card-meta-mobile">
+          <div class="meta-item">
+            <span class="material-icons">storage</span>
+            <span>{formatBytes(download.size)}</span>
+          </div>
+          <div class="meta-item">
+            <span class="material-icons">speed</span>
+            <span style="color: {color};"
+              >{isActive ? formatSpeed(download.speed || 0) : "-"}</span
+            >
+          </div>
+          <div class="meta-item">
+            <span>{Math.round(download.progress)}%</span>
+          </div>
+        </div>
+        {#if download.error_message}
+          <div class="card-error-mobile">
+            ⚠ {download.error_message}
+          </div>
+        {/if}
+        <!-- Tap-to-expand action bar -->
+        <div class="mobile-card-actions">
+          {#if download.state === "DOWNLOADING" || download.state === "STARTING"}
+            <button
+              class="mobile-action-btn action-pause"
+              onclick={(e) => {
+                e.stopPropagation();
+                handleAction("pause", download.id);
+              }}
+            >
+              <span class="material-icons">pause</span>
+              Pause
+            </button>
+          {:else if download.state === "PAUSED"}
+            <button
+              class="mobile-action-btn action-resume"
+              onclick={(e) => {
+                e.stopPropagation();
+                handleAction("resume", download.id);
+              }}
+            >
+              <span class="material-icons">play_arrow</span>
+              Resume
+            </button>
+          {:else if download.state === "FAILED"}
+            <button
+              class="mobile-action-btn action-retry"
+              onclick={(e) => {
+                e.stopPropagation();
+                handleAction("retry", download.id);
+              }}
+            >
+              <span class="material-icons">refresh</span>
+              Retry
+            </button>
+          {:else if download.state === "QUEUED" || download.state === "WAITING"}
+            <button
+              class="mobile-action-btn action-start"
+              onclick={(e) => {
+                e.stopPropagation();
+                handleAction("resume", download.id);
+              }}
+            >
+              <span class="material-icons">play_arrow</span>
+              Start
+            </button>
+          {/if}
+          <button
+            class="mobile-action-btn action-details"
+            onclick={(e) => {
+              e.stopPropagation();
+              showTaskDetails(download);
+            }}
+          >
+            <span class="material-icons">info_outline</span>
+            Details
+          </button>
+          <button
+            class="mobile-action-btn action-delete"
+            onclick={(e) => {
+              e.stopPropagation();
+              deleteConfirmTask = download;
+              expandedMobileCardId = null;
+            }}
+          >
+            <span class="material-icons">delete_outline</span>
+            Delete
+          </button>
+        </div>
+      </div>
+    {/each}
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:3193:3
+Warn: Unused CSS selector ".loading-state-inline"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .loading-state-inline {
+    display: flex;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:3202:3
+Warn: Unused CSS selector ".spinner-ring-small"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .spinner-ring-small {
+    width: 20px;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:4064:3
+Warn: Unused CSS selector ".batch-actions"
+https://svelte.dev/e/css_unused_selector (svelte)
+  /* Batch Actions */
+  .batch-actions {
+    display: flex;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:4071:3
+Warn: Unused CSS selector ".batch-actions .icon-btn-tiny"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .batch-actions .icon-btn-tiny {
+    opacity: 0.7;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:4076:3
+Warn: Unused CSS selector ".batch-actions .icon-btn-tiny:hover"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .batch-actions .icon-btn-tiny:hover {
+    opacity: 1;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/downloads/+page.svelte:4080:3
+Warn: Unused CSS selector ".batch-actions .icon-btn-tiny.danger:hover"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .batch-actions .icon-btn-tiny.danger:hover {
+    background: rgba(255, 82, 82, 0.1);
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/library/series/[id]/+page.svelte:437:5
+Warn: Also define the standard property 'line-clamp' for compatibility (css)
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/settings/+page.svelte:1590:3
+Warn: Unused CSS selector ".input-v3-box.readonly input"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .input-v3-box.readonly input {
+    color: rgba(255, 255, 255, 0.7);
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/settings/+page.svelte:1615:3
+Warn: Unused CSS selector ".icon-action .material-icons"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .icon-action .material-icons {
+    font-size: 1.1rem;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/settings/+page.svelte:1675:3
+Warn: Unused CSS selector ".btn-secondary-v3 .material-icons"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .btn-secondary-v3 .material-icons {
+    font-size: 1.2rem;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/settings/+page.svelte:1730:3
+Warn: Unused CSS selector ".input-with-copy input"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .input-with-copy input {
+    flex: 1;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/settings/+page.svelte:1744:3
+Warn: Unused CSS selector ".input-with-copy input:focus"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .input-with-copy input:focus {
+    border-color: var(--color-primary);
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/settings/+page.svelte:1770:3
+Warn: Unused CSS selector ".copy-btn .material-icons"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .copy-btn .material-icons {
+    font-size: 1.1rem;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/settings/+page.svelte:1800:3
+Warn: Unused CSS selector ".btn-secondary-full .material-icons"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .btn-secondary-full .material-icons {
+    font-size: 1.2rem;
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/settings/+page.svelte:1929:3
+Warn: Unused CSS selector ".arr-node-v3:hover .brand-logo"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .arr-node-v3:hover .brand-logo {
+    filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.7))
+
+/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/frontend/src/routes/setup/+page.svelte:954:3
+Warn: Unused CSS selector ".section-logo"
+https://svelte.dev/e/css_unused_selector (svelte)
+
+  .section-logo {
+    width: 40px;
+
+====================================
+svelte-check found 3 errors and 32 warnings in 9 files

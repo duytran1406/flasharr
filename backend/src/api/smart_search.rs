@@ -11,7 +11,7 @@ use crate::utils::title_matcher::{
 };
 use crate::utils::unified_scorer::{calculate_match_score, is_valid_match};
 use crate::utils::smart_tokenizer::smart_parse;
-use tracing::{info, warn};
+use tracing::info;
 use regex::Regex;
 use std::sync::Arc;
 use crate::AppState;
@@ -19,7 +19,8 @@ use reqwest::Client;
 use serde_json::Value;
 use std::sync::OnceLock;
 
-use crate::constants::TMDB_API_KEY;
+
+use super::search_pipeline::{SearchPipeline, RawFshareResult};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +48,8 @@ pub struct SmartSearchResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SeasonGroup {
     pub season: u32,
+    pub episode_count: u32,  // TMDB official episode count for uncut detection
+    pub aired_episode_count: u32,  // Number of episodes that have actually aired
     pub episodes_grouped: Vec<EpisodeGroup>,
 }
 
@@ -117,86 +120,66 @@ pub async fn handle_movie_search(
         _ => None,
     };
     
-    let c1 = client.clone();
+    let tmdb_service_clone = state.tmdb_service.clone();
     let id1 = tmdb_id_str.clone();
     let state_clone = state.clone();
     let tmdb_handle = tokio::spawn(async move {
-        let mut iso_titles = Vec::new();
-        let mut poster = None;
-        let mut official = None;
-        let mut collections = Vec::new(); // (title, year, id, poster)
+        let mut collections: Vec<(String, String, u64, Option<String>)> = Vec::new();
 
         if let Some(tmdb_id) = id1.clone() {
+            // Check cache first
             if let Some(cached) = state_clone.tmdb_cache.get(&tmdb_id).await {
                 return Some((cached.0, cached.1, cached.3, cached.2));
             }
-            // V2 HARD MODE: Movie alternative_titles endpoint.
-            let url = format!("https://api.themoviedb.org/3/movie/{}/alternative_titles?api_key={}", tmdb_id, TMDB_API_KEY);
-            if let Ok(resp) = c1.get(&url).send().await {
-                if let Ok(data) = resp.json::<Value>().await {
-                    if let Some(titles) = data["titles"].as_array() {
-                        for a in titles {
-                            if let Some(at) = a["title"].as_str() {
-                                let iso = a["iso_3166_1"].as_str().unwrap_or("");
-                                iso_titles.push((at.to_string(), iso.to_string()));
-                            }
+            
+            // Parse tmdb_id to i64
+            let tmdb_id_num: i64 = match tmdb_id.parse() {
+                Ok(id) => id,
+                Err(_) => return None,
+            };
+            
+            // Use TmdbService for enrichment
+            let enrichment = tmdb_service_clone.get_movie_enrichment(tmdb_id_num).await;
+            
+            let official = enrichment.official_name;
+            let poster = enrichment.poster_path;
+            
+            // Convert alternative titles to iso_titles format
+            let iso_titles: Vec<(String, String)> = enrichment.alternative_titles
+                .into_iter()
+                .map(|t| (t.title, t.iso_3166_1))
+                .collect();
+            
+            // Extract collection parts if present
+            if let Some(coll) = enrichment.collection {
+                for part in coll.parts {
+                    // Note: CollectionPart doesn't have year/poster, fetch separately if needed
+                    collections.push((part.title, String::new(), part.id as u64, None));
+                }
+            }
+
+            if official.is_some() {
+                let mut vn_titles = Vec::new();
+                let mut other_titles = Vec::new();
+                let mut seen_t = std::collections::HashSet::new();
+
+                for (title, iso) in iso_titles {
+                    if seen_t.insert(title.clone()) {
+                        if iso == "VN" {
+                            vn_titles.push(title);
+                        } else {
+                            other_titles.push(title);
                         }
                     }
                 }
+
+                let mut all_aliases = vn_titles;
+                all_aliases.extend(other_titles);
+
+                // Cache metadata
+                state_clone.tmdb_cache.insert(tmdb_id, (official.clone(), all_aliases.clone(), poster.clone(), collections.clone())).await;
+                return Some((official, all_aliases, collections, poster));
             }
-
-            // Official details
-            let details_url = format!("https://api.themoviedb.org/3/movie/{}?api_key={}&append_to_response=belongs_to_collection", tmdb_id, TMDB_API_KEY);
-            if let Ok(resp) = c1.get(&details_url).send().await {
-                if let Ok(data) = resp.json::<Value>().await {
-                    official = data["title"].as_str().map(|s| s.to_string());
-                    poster = data["poster_path"].as_str().map(|s| s.to_string());
-                    
-                    if let Some(coll_data) = data["belongs_to_collection"].as_object() {
-                        if let Some(coll_id) = coll_data["id"].as_u64() {
-                            let coll_url = format!("https://api.themoviedb.org/3/collection/{}?api_key={}", coll_id, TMDB_API_KEY);
-                            if let Ok(c_resp) = c1.get(&coll_url).send().await {
-                                if let Ok(c_data) = c_resp.json::<Value>().await {
-                                    if let Some(parts) = c_data["parts"].as_array() {
-                                        for p in parts {
-                                            let t = p["title"].as_str().unwrap_or("").to_string();
-                                            let y = p["release_date"].as_str().unwrap_or("").split('-').next().unwrap_or("").to_string();
-                                            let pid = p["id"].as_u64().unwrap_or(0);
-                                            let post = p["poster_path"].as_str().map(|s| s.to_string());
-                                            collections.push((t, y, pid, post));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if official.is_some() {
-            let mut vn_titles = Vec::new();
-            let mut other_titles = Vec::new();
-            let mut seen_t = std::collections::HashSet::new();
-
-            for (title, iso) in iso_titles {
-                if seen_t.insert(title.clone()) {
-                    if iso == "VN" {
-                        vn_titles.push(title);
-                    } else {
-                        other_titles.push(title);
-                    }
-                }
-            }
-
-            let mut all_aliases = vn_titles;
-            all_aliases.extend(other_titles);
-
-            // Cache metadata
-            if let Some(tmdb_id_val) = id1 {
-                state_clone.tmdb_cache.insert(tmdb_id_val, (official.clone(), all_aliases.clone(), poster.clone(), collections.clone())).await;
-            }
-            return Some((official, all_aliases, collections, poster));
         }
         None
     });
@@ -433,96 +416,75 @@ pub async fn handle_tv_search(
 
     let start_time = std::time::Instant::now();
     
-    // 1. EXECUTE TMDB ENRICHMENT AND KEYWORD SEARCH AT ONCE
+    // Extract TMDB ID
     let tmdb_id_str = match req.tmdb_id {
         Some(Value::String(ref s)) => Some(s.to_string()),
         Some(Value::Number(ref n)) => Some(n.to_string()),
         _ => None,
     };
     
-    info!("TV Smart Search Request: title='{}', tmdbId={:?}, year={:?}", title, tmdb_id_str, year_str);
+    info!("📊 [PERF] TV Smart Search START: title='{}', tmdbId={:?}, year={:?}", title, tmdb_id_str, year_str);
     
-    let c1 = client.clone();
+    // 1. EXECUTE TMDB ENRICHMENT AND KEYWORD SEARCH AT ONCE
+    let phase1_start = std::time::Instant::now();
+    
+    let tmdb_service_clone = state.tmdb_service.clone();
     let id1 = tmdb_id_str.clone();
     let state_clone = state.clone();
     let tmdb_handle = tokio::spawn(async move {
-        let mut iso_titles = Vec::new();
-        let mut poster = None;
-        let mut official = None;
-
         if let Some(tmdb_id) = id1.clone() {
+            // Check cache first
             if let Some(cached) = state_clone.tmdb_cache.get(&tmdb_id).await {
                 return Some((cached.0, cached.1, cached.2));
             }
-            // V2 HARD MODE: TV alternative_titles endpoint.
-            let url = format!("https://api.themoviedb.org/3/tv/{}/alternative_titles?api_key={}", tmdb_id, TMDB_API_KEY);
-            info!("Enriching TV metadata from TMDB: {}", url);
-            if let Ok(resp) = c1.get(&url).send().await {
-                if let Ok(data) = resp.json::<Value>().await {
-                    if let Some(results) = data["results"].as_array() {
-                        for a in results {
-                            if let Some(at) = a["title"].as_str().or(a["name"].as_str()) {
-                                let iso = a["iso_3166_1"].as_str().unwrap_or("");
-                                iso_titles.push((at.to_string(), iso.to_string()));
-                            }
-                        }
-                    }
-                }
-            }
             
-            // Details for name/poster
-            let details_url = format!("https://api.themoviedb.org/3/tv/{}?api_key={}", tmdb_id, TMDB_API_KEY);
-            if let Ok(resp) = c1.get(&details_url).send().await {
-                if let Ok(data) = resp.json::<Value>().await {
-                    official = data["name"].as_str().map(|s| s.to_string());
-                    poster = data["poster_path"].as_str().map(|s| s.to_string());
-                }
+            // Parse tmdb_id to i64
+            let tmdb_id_num: i64 = match tmdb_id.parse() {
+                Ok(id) => id,
+                Err(_) => return None,
+            };
+            
+            // Use TmdbService for enrichment
+            info!("Enriching TV metadata from TMDB via TmdbService: tmdb_id={}", tmdb_id_num);
+            let enrichment = tmdb_service_clone.get_tv_enrichment(tmdb_id_num).await;
+            
+            let official = enrichment.official_name;
+            let poster = enrichment.poster_path;
+            
+            // Convert alternative titles + translations to iso_titles format
+            let mut iso_titles: Vec<(String, String)> = enrichment.alternative_titles
+                .into_iter()
+                .map(|t| (t.title, t.iso_3166_1))
+                .collect();
+            
+            // Add translations
+            for t in enrichment.translations {
+                iso_titles.push((t.name, t.iso_3166_1));
             }
 
-            // V3 EXTENSION: Also fetch translations for better VN title coverage (e.g. Bộ Bộ Kinh Tâm)
-            let trans_url = format!("https://api.themoviedb.org/3/tv/{}/translations?api_key={}", tmdb_id, TMDB_API_KEY);
-            if let Ok(resp) = c1.get(&trans_url).send().await {
-                if let Ok(data) = resp.json::<Value>().await {
-                    if let Some(translations) = data["translations"].as_array() {
-                        for t in translations {
-                            let iso = t["iso_3166_1"].as_str().unwrap_or("");
-                            if let Some(data) = t["data"].as_object() {
-                                if let Some(t_name) = data.get("name").and_then(|v| v.as_str()) {
-                                    if !t_name.is_empty() {
-                                        iso_titles.push((t_name.to_string(), iso.to_string()));
-                                    }
-                                }
-                            }
+            if official.is_some() {
+                let mut vn_titles = Vec::new();
+                let mut other_titles = Vec::new();
+                let mut seen_t = std::collections::HashSet::new();
+
+                for (title, iso) in iso_titles {
+                    if seen_t.insert(title.clone()) {
+                        if iso == "VN" {
+                            vn_titles.push(title);
+                        } else {
+                            other_titles.push(title);
                         }
                     }
                 }
+
+                let mut all_aliases = vn_titles;
+                all_aliases.extend(other_titles);
+                info!("TMDB Enrichment: Official='{}', Aliases={:?}", official.as_deref().unwrap_or("None"), all_aliases);
+
+                // Cache metadata (TV has empty collections)
+                state_clone.tmdb_cache.insert(tmdb_id, (official.clone(), all_aliases.clone(), poster.clone(), Vec::new())).await;
+                return Some((official, all_aliases, poster));
             }
-        }
-
-        if official.is_some() {
-            let mut vn_titles = Vec::new();
-            let mut other_titles = Vec::new();
-            let mut seen_t = std::collections::HashSet::new();
-
-            for (title, iso) in iso_titles {
-                if seen_t.insert(title.clone()) {
-                    if iso == "VN" {
-                        vn_titles.push(title);
-                    } else {
-                        other_titles.push(title);
-                    }
-                }
-            }
-
-            let mut all_aliases = vn_titles;
-            all_aliases.extend(other_titles);
-            info!("TMDB Enrichment: Official='{}', Aliases={:?}", official.as_deref().unwrap_or("None"), all_aliases);
-
-            // Cache metadata (TV has empty collections)
-            if let Some(tmdb_id_val) = id1 {
-                state_clone.tmdb_cache.insert(tmdb_id_val, (official.clone(), all_aliases.clone(), poster.clone(), Vec::new())).await;
-            }
-            return Some((official, all_aliases, poster));
         }
         None
     });
@@ -562,6 +524,8 @@ pub async fn handle_tv_search(
     });
 
     let (tmdb_res, fshare_res) = tokio::join!(tmdb_handle, fshare_handle);
+    info!("📊 [PERF] Phase 1 (TMDB + Primary Search) took: {:?}", phase1_start.elapsed());
+    
     type Enrichment = (Option<String>, Vec<String>, Option<String>);
     let enrichment: Enrichment = tmdb_res.unwrap().unwrap_or((None, Vec::new(), None));
     let (tmdb_official, aliases, base_poster) = enrichment;
@@ -576,6 +540,7 @@ pub async fn handle_tv_search(
     }
 
     // 2.5. SECONDARY ALIAS SEARCH (V2: First VN alias only)
+    let phase2_start = std::time::Instant::now();
     if let Some(vn_alias) = aliases.iter().find(|a| is_vietnamese_title(a)) {
         if vn_alias.to_lowercase() != official_name.to_lowercase() {
             info!("Performing secondary TV search with Vietnamese alias: '{}'", vn_alias);
@@ -597,6 +562,7 @@ pub async fn handle_tv_search(
             }
         }
     }
+    info!("📊 [PERF] Phase 2 (Alias Search) took: {:?}", phase2_start.elapsed());
 
     // 3. FINAL DEDUPLICATE AND LIMIT TO 100 (matching V2)
     let mut final_seen = std::collections::HashSet::new();
@@ -606,6 +572,7 @@ pub async fn handle_tv_search(
     });
     
     // 3.5 SNOWBALL LOGIC (TV Only) - matching V2's deep-dive search
+    let phase3_start = std::time::Instant::now();
     info!("Snowball Check: results_pool={}, aliases={}", results_pool.len(), aliases.len());
     if !results_pool.is_empty() && !aliases.is_empty() {
         // Reuse the final_seen set for snowball results
@@ -684,7 +651,7 @@ pub async fn handle_tv_search(
                 }
                 
                 let max_ep = *found_eps.iter().max().unwrap_or(&0);
-                let check_limit = max_ep.max(35);
+                let check_limit = max_ep.max(50); // Increased from 35 to handle shows with 40+ episodes
                 let missing_eps: Vec<u32> = (1..=check_limit).filter(|ep| !found_eps.contains(ep)).collect();
                 
                 if missing_eps.is_empty() {
@@ -731,11 +698,13 @@ pub async fn handle_tv_search(
                 }
             }
     }
+    info!("📊 [PERF] Phase 3 (Snowball Logic) took: {:?}", phase3_start.elapsed());
     
     let target_results = results_pool; // Process ALL results, not just first 100
 
 
     // 4. PARSE AND EVALUATE
+    let phase4_start = std::time::Instant::now();
     let mut valid_results = Vec::new();
     
     info!("Total files to evaluate: {}", target_results.len());
@@ -884,20 +853,18 @@ pub async fn handle_tv_search(
 
     // PHASE 4: Fetch Episode Metadata from TMDB
     let mut episode_metadata: std::collections::HashMap<(u32, u32), (String, String, String, String)> = std::collections::HashMap::new();
+    let mut season_episode_counts: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();  // TMDB official episode counts
     
     if let Some(tmdb_id) = base_tmdb_id {
         let seasons_to_fetch: Vec<u32> = seasons_map.keys().cloned().collect();
         let mut fetch_tasks = Vec::new();
         
         for s_num in seasons_to_fetch {
-            let c = client.clone();
-            let tid = tmdb_id;
+            let tmdb_svc = state.tmdb_service.clone();
+            let tid = tmdb_id as i64;
             fetch_tasks.push(tokio::spawn(async move {
-                let url = format!("https://api.themoviedb.org/3/tv/{}/season/{}?api_key={}", tid, s_num, TMDB_API_KEY);
-                if let Ok(resp) = c.get(&url).send().await {
-                    if let Ok(data) = resp.json::<Value>().await {
-                        return Some((s_num, data));
-                    }
+                if let Some(data) = tmdb_svc.get_season_details(tid, s_num as i32).await {
+                    return Some((s_num, data));
                 }
                 None
             }));
@@ -907,6 +874,9 @@ pub async fn handle_tv_search(
         for res in results.into_iter().flatten().flatten() {
             let (s_num, data) = res;
             if let Some(episodes) = data["episodes"].as_array() {
+                // Store TMDB official episode count for this season
+                season_episode_counts.insert(s_num, episodes.len() as u32);
+                
                 for ep in episodes {
                     if let Some(e_num) = ep["episode_number"].as_u64() {
                         let name = ep["name"].as_str().unwrap_or("").to_string();
@@ -921,14 +891,52 @@ pub async fn handle_tv_search(
         }
     }
 
+    let today = chrono::Utc::now().date_naive();
+
+    // Pre-calculate aired episode count per season from TMDB metadata
+    let mut aired_counts: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    for (&(s, _e), (_name, _overview, air_date, _still)) in &episode_metadata {
+        if !air_date.is_empty() {
+            if let Ok(date) = chrono::NaiveDate::parse_from_str(air_date, "%Y-%m-%d") {
+                if date <= today {
+                    *aired_counts.entry(s).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    info!("TMDB aired episode counts: {:?}", aired_counts);
+
     let mut seasons = Vec::new();
     for (s_num, eps_map) in seasons_map {
+        let aired_count = aired_counts.get(&s_num).copied().unwrap_or(0);
         let mut episodes_grouped = Vec::new();
         for (e_num, mut files) in eps_map {
             // Sort files by quality score descending
             files.sort_by(|a, b| b.total_score.cmp(&a.total_score));
             
             let meta = episode_metadata.get(&(s_num, e_num));
+
+            // Filter out unreleased episodes:
+            // 1. If TMDB metadata exists, check air_date
+            // 2. If no metadata exists, check if episode number exceeds aired count
+            if let Some(m) = meta {
+                if !m.2.is_empty() {
+                    if let Ok(date) = chrono::NaiveDate::parse_from_str(&m.2, "%Y-%m-%d") {
+                        if date > today {
+                            info!("Filtering unreleased episode S{}E{} (air_date: {})", s_num, e_num, m.2);
+                            continue;
+                        }
+                    }
+                } else if aired_count > 0 && e_num > aired_count {
+                    // air_date is empty but episode is beyond aired count
+                    info!("Filtering unreleased episode S{}E{} (no air_date, beyond aired count {})", s_num, e_num, aired_count);
+                    continue;
+                }
+            } else if aired_count > 0 && e_num > aired_count {
+                // No TMDB metadata at all, episode is beyond aired count
+                info!("Filtering unreleased episode S{}E{} (no TMDB metadata, beyond aired count {})", s_num, e_num, aired_count);
+                continue;
+            }
             
             episodes_grouped.push(EpisodeGroup {
                 episode_number: e_num,
@@ -943,6 +951,8 @@ pub async fn handle_tv_search(
         
         seasons.push(SeasonGroup {
             season: s_num,
+            episode_count: season_episode_counts.get(&s_num).copied().unwrap_or(episodes_grouped.len() as u32),
+            aired_episode_count: aired_count,
             episodes_grouped,
         });
     }
@@ -958,62 +968,17 @@ pub async fn handle_tv_search(
         seasons: Some(seasons),
     };
     
+    info!("📊 [PERF] Phase 4 (Parse & Evaluate) took: {:?}", phase4_start.elapsed());
+    info!("📊 [PERF] ========================================");
+    info!("📊 [PERF] TOTAL TV Smart Search took: {:?}", start_time.elapsed());
+    info!("📊 [PERF] ========================================");
+    
     state.search_cache.insert(cache_key, response.clone()).await;
 
     Json(response).into_response()
 }
 
-
-struct RawFshareResult {
-    name: String,
-    url: String,
-    fcode: String,
-    size: u64,
-    score: i32,
-}
-
+/// Delegate Fshare search to SearchPipeline module
 async fn execute_fshare_search(client: &Client, query: &str, limit: usize) -> Vec<RawFshareResult> {
-    let url = format!("https://timfshare.com/api/v1/string-query-search?query={}", urlencoding::encode(query));
-    let mut results = Vec::new();
-
-    info!("Executing FShare search: '{}'", query);
-    let resp = client.post(&url)
-        .header("Referer", format!("https://timfshare.com/search?key={}", urlencoding::encode(query)))
-        .header("Origin", "https://timfshare.com")
-        .header("Content-Length", "0")
-        .send()
-        .await;
-
-    match resp {
-        Ok(r) => {
-            if let Ok(data) = r.json::<Value>().await {
-                if let Some(arr) = data["data"].as_array() {
-                    info!("FShare search '{}' returned {} results", query, arr.len());
-                    for item in arr.iter().take(limit) {
-                        let name = item["name"].as_str().unwrap_or("Unknown").to_string();
-                        let f_url = item["url"].as_str().unwrap_or("").to_string();
-                        // Match V2 exactly: take everything after /file/ including parameters
-                        let fcode = f_url.split("/file/").last().unwrap_or("").to_string();
-                        let size = item["size"].as_u64().unwrap_or(0);
-                        
-                        results.push(RawFshareResult {
-                            name,
-                            url: f_url,
-                            fcode,
-                            size,
-                            score: 0,
-                        });
-                    }
-                } else {
-                    warn!("FShare search '{}' returned no data array", query);
-                }
-            } else {
-                warn!("FShare search '{}' returned invalid JSON", query);
-            }
-        },
-        Err(e) => {
-            warn!("FShare search '{}' request failed: {}", query, e);
-        }
-    }
-    results
+    SearchPipeline::execute_fshare_search(client, query, limit).await
 }

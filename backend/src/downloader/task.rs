@@ -48,7 +48,7 @@ impl Default for DownloadState {
 impl DownloadState {
     /// Check if pause action is available
     pub fn can_pause(&self) -> bool {
-        matches!(self, Self::Queued | Self::Downloading | Self::Waiting)
+        matches!(self, Self::Queued | Self::Starting | Self::Downloading | Self::Waiting)
     }
     
     /// Check if resume action is available
@@ -90,6 +90,17 @@ impl DownloadState {
         if self.can_delete() { actions.push("delete"); }
         actions
     }
+}
+
+/// Media type for Arr integration routing
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum MediaType {
+    /// TV Series (batch of episodes)
+    TvSeries,
+    /// Single TV episode
+    TvEpisode,
+    /// Movie
+    Movie,
 }
 
 /// Download task
@@ -171,6 +182,27 @@ pub struct DownloadTask {
     /// Fshare file code for duplicate detection (e.g., "8DW6WQOV5R551DL")
     pub fshare_code: Option<String>,
     
+    /// Batch ID for grouping related downloads (e.g., TV season episodes)
+    /// Downloads with the same batch_id are displayed as a collapsible group
+    pub batch_id: Option<String>,
+    
+    /// Batch display name (e.g., "Breaking Bad S01")
+    pub batch_name: Option<String>,
+    
+    /// TMDB metadata for Sonarr/Radarr matching
+    pub tmdb_id: Option<i64>,          // TMDB ID for series/movie
+    pub tmdb_title: Option<String>,    // Series/Movie title
+    pub tmdb_season: Option<u32>,      // Season number (TV only)
+    pub tmdb_episode: Option<u32>,     // Episode number (TV only)
+    
+    /// Quality metadata (parsed from filename at creation time)
+    pub quality: Option<String>,       // e.g. "1080p WEB-DL"
+    pub resolution: Option<String>,    // e.g. "1080p", "2160p", "720p"
+    
+    /// Arr integration IDs (populated by webhook when series/movie is added)
+    pub arr_series_id: Option<i64>,    // Sonarr series ID
+    pub arr_movie_id: Option<i64>,     // Radarr movie ID
+    
     /// State machine object (not serialized)
     #[serde(skip, default = "default_state_obj")]
     pub state_obj: Arc<dyn TaskState>,
@@ -237,6 +269,16 @@ impl DownloadTask {
             url_metadata: None,
             error_history: Vec::new(),
             fshare_code: None,
+            batch_id: None,
+            batch_name: None,
+            tmdb_id: None,
+            tmdb_title: None,
+            tmdb_season: None,
+            tmdb_episode: None,
+            quality: None,
+            resolution: None,
+            arr_series_id: None,
+            arr_movie_id: None,
             state_obj: TaskStateFactory::get_state(state),
             cancel_token: CancellationToken::new(),
             pause_notify: Arc::new(Notify::new()),
@@ -281,6 +323,39 @@ impl DownloadTask {
     /// Cancel the task
     pub fn cancel(&self) {
         self.cancel_token.cancel();
+    }
+    
+    /// Detect media type for Arr integration routing
+    /// 
+    /// Logic:
+    /// - Has tmdb_season + tmdb_episode → TvEpisode (single episode)
+    /// - Has batch_id → TvSeries (batch of episodes)
+    /// - Category contains "movie" or "radarr" → Movie
+    /// - Default: infer from category (tv/sonarr → TvEpisode, else → Movie)
+    pub fn detect_media_type(&self) -> MediaType {
+        // Single episode with season/episode metadata
+        if self.tmdb_season.is_some() && self.tmdb_episode.is_some() {
+            return MediaType::TvEpisode;
+        }
+        
+        // Batch download (multiple episodes)
+        if self.batch_id.is_some() {
+            return MediaType::TvSeries;
+        }
+        
+        // Category-based detection
+        let category_lower = self.category.to_lowercase();
+        if category_lower.contains("movie") || category_lower.contains("radarr") {
+            return MediaType::Movie;
+        }
+        
+        if category_lower.contains("tv") || category_lower.contains("sonarr") {
+            // Default to single episode for TV category
+            return MediaType::TvEpisode;
+        }
+        
+        // Default fallback: Movie
+        MediaType::Movie
     }
     
     /// Get available actions for current state

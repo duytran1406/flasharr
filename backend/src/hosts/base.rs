@@ -30,6 +30,7 @@ pub struct AccountStatus {
     pub reason: Option<String>,
     pub account_email: String,
     pub premium: bool,
+    pub valid_until: Option<u64>,
     pub traffic_left: Option<String>,
 }
 

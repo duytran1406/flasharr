@@ -17,9 +17,11 @@ echo "   - Sonarr/Radarr settings"
 echo "   - Download history"
 echo "   - All configuration"
 echo "   - Database (flasharr.db)"
+echo "   - Downloaded files (/tmp/flasharr-downloads)"
 echo ""
 echo "AppData location: $APPDATA_DIR"
 echo "Database location: $DB_FILE"
+echo "Downloads location: /tmp/flasharr-downloads"
 echo ""
 
 # Check if backend is running
@@ -47,6 +49,15 @@ if [ -f "$DB_FILE" ]; then
     echo "Database file:"
     ls -lh "$DB_FILE"
 fi
+
+if [ -d "/tmp/flasharr-downloads" ]; then
+    echo ""
+    echo "Downloaded files:"
+    DOWNLOAD_SIZE=$(du -sh /tmp/flasharr-downloads 2>/dev/null | awk '{print $1}')
+    echo "  Size: $DOWNLOAD_SIZE"
+    FILE_COUNT=$(find /tmp/flasharr-downloads -type f 2>/dev/null | wc -l | tr -d ' ')
+    echo "  Files: $FILE_COUNT"
+fi
 echo ""
 
 # Confirm
@@ -72,6 +83,12 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     if [ -f "$DB_FILE" ]; then
         rm -f "$DB_FILE"
         echo "✅ Database deleted"
+    fi
+    
+    # Delete downloaded files
+    if [ -d "/tmp/flasharr-downloads" ]; then
+        rm -rf /tmp/flasharr-downloads/*
+        echo "✅ Downloaded files deleted"
     fi
     
     echo ""

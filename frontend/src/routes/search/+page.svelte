@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { fade, fly } from "svelte/transition";
+  import { animeFade, animeFly, animeSlide, stagger } from "$lib/animations";
   import { toasts } from "$lib/stores/toasts";
   import { downloadStore } from "$lib/stores/downloads";
   import { ui } from "$lib/stores/ui.svelte";
   import { SearchResultCard } from "$lib/components";
   import { queryClient } from "$lib/stores/query";
+  import Button from "$lib/components/ui/Button.svelte";
 
   const API_BASE = "/api";
 
@@ -214,8 +215,19 @@
 
   // Actions
   async function handleDownload(item: any) {
+    // Build TMDB metadata if available
+    const tmdb = item.id
+      ? {
+          tmdb_id: item.id,
+          media_type: item.mediaType,
+          title: item.title,
+          year: item.releaseDate ? item.releaseDate.substring(0, 4) : undefined,
+        }
+      : undefined;
+
     const result = await downloadStore.addDownload({
       url: `https://fshare.vn/file/${item.fcode}`,
+      tmdb,
     });
     if (result.success) toasts.success("Initiating data retrieval");
     else
@@ -246,14 +258,14 @@
 <div class="search-viewport">
   <!-- Loading State -->
   {#if isLoading}
-    <div class="loading-container" in:fade>
+    <div class="loading-container" in:animeFade>
       <div class="loading-spinner"></div>
       <p>Synchronizing with Fshare API...</p>
     </div>
 
     <!-- Trending / Hero State -->
   {:else if showTrending && !hasSearched}
-    <div class="trending-section" in:fade={{ duration: 400 }}>
+    <div class="trending-section" in:animeFade={{ duration: 400 }}>
       <div class="hero-header">
         <div class="icon-ring-small">
           <span class="material-icons">local_fire_department</span>
@@ -268,7 +280,7 @@
 
       <div class="search-results-grid">
         {#each trendingResults as item (item.fcode)}
-          <div in:fly={{ y: 20, duration: 400 }}>
+          <div in:animeSlide={{ y: 20, duration: 400 }}>
             <SearchResultCard
               {...item}
               onDownload={() => handleDownload(item)}
@@ -317,7 +329,7 @@
       {:else if viewMode === "grid"}
         <div class="search-results-grid">
           {#each paginatedResults as item (item.fcode)}
-            <div in:fly={{ y: 20, duration: 300 }}>
+            <div in:animeSlide={{ y: 20, duration: 300 }}>
               <SearchResultCard
                 {...item}
                 onDownload={() => handleDownload(item)}
@@ -330,7 +342,7 @@
           {#each paginatedResults as item (item.fcode)}
             <div
               class="result-list-item glass-panel"
-              in:fly={{ x: -20, duration: 300 }}
+              in:animeFly={{ x: -20, duration: 300 }}
             >
               <div class="item-visual">
                 {#if item.posterPath}
@@ -385,27 +397,26 @@
 
               <div class="item-actions">
                 {#if item.id}
-                  <button
-                    class="action-btn-icon pulse"
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon="psychology"
                     onclick={() => openSmartSearch(item)}
                     title="Smart Search"
-                  >
-                    <span class="material-icons">psychology</span>
-                  </button>
+                  ></Button>
                 {/if}
-                <button
-                  class="action-btn-icon"
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon="link"
                   onclick={() => handleCopyUrl(item)}
                   title="Copy Link"
+                ></Button>
+                <Button
+                  size="sm"
+                  icon="download"
+                  onclick={() => handleDownload(item)}>Get</Button
                 >
-                  <span class="material-icons">link</span>
-                </button>
-                <button
-                  class="dl-btn-premium"
-                  onclick={() => handleDownload(item)}
-                >
-                  <span class="material-icons">download</span> GET
-                </button>
               </div>
             </div>
           {/each}

@@ -143,7 +143,9 @@
     padding: 1rem 1.5rem;
     background: rgba(10, 15, 25, 0.4);
     border: 1px solid rgba(255, 255, 255, 0.05);
+    border-left: 2px solid var(--state-color, rgba(255, 255, 255, 0.1));
     position: relative;
+    overflow: visible;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     clip-path: polygon(
       0% 0%,
@@ -276,6 +278,13 @@
   .progress-fill.starting {
     background: var(--color-primary);
     box-shadow: 0 0 10px var(--color-primary);
+    /* Halftone dot overlay on progress fill */
+    background-image: radial-gradient(
+      circle,
+      rgba(255, 255, 255, 0.15) 0.5px,
+      transparent 0.5px
+    );
+    background-size: 4px 4px;
   }
   .progress-fill.completed {
     background: #00ff80;

@@ -1,5 +1,8 @@
 <script lang="ts">
+  import { goto } from "$app/navigation";
   import Badge from "../ui/Badge.svelte";
+  import Button from "../ui/Button.svelte";
+  import { toasts } from "$lib/stores/toasts";
 
   interface Props {
     // TMDB data
@@ -81,7 +84,7 @@
     if (onClick) {
       onClick();
     } else if (id) {
-      window.location.href = `/${mediaType}/${id}`;
+      goto(`/${mediaType}/${id}`);
     }
   }
 
@@ -95,7 +98,15 @@
     if (onCopyUrl) {
       onCopyUrl();
     } else {
-      navigator.clipboard.writeText(`https://fshare.vn/file/${fcode}`);
+      const url = `https://fshare.vn/file/${fcode}`;
+      navigator.clipboard
+        .writeText(url)
+        .then(() => {
+          toasts.success(`Link copied — ${url}`);
+        })
+        .catch(() => {
+          toasts.error("Failed to copy link to clipboard");
+        });
     }
   }
 </script>
@@ -142,7 +153,14 @@
           {#if releaseDate}
             <span class="meta-year">{getYear(releaseDate)}</span>
           {/if}
-          <span class="meta-rating">⭐ {voteAverage?.toFixed(1) || "N/A"}</span>
+          <span class="meta-rating"
+            ><span
+              class="material-icons"
+              style="font-size:0.75rem;vertical-align:middle;color:#f59e0b"
+              >star</span
+            >
+            {voteAverage?.toFixed(1) || "N/A"}</span
+          >
         </div>
       </div>
 
@@ -154,13 +172,16 @@
 
         <!-- Action Buttons -->
         <div class="card-actions">
-          <button class="btn-download" onclick={handleDownload}>
-            <span class="material-icons">download</span>
-            <span>DOWNLOAD</span>
-          </button>
-          <button class="btn-copy" onclick={handleCopyUrl} title="Copy URL">
-            <span class="material-icons">link</span>
-          </button>
+          <Button size="sm" icon="download" onclick={handleDownload}
+            >Download</Button
+          >
+          <Button
+            size="sm"
+            variant="ghost"
+            icon="link"
+            onclick={handleCopyUrl}
+            title="Copy URL"
+          ></Button>
         </div>
       </div>
     </div>
@@ -355,6 +376,12 @@
   .card-actions {
     display: flex;
     gap: 0.5rem;
+    align-items: center;
+    padding-inline: 0.75rem;
+  }
+  /* Download button fills available space; copy stays compact */
+  .card-actions :global(.flasharr-btn:first-child) {
+    flex: 1;
   }
 
   .btn-download,

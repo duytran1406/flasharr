@@ -1,6 +1,7 @@
 pub mod registry;
 pub mod base;
 pub mod fshare;
+pub mod circuit_breaker;
 
 use std::sync::Arc;
 use reqwest::Client;

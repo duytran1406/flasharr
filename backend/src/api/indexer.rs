@@ -7,7 +7,7 @@ use axum::{
     routing::get,
     Router,
     extract::{State, Query},
-    http::StatusCode,
+    http::{StatusCode, HeaderMap},
 };
 use std::sync::Arc;
 use serde::Deserialize;
@@ -22,6 +22,7 @@ use crate::constants::TMDB_API_KEY;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(handle_indexer))
+        .route("/download", get(handle_nzb_download))
 }
 
 // ============================================================================
@@ -90,15 +91,21 @@ fn get_search_cache() -> &'static Cache<String, Vec<IndexerResult>> {
 /// Main indexer endpoint handler
 async fn handle_indexer(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(params): Query<IndexerParams>,
 ) -> impl axum::response::IntoResponse {
     use axum::http::header;
     use axum::response::Response;
     use axum::body::Body;
     
+    // Extract host from request headers for dynamic URL generation
+    let host = headers.get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("localhost:8484");
+    
     tracing::info!(
-        "Newznab API request - mode: {}, q: {:?}, season: {:?}, ep: {:?}, imdbid: {:?}, tvdbid: {:?}, apikey: {:?}",
-        params.t, params.q, params.season, params.ep, params.imdbid, params.tvdbid, params.apikey
+        "Newznab API request - mode: {}, q: {:?}, season: {:?}, ep: {:?}, imdbid: {:?}, tvdbid: {:?}, cat: {:?}, apikey: {:?}",
+        params.t, params.q, params.season, params.ep, params.imdbid, params.tvdbid, params.cat, params.apikey
     );
     
     let (status, xml_body) = match params.t.as_str() {
@@ -116,7 +123,7 @@ async fn handle_indexer(
                 tracing::warn!("Invalid API key provided: {:?}", params.apikey);
                 (StatusCode::UNAUTHORIZED, generate_error_xml("Invalid API key"))
             } else {
-                (StatusCode::OK, handle_tv_search(state, params).await)
+                (StatusCode::OK, handle_tv_search(state, params, host).await)
             }
         },
         "movie" => {
@@ -124,7 +131,7 @@ async fn handle_indexer(
                 tracing::warn!("Invalid API key provided: {:?}", params.apikey);
                 (StatusCode::UNAUTHORIZED, generate_error_xml("Invalid API key"))
             } else {
-                (StatusCode::OK, handle_movie_search(state, params).await)
+                (StatusCode::OK, handle_movie_search(state, params, host).await)
             }
         },
         _ => (StatusCode::BAD_REQUEST, generate_error_xml("Unknown function")),
@@ -133,11 +140,79 @@ async fn handle_indexer(
     // CRITICAL: Trim to remove any leading/trailing whitespace from r#""# strings
     let trimmed_body = xml_body.trim().to_string();
     
+    // Debug: Log response preview for troubleshooting
+    let preview = if trimmed_body.len() > 500 {
+        format!("{}... ({} total bytes)", &trimmed_body[..500], trimmed_body.len())
+    } else {
+        trimmed_body.clone()
+    };
+    tracing::debug!("XML Response Preview: {}", preview);
+    
     // FORCE the response headers and body using explicit builder
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, "application/xml; charset=utf-8")
         .body(Body::from(trimmed_body))
+        .unwrap()
+}
+
+#[derive(Deserialize)]
+struct NzbDownloadParams {
+    fcode: String,
+    // TMDB metadata for proper file organization
+    tmdb_id: Option<String>,
+    media_type: Option<String>,
+    season: Option<u32>,
+    episode: Option<u32>,
+    // Category from Sonarr/Radarr (e.g., "tv-sonarr", "movies")
+    cat: Option<String>,
+}
+
+/// Generate a fake NZB file for Sonarr/Radarr validation
+/// The NZB contains the Fshare URL in metadata which SABnzbd shim will extract
+async fn handle_nzb_download(
+    Query(params): Query<NzbDownloadParams>,
+) -> impl axum::response::IntoResponse {
+    use axum::http::header;
+    use axum::body::Body;
+    use axum::response::Response;
+    
+    let fshare_url = format!("https://www.fshare.vn/file/{}", params.fcode);
+    
+    // Build metadata tags
+    let mut metadata_tags = format!("        <meta type=\"fshare_url\">{}</meta>\n", fshare_url);
+    if let Some(tmdb_id) = params.tmdb_id {
+        metadata_tags.push_str(&format!("        <meta type=\"tmdb_id\">{}</meta>\n", tmdb_id));
+    }
+    if let Some(media_type) = params.media_type {
+        metadata_tags.push_str(&format!("        <meta type=\"media_type\">{}</meta>\n", media_type));
+    }
+    if let Some(season) = params.season {
+        metadata_tags.push_str(&format!("        <meta type=\"season\">{}</meta>\n", season));
+    }
+    if let Some(episode) = params.episode {
+        metadata_tags.push_str(&format!("        <meta type=\"episode\">{}</meta>\n", episode));
+    }
+    if let Some(ref category) = params.cat {
+        metadata_tags.push_str(&format!("        <meta type=\"category\">{}</meta>\n", category));
+    }
+    
+    // Generate a minimal valid NZB XML that won't trigger parser errors
+    let nzb_xml = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+<nzb xmlns="http://www.newznab.com/DTD/2010/nzb">
+    <head>
+{}    </head>
+    <file poster="Flasharr" date="1706534400" subject="Fshare_Download_{}">
+        <groups><group>alt.binaries.test</group></groups>
+        <segments><segment bytes="1" number="1">fake</segment></segments>
+    </file>
+</nzb>"#, metadata_tags, params.fcode);
+    
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/x-nzb")
+        .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}.nzb\"", params.fcode))
+        .body(Body::from(nzb_xml))
         .unwrap()
 }
 
@@ -217,12 +292,20 @@ async fn imdb_to_tmdb(imdb_id: &str) -> Option<String> {
 
 /// Convert SmartSearchResponse to Newznab XML
 /// This extracts results from the smart_search response and converts to IndexerResult format
-async fn convert_smart_response_to_xml(response: axum::response::Response, query: &str) -> String {
+async fn convert_smart_response_to_xml(
+    response: axum::response::Response, 
+    query: &str, 
+    host: &str,
+    tmdb_id: Option<String>,
+    media_type: &str,
+    season: Option<u32>,
+    episode: Option<u32>,
+) -> String {
     use axum::body::to_bytes;
     use crate::api::smart_search::SmartSearchResponse;
     
     // Extract body bytes from response
-    let (parts, body) = response.into_parts();
+    let (_parts, body) = response.into_parts();
     let body_bytes = match to_bytes(body, usize::MAX).await {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -240,6 +323,13 @@ async fn convert_smart_response_to_xml(response: axum::response::Response, query
         }
     };
     
+    // Fetch TMDB title for synthesis
+    let tmdb_title = if let Some(ref id) = tmdb_id {
+        fetch_tmdb_title(id, media_type).await
+    } else {
+        None
+    };
+    
     // Extract all files from quality groups
     let mut indexer_results = Vec::new();
     let group_count = smart_response.groups.as_ref().map(|g| g.len()).unwrap_or(0);
@@ -247,18 +337,22 @@ async fn convert_smart_response_to_xml(response: axum::response::Response, query
     if let Some(groups) = smart_response.groups {
         for group in groups {
             for file in group.files {
-                // Determine category based on media type
-                let category = if smart_response.r#type == "tv" {
-                    5040 // TV/HD
-                } else {
-                    2040 // Movies/HD
-                };
+                // Determine category based on filename (detects HD/UHD/TV automatically)
+                let category = determine_category(&file.name);
+                
+                // Synthesize title for Sonarr parsing
+                let synthesized_title = synthesize_title(
+                    &file.name,
+                    tmdb_title.as_deref(),
+                    season,
+                    episode,
+                );
                 
                 // Create IndexerResult
                 let result = IndexerResult {
-                    title: file.name.clone(),
+                    title: synthesized_title,
                     guid: format!("fshare://{}", extract_file_id(&file.url)),
-                    link: file.url.clone(),
+                    link: generate_nzb_url(&file.url, host, &tmdb_id, &Some(media_type.to_string()), &season, &episode), // Point to NZB download endpoint
                     size: file.size,
                     pub_date: Utc::now(),
                     category,
@@ -271,16 +365,24 @@ async fn convert_smart_response_to_xml(response: axum::response::Response, query
     
     // Handle TV seasons structure if present
     if let Some(seasons) = smart_response.seasons {
-        for season in seasons {
-            for episode_group in season.episodes_grouped {
+        for season_group in seasons {
+            for episode_group in season_group.episodes_grouped {
                 for file in episode_group.files {
+                    // Synthesize title for Sonarr parsing
+                    let synthesized_title = synthesize_title(
+                        &file.name,
+                        tmdb_title.as_deref(),
+                        Some(season_group.season),
+                        episode,
+                    );
+                    
                     let result = IndexerResult {
-                        title: file.name.clone(),
+                        title: synthesized_title,
                         guid: format!("fshare://{}", extract_file_id(&file.url)),
-                        link: file.url.clone(),
+                        link: generate_nzb_url(&file.url, host, &tmdb_id, &Some(media_type.to_string()), &Some(season_group.season), &episode), // Point to NZB download endpoint
                         size: file.size,
                         pub_date: Utc::now(),
-                        category: 5040, // TV/HD
+                        category: determine_category(&file.name), // Auto-detect HD/UHD
                     };
                     
                     indexer_results.push(result);
@@ -290,12 +392,57 @@ async fn convert_smart_response_to_xml(response: axum::response::Response, query
     }
     
     tracing::info!(
-        "Converted SmartSearchResponse: {} results from {} quality groups",
+        "Converted SmartSearchResponse: {} results from {} quality groups (TMDB title: {:?})",
         indexer_results.len(),
-        group_count
+        group_count,
+        tmdb_title
     );
     
     generate_search_xml(indexer_results, query)
+}
+
+/// Fetch TMDB title for a given ID
+pub async fn fetch_tmdb_title(tmdb_id: &str, media_type: &str) -> Option<String> {
+    let client = Client::new();
+    let endpoint = if media_type == "tv" { "tv" } else { "movie" };
+    let url = format!(
+        "https://api.themoviedb.org/3/{}/{}?api_key={}",
+        endpoint, tmdb_id, TMDB_API_KEY
+    );
+    
+    let resp = client.get(&url).send().await.ok()?;
+    let data: Value = resp.json().await.ok()?;
+    
+    // TV shows use "name", movies use "title"
+    if media_type == "tv" {
+        data["name"].as_str().map(|s| s.to_string())
+    } else {
+        data["title"].as_str().map(|s| s.to_string())
+    }
+}
+
+/// Synthesize a parseable title for Sonarr
+/// Format: "Series Name - S01E01 - Original Filename" or "Series Name - Original Filename"
+fn synthesize_title(
+    original_filename: &str,
+    tmdb_title: Option<&str>,
+    season: Option<u32>,
+    episode: Option<u32>,
+) -> String {
+    match (tmdb_title, season, episode) {
+        (Some(title), Some(s), Some(e)) => {
+            // TV show with season/episode: "Series Name - S01E01 - filename"
+            format!("{} - S{:02}E{:02} - {}", title, s, e, original_filename)
+        }
+        (Some(title), _, _) => {
+            // Has TMDB title but no season/episode: "Title - filename"
+            format!("{} - {}", title, original_filename)
+        }
+        _ => {
+            // No TMDB title: use original filename
+            original_filename.to_string()
+        }
+    }
 }
 
 /// Extract file ID from Fshare URL
@@ -304,6 +451,36 @@ fn extract_file_id(url: &str) -> String {
         .and_then(|s| s.split('?').next())
         .unwrap_or("unknown")
         .to_string()
+}
+
+/// Generate NZB download URL for Sonarr/Radarr
+/// Points to our /download endpoint which generates a fake NZB with Fshare URL embedded
+fn generate_nzb_url(
+    fshare_url: &str, 
+    host: &str,
+    tmdb_id: &Option<String>,
+    media_type: &Option<String>,
+    season: &Option<u32>,
+    episode: &Option<u32>,
+) -> String {
+    let file_id = extract_file_id(fshare_url);
+    let mut url = format!("http://{}/newznab/api/download?fcode={}", host, file_id);
+    
+    // Add TMDB metadata as query parameters
+    if let Some(id) = tmdb_id {
+        url.push_str(&format!("&tmdb_id={}", id));
+    }
+    if let Some(mt) = media_type {
+        url.push_str(&format!("&media_type={}", mt));
+    }
+    if let Some(s) = season {
+        url.push_str(&format!("&season={}", s));
+    }
+    if let Some(e) = episode {
+        url.push_str(&format!("&episode={}", e));
+    }
+    
+    url
 }
 
 
@@ -338,6 +515,7 @@ async fn handle_search(
 async fn handle_tv_search(
     state: Arc<AppState>,
     params: IndexerParams,
+    host: &str,
 ) -> String {
     // Step 1: Convert TVDB ID to TMDB ID if provided
     let tmdb_id = if let Some(tvdb_id) = params.tvdbid {
@@ -356,7 +534,15 @@ async fn handle_tv_search(
     };
     
     // Step 2: Build SmartSearchRequest with all available data
-    let title = params.q.unwrap_or_else(|| "".to_string());
+    // If both query and TVDB ID are empty, use a default term for testing
+    let title = params.q.unwrap_or_else(|| {
+        if tmdb_id.is_none() {
+            "phim".to_string() // Vietnamese word - will return some results
+        } else {
+            "".to_string()
+        }
+    });
+    
     let smart_req = crate::api::smart_search::SmartSearchRequest {
         title: title.clone(),
         tmdb_id,
@@ -371,17 +557,31 @@ async fn handle_tv_search(
         title, smart_req.tmdb_id, smart_req.season, smart_req.episode
     );
     
+    // Clone metadata before smart_req is moved
+    let tmdb_id_str = smart_req.tmdb_id.as_ref().map(|v| v.as_str().unwrap_or("").to_string());
+    let season_num = smart_req.season;
+    let episode_num = smart_req.episode;
+    
     // Step 3: Call smart_search (already has Vietnamese title logic!)
     let response = crate::api::smart_search::handle_tv_search(state, smart_req).await;
     
     // Step 4: Convert SmartSearchResponse to Newznab XML
-    convert_smart_response_to_xml(response, &title).await
+    convert_smart_response_to_xml(
+        response, 
+        &title, 
+        host,
+        tmdb_id_str,
+        "tv",
+        season_num,
+        episode_num,
+    ).await
 }
 
 /// Handle movie search - Bridge to smart_search with IMDB → TMDB conversion
 async fn handle_movie_search(
     state: Arc<AppState>,
     params: IndexerParams,
+    host: &str,
 ) -> String {
     // Step 1: Convert IMDB ID to TMDB ID if provided
     let tmdb_id = if let Some(imdb_id) = params.imdbid {
@@ -399,8 +599,15 @@ async fn handle_movie_search(
         None
     };
     
-    // Step 2: Extract year from query or use separate parameter
-    let title = params.q.unwrap_or_else(|| "".to_string());
+    // Step 2: Extract year from query or use default search term
+    // If both query and IMDB ID are empty, use a default term for testing
+    let title = params.q.unwrap_or_else(|| {
+        if tmdb_id.is_none() {
+            "phim".to_string() // Vietnamese word for "movie" - will return some results
+        } else {
+            "".to_string()
+        }
+    });
     let year = None; // Radarr doesn't typically send year as separate param
     
     // Step 3: Build SmartSearchRequest with all available data
@@ -418,11 +625,22 @@ async fn handle_movie_search(
         title, smart_req.tmdb_id, smart_req.year
     );
     
+    // Clone metadata before smart_req is moved
+    let tmdb_id_str = smart_req.tmdb_id.as_ref().map(|v| v.as_str().unwrap_or("").to_string());
+    
     // Step 4: Call smart_search (already has Vietnamese title logic!)
     let response = crate::api::smart_search::handle_movie_search(state, smart_req).await;
     
     // Step 5: Convert SmartSearchResponse to Newznab XML
-    convert_smart_response_to_xml(response, &title).await
+    convert_smart_response_to_xml(
+        response, 
+        &title, 
+        host,
+        tmdb_id_str,
+        "movie",
+        None, // Movies don't have season
+        None, // Movies don't have episode
+    ).await
 }
 
 // ============================================================================
@@ -431,14 +649,15 @@ async fn handle_movie_search(
 
 /// Validate API key
 fn validate_api_key(state: &AppState, provided: &str) -> bool {
-    // Get API key from config
-    let config_key = state.config.indexer.as_ref()
-        .map(|i| i.api_key.as_str())
-        .unwrap_or("flasharr-default-key");
+    // Get API key from database (where UI saves it)
+    let config_key = state.db.get_setting("indexer_api_key")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "flasharr-default-key".to_string());
     
     // DEBUG: See exactly what is happening in the logs
     tracing::info!("Auth Check: Provided='{}', Expected='{}', Match={}", 
-        provided, config_key, provided == config_key);
+        provided, &config_key, provided == config_key);
     
     !provided.is_empty() && provided == config_key
 }
@@ -449,49 +668,26 @@ async fn execute_fshare_search_for_indexer(
     query: &str,
 ) -> Vec<IndexerResult> {
     use reqwest::Client;
+    use crate::api::search_pipeline::SearchPipeline;
     
     let client = Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .unwrap_or_else(|_| Client::new());
     
-    // Use timfshare API directly (same as search.rs)
-    let url = format!("https://timfshare.com/api/v1/string-query-search?query={}", urlencoding::encode(query.trim()));
+    // Use SearchPipeline for consistent Fshare search
+    let raw_results = SearchPipeline::execute_fshare_search(&client, query, 100).await;
     
-    let resp = client.post(&url)
-        .header("Content-Length", "0")
-        .header("Origin", "https://timfshare.com")
-        .header("Referer", format!("https://timfshare.com/search?key={}", urlencoding::encode(query)))
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .send()
-        .await;
-    
-    match resp {
-        Ok(r) => {
-            if let Ok(data) = r.json::<serde_json::Value>().await {
-                if let Some(arr) = data["data"].as_array() {
-                    return arr.iter().take(100).filter_map(|item| {
-                        let name = item["name"].as_str()?.to_string();
-                        let url = item["url"].as_str()?.to_string();
-                        let fcode = url.split("/file/").last()?.to_string();
-                        let size = item["size"].as_u64().unwrap_or(0);
-                        
-                        Some(IndexerResult {
-                            title: name.clone(),
-                            guid: format!("fshare://{}", fcode),
-                            link: url,
-                            size,
-                            pub_date: Utc::now(),
-                            category: determine_category(&name),
-                        })
-                    }).collect();
-                }
-            }
-        },
-        Err(_) => {}
-    }
-    
-    Vec::new()
+    raw_results.into_iter().map(|r| {
+        IndexerResult {
+            title: r.name.clone(),
+            guid: format!("fshare://{}", r.fcode),
+            link: r.url,
+            size: r.size,
+            pub_date: Utc::now(),
+            category: determine_category(&r.name),
+        }
+    }).collect()
 }
 
 /// Determine category from filename with enhanced pattern matching
@@ -603,6 +799,12 @@ fn generate_search_xml(results: Vec<IndexerResult>, _query: &str) -> String {
     writer.write_event(Event::Text(BytesText::new(desc))).unwrap();
     writer.write_event(Event::End(BytesEnd::new("description"))).unwrap();
     
+    // Newznab response metadata (required by spec)
+    let mut response_elem = BytesStart::new("newznab:response");
+    response_elem.push_attribute(("offset", "0"));
+    response_elem.push_attribute(("total", results.len().to_string().as_str()));
+    writer.write_event(Event::Empty(response_elem)).unwrap();
+    
     // Items
     for result in results {
         write_item(&mut writer, result);
@@ -626,8 +828,10 @@ fn write_item<W: std::io::Write>(writer: &mut quick_xml::Writer<W>, result: Inde
     writer.write_event(Event::Text(BytesText::new(&result.title))).unwrap();
     writer.write_event(Event::End(BytesEnd::new("title"))).unwrap();
     
-    // GUID
-    writer.write_event(Event::Start(BytesStart::new("guid"))).unwrap();
+    // GUID (with isPermaLink="false" as required by RSS spec)
+    let mut guid_tag = BytesStart::new("guid");
+    guid_tag.push_attribute(("isPermaLink", "false"));
+    writer.write_event(Event::Start(guid_tag)).unwrap();
     writer.write_event(Event::Text(BytesText::new(&result.guid))).unwrap();
     writer.write_event(Event::End(BytesEnd::new("guid"))).unwrap();
     
@@ -646,6 +850,13 @@ fn write_item<W: std::io::Write>(writer: &mut quick_xml::Writer<W>, result: Inde
     writer.write_event(Event::Text(BytesText::new(&result.pub_date.to_rfc2822()))).unwrap();
     writer.write_event(Event::End(BytesEnd::new("pubDate"))).unwrap();
     
+    // Enclosure (CRITICAL for *arr suite to recognize downloadable content)
+    let mut enclosure = BytesStart::new("enclosure");
+    enclosure.push_attribute(("url", result.link.as_str()));
+    enclosure.push_attribute(("length", result.size.to_string().as_str()));
+    enclosure.push_attribute(("type", "application/x-nzb"));
+    writer.write_event(Event::Empty(enclosure)).unwrap();
+    
     // Newznab attributes (critical for *arr suite)
     // GUID attribute for deduplication
     let mut attr_guid = BytesStart::new("newznab:attr");
@@ -653,11 +864,23 @@ fn write_item<W: std::io::Write>(writer: &mut quick_xml::Writer<W>, result: Inde
     attr_guid.push_attribute(("value", result.guid.as_str()));
     writer.write_event(Event::Empty(attr_guid)).unwrap();
     
-    // Category attribute
+    // Category attribute (specific sub-category)
     let mut attr_cat = BytesStart::new("newznab:attr");
     attr_cat.push_attribute(("name", "category"));
     attr_cat.push_attribute(("value", result.category.to_string().as_str()));
     writer.write_event(Event::Empty(attr_cat)).unwrap();
+    
+    // Parent category attribute (required by *arr suite)
+    // 2000 = Movies, 5000 = TV
+    let parent_category = if result.category >= 5000 && result.category < 6000 {
+        "5000" // TV
+    } else {
+        "2000" // Movies
+    };
+    let mut attr_parent = BytesStart::new("newznab:attr");
+    attr_parent.push_attribute(("name", "category"));
+    attr_parent.push_attribute(("value", parent_category));
+    writer.write_event(Event::Empty(attr_parent)).unwrap();
     
     // Size attribute (*arr suite prefers this over <size> tag)
     let mut attr_size = BytesStart::new("newznab:attr");

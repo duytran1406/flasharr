@@ -7,7 +7,7 @@ authors = ["Flasharr Team"]
 
 [dependencies]
 # Web framework
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.7", features = ["ws", "multipart"] }
 tower = { version = "0.4", features = ["full"] }
 tower-http = { version = "0.5", features = ["cors", "fs", "trace"] }
 
@@ -16,9 +16,11 @@ tokio = { version = "1", features = ["full"] }
 
 # Database
 rusqlite = { version = "0.31", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.24"
 
 # HTTP client
-reqwest = { version = "0.11", features = ["json", "stream", "cookies"] }
+reqwest = { version = "0.11", features = ["json", "stream", "cookies", "native-tls-alpn"] }
 
 # WebSocket
 tokio-tungstenite = "0.21"

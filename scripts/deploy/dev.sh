@@ -27,8 +27,9 @@ echo -e "${CYAN}🌐 Frontend:${NC}  http://localhost:5173"
 echo -e "${CYAN}🔧 Backend:${NC}   http://localhost:8484"
 echo ""
 
-# Step 1: Cleanup
+# Step 1: Create debug_log directory and Cleanup
 echo -e "${YELLOW}[1/4]${NC} 🧹 Cleaning up previous sessions..."
+mkdir -p "$PROJECT_ROOT/debug_log"
 pkill -f "target/debug/flasharr" 2>/dev/null || true
 pkill -f "vite" 2>/dev/null || true
 sleep 1

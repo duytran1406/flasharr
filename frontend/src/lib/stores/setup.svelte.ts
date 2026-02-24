@@ -239,22 +239,22 @@ class SetupStore {
         },
       };
       
-      // Add optional integrations
-      if (this.data.sonarrEnabled && this.sonarrValidated) {
+      // Add optional integrations (save if enabled, even if not tested)
+      if (this.data.sonarrEnabled && this.data.sonarrUrl && this.data.sonarrApiKey) {
         payload.sonarr = {
           url: this.data.sonarrUrl,
           api_key: this.data.sonarrApiKey,
         };
       }
       
-      if (this.data.radarrEnabled && this.radarrValidated) {
+      if (this.data.radarrEnabled && this.data.radarrUrl && this.data.radarrApiKey) {
         payload.radarr = {
           url: this.data.radarrUrl,
           api_key: this.data.radarrApiKey,
         };
       }
       
-      if (this.data.jellyfinEnabled && this.jellyfinValidated) {
+      if (this.data.jellyfinEnabled && this.data.jellyfinUrl && this.data.jellyfinApiKey) {
         payload.jellyfin = {
           url: this.data.jellyfinUrl,
           api_key: this.data.jellyfinApiKey,

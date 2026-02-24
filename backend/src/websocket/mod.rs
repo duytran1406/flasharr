@@ -28,6 +28,10 @@ pub enum WsMessage {
     #[serde(rename = "TASK_UPDATED")]
     TaskUpdated { task: DownloadTask },
     
+    /// Batch of task updates (sent every 500ms to reduce message spam)
+    #[serde(rename = "TASK_BATCH_UPDATE")]
+    TaskBatchUpdate { tasks: Vec<DownloadTask> },
+    
     /// Task was removed
     #[serde(rename = "TASK_REMOVED")]
     TaskRemoved { task_id: String },
@@ -62,7 +66,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         tracing::debug!("Sent SYNC_ALL to client");
     }
     
-    // Subscribe to progress updates from the download engine
+    // Subscribe to task events from the event bus (event-driven architecture)
+    let mut event_rx = state.download_orchestrator.subscribe_events();
+    
+    // ALSO subscribe to legacy progress channel (for download progress updates)
     let mut progress_rx = state.download_orchestrator.subscribe_progress();
     
     // Clone state for the send task
@@ -96,26 +103,60 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         // Send periodic stats updates (check every 2 seconds)
         let mut stats_interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
         
+        // Batch update interval (500ms)
+        let mut batch_interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+        
         // Track last sent stats to avoid sending duplicates
         let mut last_stats: Option<EngineStats> = None;
         
+        // Pending task updates to batch (use HashMap to deduplicate by task_id)
+        let mut pending_updates: std::collections::HashMap<uuid::Uuid, DownloadTask> = std::collections::HashMap::new();
+        
         loop {
             tokio::select! {
-                result = progress_rx.recv() => {
+                result = event_rx.recv() => {
                     match result {
-                        Ok(progress) => {
-                            // Task was already updated by the orchestrator's progress callback
-                            // Just get the task and broadcast it (no duplicate update needed)
-                            let task_id = uuid::Uuid::parse_str(&progress.task_id).unwrap_or_default();
+                        Ok(event) => {
+                            use crate::downloader::events::TaskEvent as TE;
                             
-                            // Get the updated task and broadcast
-                            if let Some(task) = orchestrator.task_manager().get_task(task_id) {
-                                let msg = WsMessage::TaskUpdated { task };
-                                
-                                if let Ok(json) = serde_json::to_string(&msg) {
-                                    if sender.send(Message::Text(json)).await.is_err() {
-                                        tracing::debug!("WebSocket client disconnected during progress update");
-                                        break;
+                            // Route message based on event type
+                            match event {
+                                TE::Created { task } => {
+                                    // Send TASK_ADDED immediately (not batched)
+                                    let msg = WsMessage::TaskAdded { task };
+                                    if let Ok(json) = serde_json::to_string(&msg) {
+                                        if sender.send(Message::Text(json)).await.is_err() {
+                                            tracing::debug!("WebSocket client disconnected during event broadcast");
+                                            break;
+                                        }
+                                    }
+                                }
+                                TE::StateChanged { task, .. } => {
+                                    // Batch state changes
+                                    pending_updates.insert(task.id, task);
+                                }
+                                TE::ProgressUpdated { task_id, .. } => {
+                                    // For progress updates, fetch the full task and batch it
+                                    if let Some(task) = orchestrator.get_task_unified(task_id).await {
+                                        pending_updates.insert(task.id, task);
+                                    }
+                                }
+                                TE::Failed { task, .. } => {
+                                    // Batch failures
+                                    pending_updates.insert(task.id, task);
+                                }
+                                TE::Completed { task, .. } => {
+                                    // Batch completions
+                                    pending_updates.insert(task.id, task);
+                                }
+                                TE::Removed { task_id, .. } => {
+                                    // Send TASK_REMOVED immediately (not batched)
+                                    let msg = WsMessage::TaskRemoved { task_id: task_id.to_string() };
+                                    if let Ok(json) = serde_json::to_string(&msg) {
+                                        if sender.send(Message::Text(json)).await.is_err() {
+                                            tracing::debug!("WebSocket client disconnected during event broadcast");
+                                            break;
+                                        }
                                     }
                                 }
                             }
@@ -128,6 +169,45 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             tracing::debug!("Broadcast channel closed");
                             break;
+                        }
+                    }
+                }
+                
+                // Handle legacy progress updates (download progress, speed, ETA)
+                result = progress_rx.recv() => {
+                    match result {
+                        Ok(progress) => {
+                            // Parse task_id and fetch full task, then batch it
+                            if let Ok(task_id) = uuid::Uuid::parse_str(&progress.task_id) {
+                                if let Some(task) = orchestrator.get_task_unified(task_id).await {
+                                    pending_updates.insert(task.id, task);
+                                }
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                            tracing::debug!("Progress channel lagged, skipped {} messages", count);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            tracing::debug!("Progress channel closed");
+                            break;
+                        }
+                    }
+                }
+                
+                // Batch interval tick - send all pending updates
+                _ = batch_interval.tick() => {
+                    if !pending_updates.is_empty() {
+                        let tasks: Vec<DownloadTask> = pending_updates.drain().map(|(_, task)| task).collect();
+                        let count = tasks.len();
+                        
+                        let msg = WsMessage::TaskBatchUpdate { tasks };
+                        
+                        if let Ok(json) = serde_json::to_string(&msg) {
+                            if sender.send(Message::Text(json)).await.is_err() {
+                                tracing::debug!("WebSocket client disconnected during batch update");
+                                break;
+                            }
+                            tracing::trace!("Sent batch update with {} tasks", count);
                         }
                     }
                 }

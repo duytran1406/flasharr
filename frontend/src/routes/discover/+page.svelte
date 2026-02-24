@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { fly } from "svelte/transition";
+  import { animeFly } from "$lib/animations";
   import type { TMDBMovie, TMDBTVShow } from "$lib/types/tmdb";
   import { MediaCard, ErrorState } from "$lib/components";
 
@@ -424,7 +424,10 @@
 
     <!-- Filter Sidebar (Drawer) -->
     {#if showFilters}
-      <div class="filter-sidebar" transition:fly={{ x: 300, duration: 300 }}>
+      <div
+        class="filter-sidebar"
+        transition:animeFly={{ x: 300, duration: 300 }}
+      >
         <div class="filter-header">
           <h3>Intelligence Filters</h3>
           <button class="clear-btn" onclick={clearFilters}>Reset</button>
@@ -972,37 +975,64 @@
 
   @media (max-width: 768px) {
     .discover-grid {
-      grid-template-columns: repeat(3, 1fr);
-      gap: 1rem;
-    }
-  }
-
-  @media (max-width: 480px) {
-    .discover-grid {
       grid-template-columns: repeat(2, 1fr);
       gap: 0.75rem;
     }
-  }
 
-  @media (max-width: 768px) {
     .control-bar {
-      padding: 1rem;
-      gap: 1rem;
+      padding: 0.75rem;
+      gap: 0.5rem;
+      flex-wrap: wrap;
     }
+
     .search-section {
       width: 100%;
       max-width: none;
+      order: 1;
     }
+
+    .search-input {
+      font-size: 14px;
+      padding: 0.6rem 0.75rem 0.6rem 2.5rem;
+    }
+
+    .search-icon {
+      font-size: 1rem;
+      left: 0.75rem;
+    }
+
     .controls-right {
       width: 100%;
       justify-content: space-between;
+      order: 2;
+      gap: 0.5rem;
     }
+
+    .toggle-btn {
+      padding: 0.4rem 0.75rem;
+      font-size: 0.6rem;
+    }
+
+    .sort-select {
+      padding: 0.5rem 2rem 0.5rem 0.75rem;
+      font-size: 0.75rem;
+    }
+
+    .filter-toggle-btn {
+      padding: 0.5rem;
+    }
+
+    .discover-scroll-container {
+      padding: 0.75rem;
+    }
+
     .filter-sidebar {
       width: 100%;
     }
+
     .content-wrapper:has(.filter-sidebar) .discover-scroll-container {
       margin-right: 0;
-      padding-right: var(--spacing-mobile-md);
+      padding-right: 0.75rem;
     }
   }
 </style>

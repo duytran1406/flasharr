@@ -71,14 +71,15 @@ struct VerifyAccountRequest {
 // ============================================================================
 
 /// GET /api/accounts - List all accounts
+/// Returns stored credentials immediately — no live login. Use POST /:email/refresh
+/// to force a live status check.
 async fn list_accounts(
     State(state): State<Arc<AppState>>,
 ) -> Json<AccountsResponse> {
-    // First try to get credentials from database (where setup wizard saves them)
+    // Read email from DB first, then fall back to config.toml
     let email = match state.db.get_setting("fshare_email") {
-        Ok(Some(email)) if !email.is_empty() => email,
+        Ok(Some(e)) if !e.is_empty() => e,
         _ => {
-            // Fallback to config.toml for backwards compatibility
             let config_email = state.config.fshare.email.clone();
             if config_email.is_empty() {
                 return Json(AccountsResponse { accounts: vec![] });
@@ -87,31 +88,31 @@ async fn list_accounts(
         }
     };
 
-    // Default values if fetch fails
-    let mut account = AccountInfo {
-        email: email.clone(),
-        rank: "PREMIUM".to_string(),
-        valid_until: 0,
+    // Read cached rank from DB (written when refresh or login succeeds).
+    // Empty string = never verified — frontend treats this as non-VIP.
+    let rank = state.db
+        .get_setting("fshare_rank")
+        .ok()
+        .flatten()
+        .filter(|r| !r.is_empty())
+        .unwrap_or_default(); // empty → frontend isVip() returns false
+
+    let valid_until = state.db
+        .get_setting("fshare_valid_until")
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+
+    let account = AccountInfo {
+        email,
+        rank,
+        valid_until,
         quota_used: 0,
         quota_total: 0,
         is_active: true,
     };
 
-    // Try to get real status from handler
-    if let Some(handler) = state.host_registry.get_handler_for_url("https://fshare.vn/file/test") {
-        if let Ok(status) = handler.check_account_status().await {
-            account.email = status.account_email;
-            account.rank = if status.premium { "VIP".to_string() } else { "FREE".to_string() };
-            // Note: Fshare API returns traffic used as a string like "100 GB" or similar sometimes
-            // For now we'll try to parse or just use dummy values if it's not a number
-            // Actually, HostHandler base says traffic_left is Option<String>
-            // Let's assume some defaults for now to keep UI happy
-            account.quota_total = 100 * 1024 * 1024 * 1024; // 100 GB
-            account.quota_used = 25 * 1024 * 1024 * 1024;  // 25 GB
-            account.valid_until = chrono::Utc::now().timestamp() as u64 + 86400 * 30; // 30 days
-        }
-    }
-    
     Json(AccountsResponse { accounts: vec![account] })
 }
 
@@ -139,19 +140,49 @@ async fn add_account(
         }));
     }
     
-    // Clear the existing session so it re-logs in with new credentials
+    // Clear stale rank so the old FREE/VIP badge doesn't linger
+    let _ = state.db.save_setting("fshare_rank", "");
+    let _ = state.db.save_setting("fshare_valid_until", "0");
+
+    // Clear the existing session so the handler re-logs in with new credentials
     if let Some(handler) = state.host_registry.get_handler_for_url("https://fshare.vn/file/test") {
         if let Err(e) = handler.logout().await {
             tracing::warn!("Failed to clear session after adding account: {}", e);
         } else {
             tracing::info!("Cleared old session, will re-login with new credentials");
         }
+
+        // Immediately verify the new credentials and cache the VIP rank.
+        // check_account_status() calls ensure_valid_session() which triggers a fresh login
+        // with the new credentials we just saved, then fetches /api/user/get.
+        match handler.check_account_status().await {
+            Ok(status) => {
+                let rank = if status.premium { "VIP" } else { "FREE" };
+                let _ = state.db.save_setting("fshare_rank", rank);
+                let valid_until = status.valid_until.unwrap_or(0);
+                let _ = state.db.save_setting("fshare_valid_until", &valid_until.to_string());
+                tracing::info!("[Accounts] add_account: verified rank='{}' valid_until={}", rank, valid_until);
+                return Ok(Json(ActionResponse {
+                    success: true,
+                    message: Some(format!("Account activated. Rank: {}", rank)),
+                }));
+            }
+            Err(e) => {
+                // Login failed — bad credentials or network issue
+                tracing::warn!("[Accounts] add_account: status check failed: {}", e);
+                // Credentials are saved; rank stays empty (UNVERIFIED) until user retries
+                return Ok(Json(ActionResponse {
+                    success: false,
+                    message: Some(format!("Credentials saved but login failed: {}", e)),
+                }));
+            }
+        }
     }
     
     tracing::info!("Fshare account added successfully for {}", payload.email);
     Ok(Json(ActionResponse {
         success: true,
-        message: Some("Account added and activated successfully.".to_string()),
+        message: Some("Account added. No Fshare handler available to verify.".to_string()),
     }))
 }
 
@@ -215,37 +246,49 @@ async fn set_primary(
     })
 }
 
-/// POST /api/accounts/:email/refresh - Refresh account session
+/// POST /api/accounts/:email/refresh - Refresh account session (live login check)
 async fn refresh_account(
     State(state): State<Arc<AppState>>,
     Path(email): Path<String>,
 ) -> Json<ActionResponse> {
-    if email != state.config.fshare.email {
+    // Resolve the current account email from DB first, then fall back to config.
+    // This matters when credentials were saved to DB via the UI (add_account)
+    // but the in-memory config still holds the old/blank email.
+    let current_email = state.db
+        .get_setting("fshare_email")
+        .ok()
+        .flatten()
+        .filter(|e| !e.is_empty())
+        .unwrap_or_else(|| state.config.fshare.email.clone());
+
+    if email != current_email {
         return Json(ActionResponse {
             success: false,
             message: Some("Account not found".to_string()),
         });
     }
     
-    // Get handler and refresh
+    // Perform a live status check (this IS the slow call, but it's intentionally triggered by user)
     if let Some(handler) = state.host_registry.get_handler_for_url("https://fshare.vn/file/test") {
         match handler.check_account_status().await {
             Ok(status) => {
+                // Cache the rank in DB so list_accounts returns it instantly next time
+                let rank = if status.premium { "VIP" } else { "FREE" };
+                let _ = state.db.save_setting("fshare_rank", rank);
+                
+                let valid_until = status.valid_until.unwrap_or(0);
+                let _ = state.db.save_setting("fshare_valid_until", &valid_until.to_string());
+                
+                tracing::info!("[Accounts] Refreshed rank for {}: {} (valid_until: {})", status.account_email, rank, valid_until);
                 Json(ActionResponse {
                     success: status.can_download,
-                    message: if status.can_download { 
-                        None 
-                    } else { 
-                        status.reason 
-                    },
+                    message: if status.can_download { None } else { status.reason },
                 })
             },
-            Err(e) => {
-                Json(ActionResponse {
-                    success: false,
-                    message: Some(format!("Failed to refresh: {}", e)),
-                })
-            }
+            Err(e) => Json(ActionResponse {
+                success: false,
+                message: Some(format!("Refresh failed: {}", e)),
+            }),
         }
     } else {
         Json(ActionResponse {

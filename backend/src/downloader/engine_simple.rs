@@ -49,18 +49,27 @@ impl SimpleDownloadEngine {
     where
         F: Fn(DownloadProgress) + Send + Sync + 'static,
     {
-        let destination_buf = destination.to_path_buf();
+        // Download to .flasharr file to prevent Sonarr from importing incomplete files
+        let temp_destination = destination.with_extension(
+            format!("{}.flasharr", destination.extension().and_then(|e| e.to_str()).unwrap_or(""))
+        );
         
-        tracing::info!("Starting single-stream download: {} -> {:?}", url, destination);
+        tracing::info!("Starting single-stream download: {} -> {:?}", url, temp_destination);
         
         let total_downloaded = self.download_single_stream(
             url,
-            &destination_buf,
+            &temp_destination,
             cancel_token,
             progress_callback,
         ).await?;
         
         tracing::info!("Download completed: {} bytes", total_downloaded);
+        
+        // Rename from .flasharr to final name
+        if temp_destination.exists() {
+            tokio::fs::rename(&temp_destination, destination).await?;
+            tracing::info!("Renamed {:?} -> {:?}", temp_destination, destination);
+        }
         
         Ok(())
     }

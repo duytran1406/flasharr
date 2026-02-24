@@ -21,6 +21,8 @@ mod config;
 mod utils;
 mod arr;
 mod constants;
+mod error;
+mod services;
 
 
 use std::sync::Arc;
@@ -29,6 +31,8 @@ use std::sync::Arc;
 pub struct AppState {
     pub host_registry: Arc<hosts::registry::HostRegistry>,
     pub download_orchestrator: Arc<downloader::DownloadOrchestrator>,
+    pub download_service: Arc<services::DownloadService>,
+    pub tmdb_service: Arc<services::TmdbService>,
     pub tx_broadcast: tokio::sync::broadcast::Sender<downloader::task::DownloadTask>,
     pub config: config::Config,
     pub db: Arc<db::Db>,
@@ -82,6 +86,16 @@ async fn main() {
 
     // Initialize Database
     let db = Arc::new(db::Db::new(&db_path).expect("Failed to initialize database"));
+    
+    // Ensure indexer API key exists (generate if needed)
+    if db.get_setting("indexer_api_key").ok().flatten().is_none() {
+        let api_key = format!("flasharr_{}", uuid::Uuid::new_v4().simple());
+        if let Err(e) = db.save_setting("indexer_api_key", &api_key) {
+            tracing::warn!("Failed to save generated API key: {}", e);
+        } else {
+            tracing::info!("Generated new indexer API key: {}", api_key);
+        }
+    }
 
     // Initialize components
     let (tx_broadcast, _) = tokio::sync::broadcast::channel(100);
@@ -100,18 +114,64 @@ async fn main() {
         retry: downloader::config::RetryConfig::default(),
     };
     
+    // Load Arr configuration from database (setup wizard saves here)
+    // This ensures webhook handler initializes correctly even if settings were saved before
+    let sonarr_config = if let (Some(url), Some(api_key)) = (
+        db.get_setting("sonarr_url").ok().flatten(),
+        db.get_setting("sonarr_api_key").ok().flatten()
+    ) {
+        if !url.is_empty() && !api_key.is_empty() {
+            tracing::info!("Loading Sonarr config from database: {}", url);
+            Some(config::ArrConfig {
+                enabled: true,
+                url,
+                api_key,
+                auto_import: true,
+            })
+        } else {
+            config.sonarr.clone()
+        }
+    } else {
+        config.sonarr.clone()
+    };
+    
+    let radarr_config = if let (Some(url), Some(api_key)) = (
+        db.get_setting("radarr_url").ok().flatten(),
+        db.get_setting("radarr_api_key").ok().flatten()
+    ) {
+        if !url.is_empty() && !api_key.is_empty() {
+            tracing::info!("Loading Radarr config from database: {}", url);
+            Some(config::ArrConfig {
+                enabled: true,
+                url,
+                api_key,
+                auto_import: true,
+            })
+        } else {
+            config.radarr.clone()
+        }
+    } else {
+        config.radarr.clone()
+    };
+    
     // Create download orchestrator with new architecture
     let download_orchestrator = Arc::new(downloader::DownloadOrchestrator::new(
         download_config,
         Arc::clone(&host_registry),
         Some(Arc::clone(&db)),
-        config.sonarr.clone(),
-        config.radarr.clone(),
+        sonarr_config.clone(),
+        radarr_config.clone(),
     ));
     
     // Start orchestrator workers
     download_orchestrator.start().await;
     tracing::info!("Download orchestrator started with new architecture");
+    
+    // Load pending tasks (QUEUED, PAUSED) from database into TaskManager
+    // This ensures resume/pause operations work correctly via WebSocket updates
+    let pending_count = download_orchestrator.load_pending_tasks().await;
+    tracing::info!("Loaded {} pending tasks from database", pending_count);
+
     
     // Initialize Caches
     let search_cache = Cache::builder()
@@ -124,11 +184,27 @@ async fn main() {
         .time_to_live(Duration::from_secs(86400)) // 24 hours
         .build();
     
+    // Create DownloadService for business logic abstraction
+    let download_service = Arc::new(services::DownloadService::new(
+        Arc::clone(&db),
+        Arc::clone(&download_orchestrator),
+    ));
+    
+    // Create TmdbService for centralized TMDB API access
+    let tmdb_service = Arc::new(services::TmdbService::new_with_default_client());
+    
+    // Update config with loaded Arr settings so API sees them
+    let mut app_config = config.clone();
+    app_config.sonarr = sonarr_config.clone();
+    app_config.radarr = radarr_config.clone();
+
     let state = Arc::new(AppState { 
         host_registry,
         download_orchestrator,
+        download_service,
+        tmdb_service,
         tx_broadcast,
-        config: config.clone(),
+        config: app_config,
         db,
         search_cache,
         tmdb_cache,
@@ -138,6 +214,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/health", get(health))
+        .route("/api/health/status", get(api::health::health_status))
         .route("/api/ws", get(websocket::handler))
         .nest("/api/downloads", api::downloads::router())
         .nest("/api/stats", api::stats::router())
@@ -151,12 +228,15 @@ async fn main() {
         .nest("/sabnzbd", api::sabnzbd::router())
         .nest("/api/indexer", api::indexer::router())
         .nest("/newznab/api", api::indexer::router())  // Standard Newznab path
+        .nest("/api/arr", api::arr::router())
+        .nest("/api/media", api::media::router())
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods(Any)
                 .allow_headers(Any)
         )
+        .layer(tower_http::trace::TraceLayer::new_for_http())
         .fallback_service(ServeDir::new("static").not_found_service(ServeFile::new("static/index.html")))
         .with_state(state);
 

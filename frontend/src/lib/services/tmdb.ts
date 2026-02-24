@@ -178,6 +178,12 @@ export async function getTrendingTV(): Promise<TMDBTVShow[]> {
 }
 
 /**
+ * Alias for getTrendingTV - for semantic clarity
+ */
+export const getPopularTVShows = getTrendingTV;
+
+
+/**
  * Get movie details
  */
 export async function getMovieDetails(id: string | number): Promise<TMDBMovieDetails | null> {

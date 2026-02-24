@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import SwitchAccountModal from "$lib/components/SwitchAccountModal.svelte";
+  import Badge from "$lib/components/ui/Badge.svelte";
   import { get } from "svelte/store";
   import { goto } from "$app/navigation";
   import { accountStore } from "$lib/stores/account.svelte";
@@ -12,21 +14,59 @@
     radarrSettings,
   } from "$lib/stores/system";
   import { toasts } from "$lib/stores/toasts";
-  import { IdentityCard } from "$lib/components";
+  import { IdentityCard, Button } from "$lib/components";
 
   // UI State
-  let activeCategory = $state("accounts");
+  let activeCategory: "services" | "system" = $state("services");
+  let endpointTab: "newznab" | "sabnzbd" = $state("newznab");
   let showSonarrApiKey = $state(false);
   let showRadarrApiKey = $state(false);
   let showApiKey = $state(false);
   let sonarrTesting = $state(false);
   let radarrTesting = $state(false);
+  let sonarrConnected = $state(false);
+  let radarrConnected = $state(false);
   let logInterval: any;
+
+  // Switch account form state
+  let showSwitchForm = $state(false);
+  let switchEmail = $state("");
+  let switchPassword = $state("");
+  let switchLoading = $state(false);
+  let showSwitchModal = $state(false);
+  let showSwitchPassword = $state(false);
+
+  // Radial HUD state
+  let activeSector: string | null = $state(null);
+
+  function selectSector(name: string) {
+    activeSector = activeSector === name ? null : name;
+  }
+
+  // Derived VIP status
+  let isVip = $derived(accountStore.isVip);
 
   // Local state for editing (bound to inputs)
   let concurrency = $state(3);
   let threads = $state(4);
   let downloadPath = $state("");
+
+  /** Custom drag handler for the concurrency hex slider */
+  function onSliderPointerDown(e: PointerEvent) {
+    const el = e.currentTarget as HTMLElement;
+    el.setPointerCapture(e.pointerId);
+    updateConcurrencyFromPointer(e, el);
+  }
+  function onSliderPointerMove(e: PointerEvent) {
+    if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId))
+      return;
+    updateConcurrencyFromPointer(e, e.currentTarget as HTMLElement);
+  }
+  function updateConcurrencyFromPointer(e: PointerEvent, el: HTMLElement) {
+    const rect = el.getBoundingClientRect();
+    const pct = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    concurrency = Math.round(pct * 9) + 1;
+  }
 
   let sonarrEnabled = $state(false);
   let sonarrUrl = $state("http://localhost:8989");
@@ -48,6 +88,9 @@
   import type { LogEntry } from "$lib/stores/system";
 
   onMount(() => {
+    // Fetch account info
+    accountStore.fetch();
+
     // Fetch all settings once on mount and initialize form state
     (async () => {
       await Promise.all([
@@ -161,11 +204,24 @@
 
     if (result.success) {
       toasts.success(result.message || "Sonarr connection successful");
+      sonarrConnected = true;
     } else {
       toasts.error(result.message || "Sonarr connection failed");
+      sonarrConnected = false;
     }
     sonarrTesting = false;
   }
+
+  $effect(() => {
+    sonarrUrl;
+    sonarrApiKey;
+    sonarrConnected = false;
+  });
+  $effect(() => {
+    radarrUrl;
+    radarrApiKey;
+    radarrConnected = false;
+  });
 
   async function saveRadarrSettings() {
     const result = await systemStore.saveRadarrSettings({
@@ -193,8 +249,10 @@
 
     if (result.success) {
       toasts.success(result.message || "Radarr connection successful");
+      radarrConnected = true;
     } else {
       toasts.error(result.message || "Radarr connection failed");
+      radarrConnected = false;
     }
     radarrTesting = false;
   }
@@ -207,6 +265,30 @@
       toasts.error("Failed to copy to clipboard");
     }
   }
+
+  async function switchAccount() {
+    if (!switchEmail.trim() || !switchPassword.trim()) {
+      toasts.error("Please enter both email and password");
+      return;
+    }
+    switchLoading = true;
+    try {
+      const ok = await accountStore.switchAccount(
+        switchEmail.trim(),
+        switchPassword.trim(),
+      );
+      if (ok) {
+        toasts.success("Account switched and activated!");
+        switchEmail = "";
+        switchPassword = "";
+        showSwitchForm = false;
+      } else {
+        toasts.error("Failed to switch account — check your credentials");
+      }
+    } finally {
+      switchLoading = false;
+    }
+  }
 </script>
 
 <svelte:head>
@@ -214,707 +296,586 @@
 </svelte:head>
 
 <div class="settings-viewport">
-  <div class="settings-layout-v3">
-    <!-- Top Sub-Header with Tabs -->
-    <header class="settings-sub-header">
-      <div class="header-content">
-        <div class="header-brand">
-          <span class="material-icons">tune</span>
-          <div class="brand-text">
-            <h2>SYSTEM_CONFIG</h2>
-            <div class="status-badge">
-              <span class="dot"></span>
-              CORE_ACTIVE
+  <div class="settings-two-col">
+    <!-- ═══════════ LEFT: Widget Grid (3 columns) ═══════════ -->
+    <div class="widget-grid">
+      <!-- Column 1: Account + Download Engine (1:1.5) -->
+      <div class="widget-col col-first">
+        <!-- Account -->
+        <section class="bento-card bento-account">
+          <div class="bento-head red-accent">
+            <span class="material-icons">person</span>
+            <h3>ACCOUNT INFO</h3>
+          </div>
+          <div class="acc-hero-banner">
+            <div class="acc-dots-overlay"></div>
+            <div class="acc-logo-ring">
+              <img src="/images/logo_fshare.png" alt="Fshare" />
             </div>
           </div>
-        </div>
+          <!-- Info -->
+          <div class="acc-card-info">
+            <div class="acc-info-left">
+              <span class="acc-card-email"
+                >{accountStore.listFormatted.length > 0
+                  ? accountStore.listFormatted[0]?.email
+                  : "No account"}</span
+              >
+              <span class="acc-card-expiry"
+                >{accountStore.listFormatted.length > 0
+                  ? `Expires ${accountStore.listFormatted[0]?.expiry || "—"}`
+                  : "—"}</span
+              >
+            </div>
+            <Badge
+              text={isVip ? "VIP" : "FREE"}
+              variant={isVip ? "vip" : "free"}
+              size="sm"
+            />
+          </div>
+          <div class="acc-card-actions">
+            <!-- Refresh: fixed 36px square -->
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="refresh"
+              width="36px"
+              onclick={() => {
+                if (accountStore.listFormatted[0]?.email) {
+                  accountStore.refresh(accountStore.listFormatted[0].email);
+                  toasts.success("Refreshing...");
+                }
+              }}
+              title="Refresh"
+            />
+            <!-- Switch Account: fills all remaining space -->
+            <div style="flex:1; display:flex;">
+              <Button
+                accent="#dc3c3c"
+                icon="swap_horiz"
+                size="sm"
+                width="100%"
+                onclick={() => (showSwitchModal = true)}>Switch Account</Button
+              >
+            </div>
+          </div>
+        </section>
 
-        <nav class="settings-tabs-v3">
+        <!-- R1C2: Download Engine -->
+        <section class="bento-card bento-download">
+          <div class="bento-head cyan-accent">
+            <span class="material-icons">speed</span>
+            <h3>DOWNLOAD ENGINE</h3>
+          </div>
+          <div class="card-banner cyan-banner">
+            <div class="banner-dots"></div>
+            <div class="banner-logo-ring glow">
+              <img src="/images/flasharr_logo.png" alt="Flasharr" />
+            </div>
+          </div>
+          <!-- Download Engine Body -->
+          <div class="bento-body dl-body">
+            <!-- PATH section -->
+            <div class="dl-section">
+              <div class="dl-path-field">
+                <div class="dl-path-label">
+                  <span class="material-icons">folder_open</span>
+                  <span>PATH</span>
+                </div>
+                <input
+                  type="text"
+                  id="b-dl-path"
+                  bind:value={downloadPath}
+                  placeholder="/media/downloads"
+                  class="dl-path-input"
+                />
+              </div>
+            </div>
+
+            <!-- Concurrency section -->
+            <div class="dl-section dl-section--conc">
+              <div class="dl-conc-hud">
+                <div class="dl-conc-header">
+                  <span class="dl-conc-label">CONCURRENCY</span>
+                </div>
+                <div
+                  class="dl-dot-slider"
+                  style="--pct: {(concurrency - 1) / 9};"
+                  role="slider"
+                  aria-label="Concurrency"
+                  aria-valuemin="1"
+                  aria-valuemax="10"
+                  aria-valuenow={concurrency}
+                  tabindex="0"
+                  onpointerdown={onSliderPointerDown}
+                  onpointermove={onSliderPointerMove}
+                  onkeydown={(e) => {
+                    if (e.key === "ArrowRight" || e.key === "ArrowUp")
+                      concurrency = Math.min(10, concurrency + 1);
+                    if (e.key === "ArrowLeft" || e.key === "ArrowDown")
+                      concurrency = Math.max(1, concurrency - 1);
+                  }}
+                >
+                  <div class="dl-dots" aria-hidden="true">
+                    {#each Array.from({ length: 10 }) as _, i}
+                      <div
+                        class="dl-dot"
+                        class:lit={i < concurrency}
+                        class:hidden={i === concurrency - 1}
+                        style="left: calc({i / 9} * (100% - 44px) + 18px);"
+                      ></div>
+                    {/each}
+                  </div>
+                  <div class="dl-thumb-orb" aria-hidden="true">
+                    {concurrency}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="compact-actions">
+              <div style="flex:1; display:flex;">
+                <Button
+                  accent="#00f3ff"
+                  icon="save"
+                  size="sm"
+                  width="100%"
+                  onclick={saveEngineConfig}>APPLY</Button
+                >
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Column 2: Newznab + Sonarr (1:1) -->
+      <div class="widget-col">
+        <!-- Newznab -->
+        <section class="bento-card bento-newznab">
+          <div class="bento-head violet-accent">
+            <img src="/images/newznab-logo.png" alt="" class="head-logo" />
+            <h3>NEWZNAB</h3>
+          </div>
+          <div class="card-banner violet-banner">
+            <div class="banner-dots"></div>
+            <div class="banner-logo-ring glow">
+              <img src="/images/newznab-logo.png" alt="Newznab" />
+            </div>
+          </div>
+          <div class="bento-body">
+            <div class="inline-field">
+              <span class="inline-label">URL</span><span class="inline-value"
+                >http://flasharr:8484/newznab/api</span
+              ><button
+                class="copy-inline-btn"
+                onclick={() =>
+                  copyToClipboard(
+                    "http://flasharr:8484/newznab/api",
+                    "Endpoint",
+                  )}><span class="material-icons">content_copy</span></button
+              >
+            </div>
+            <div class="inline-field">
+              <span class="inline-label">USER</span><span class="inline-value"
+                >flasharr</span
+              ><button
+                class="copy-inline-btn"
+                onclick={() => copyToClipboard("flasharr", "Username")}
+                ><span class="material-icons">content_copy</span></button
+              >
+            </div>
+            <div class="inline-field">
+              <span class="inline-label">PASS</span><span class="inline-value"
+                >flasharr-pwd</span
+              ><button
+                class="copy-inline-btn"
+                onclick={() => copyToClipboard("flasharr-pwd", "Password")}
+                ><span class="material-icons">content_copy</span></button
+              >
+            </div>
+            <div class="inline-field">
+              <span class="inline-label">KEY</span><span
+                class="inline-value mono"
+                >{showApiKey ? indexerApiKey : "•".repeat(12)}</span
+              ><button
+                class="copy-inline-btn"
+                onclick={() => (showApiKey = !showApiKey)}
+                ><span class="material-icons"
+                  >{showApiKey ? "visibility_off" : "visibility"}</span
+                ></button
+              ><button
+                class="copy-inline-btn"
+                onclick={() => copyToClipboard(indexerApiKey, "API Key")}
+                ><span class="material-icons">content_copy</span></button
+              >
+            </div>
+          </div>
+          <div class="acc-card-actions">
+            <div style="flex:1; display:flex;">
+              <Button
+                accent="#8b5cf6"
+                icon="autorenew"
+                size="sm"
+                width="100%"
+                onclick={generateApiKey}>Regen Key</Button
+              >
+            </div>
+          </div>
+        </section>
+
+        <!-- R2C1: Sonarr -->
+        <section class="bento-card bento-sonarr">
+          <div class="bento-head sky-accent">
+            <img
+              src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/sonarr.png"
+              alt=""
+              class="head-logo"
+            />
+            <h3>SONARR</h3>
+          </div>
+          <div class="card-banner sky-banner">
+            <div class="banner-dots"></div>
+            <div class="banner-logo-ring glow">
+              <img
+                src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/sonarr.png"
+                alt="Sonarr"
+              />
+              <span
+                class="banner-status-dot"
+                class:active={sonarrConnected}
+                title={sonarrConnected ? "Connected" : "Not tested"}
+              ></span>
+            </div>
+          </div>
+          <div class="bento-body">
+            <!-- URL field -->
+            <div class="inline-field">
+              <span class="inline-label">URL</span>
+              <input
+                type="text"
+                id="b-sn-url"
+                bind:value={sonarrUrl}
+                placeholder="http://localhost:8989"
+                class="inline-input-edit"
+              />
+            </div>
+            <!-- KEY field with visibility toggle -->
+            <div class="inline-field">
+              <span class="inline-label">KEY</span>
+              <input
+                type={showSonarrApiKey ? "text" : "password"}
+                id="b-sn-key"
+                bind:value={sonarrApiKey}
+                placeholder="API Key"
+                class="inline-input-edit mono"
+              />
+              <button
+                class="copy-inline-btn"
+                onclick={() => (showSonarrApiKey = !showSonarrApiKey)}
+                ><span class="material-icons"
+                  >{showSonarrApiKey ? "visibility_off" : "visibility"}</span
+                ></button
+              >
+            </div>
+            <div class="compact-actions">
+              <div style="flex:4; display:flex;">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  width="100%"
+                  disabled={sonarrTesting}
+                  onclick={testSonarrConnection}
+                >
+                  <span class="material-icons" class:rotating={sonarrTesting}
+                    >{sonarrTesting ? "refresh" : "sync_alt"}</span
+                  > TEST</Button
+                >
+              </div>
+              <div style="flex:6; display:flex;">
+                <Button
+                  accent="#38bdf8"
+                  size="sm"
+                  width="100%"
+                  onclick={saveSonarrSettings}>SAVE</Button
+                >
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Column 3: SABnzbd + Radarr (1:1) -->
+      <div class="widget-col">
+        <!-- R2C3: SABnzbd -->
+        <section class="bento-card bento-sabnzbd">
+          <div class="bento-head teal-accent">
+            <img
+              src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/sabnzbd.png"
+              alt=""
+              class="head-logo"
+            />
+            <h3>SABNZBD</h3>
+          </div>
+          <div class="card-banner teal-banner">
+            <div class="banner-dots"></div>
+            <div class="banner-logo-ring glow">
+              <img
+                src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/sabnzbd.png"
+                alt="SABnzbd"
+              />
+            </div>
+          </div>
+          <div class="bento-body">
+            <div class="inline-field">
+              <span class="inline-label">URL</span><span class="inline-value"
+                >http://flasharr:8484/sabnzbd/api</span
+              ><button
+                class="copy-inline-btn"
+                onclick={() =>
+                  copyToClipboard(
+                    "http://flasharr:8484/sabnzbd/api",
+                    "Endpoint",
+                  )}><span class="material-icons">content_copy</span></button
+              >
+            </div>
+            <div class="inline-field">
+              <span class="inline-label">USER</span><span class="inline-value"
+                >flasharr</span
+              ><button
+                class="copy-inline-btn"
+                onclick={() => copyToClipboard("flasharr", "Username")}
+                ><span class="material-icons">content_copy</span></button
+              >
+            </div>
+            <div class="inline-field">
+              <span class="inline-label">PASS</span><span class="inline-value"
+                >flasharr-pwd</span
+              ><button
+                class="copy-inline-btn"
+                onclick={() => copyToClipboard("flasharr-pwd", "Password")}
+                ><span class="material-icons">content_copy</span></button
+              >
+            </div>
+            <div class="inline-field">
+              <span class="inline-label">KEY</span><span
+                class="inline-value mono"
+                >{showApiKey ? indexerApiKey : "•".repeat(12)}</span
+              ><button
+                class="copy-inline-btn"
+                onclick={() => (showApiKey = !showApiKey)}
+                ><span class="material-icons"
+                  >{showApiKey ? "visibility_off" : "visibility"}</span
+                ></button
+              ><button
+                class="copy-inline-btn"
+                onclick={() => copyToClipboard(indexerApiKey, "API Key")}
+                ><span class="material-icons">content_copy</span></button
+              >
+            </div>
+          </div>
+          <div class="acc-card-actions">
+            <div style="flex:1; display:flex;">
+              <Button
+                accent="#00d4aa"
+                icon="autorenew"
+                size="sm"
+                width="100%"
+                onclick={generateApiKey}>Regen Key</Button
+              >
+            </div>
+          </div>
+        </section>
+
+        <!-- Radarr -->
+        <section class="bento-card bento-radarr">
+          <div class="bento-head amber-accent">
+            <img
+              src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/radarr.png"
+              alt=""
+              class="head-logo"
+            />
+            <h3>RADARR</h3>
+          </div>
+          <div class="card-banner amber-banner">
+            <div class="banner-dots"></div>
+            <div class="banner-logo-ring glow">
+              <img
+                src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/radarr.png"
+                alt="Radarr"
+              />
+              <span
+                class="banner-status-dot"
+                class:active={radarrConnected}
+                title={radarrConnected ? "Connected" : "Not tested"}
+              ></span>
+            </div>
+          </div>
+          <div class="bento-body">
+            <!-- URL field -->
+            <div class="inline-field">
+              <span class="inline-label">URL</span>
+              <input
+                type="text"
+                id="b-rd-url"
+                bind:value={radarrUrl}
+                placeholder="http://localhost:7878"
+                class="inline-input-edit"
+              />
+            </div>
+            <!-- KEY field with visibility toggle -->
+            <div class="inline-field">
+              <span class="inline-label">KEY</span>
+              <input
+                type={showRadarrApiKey ? "text" : "password"}
+                id="b-rd-key"
+                bind:value={radarrApiKey}
+                placeholder="API Key"
+                class="inline-input-edit mono"
+              />
+              <button
+                class="copy-inline-btn"
+                onclick={() => (showRadarrApiKey = !showRadarrApiKey)}
+                ><span class="material-icons"
+                  >{showRadarrApiKey ? "visibility_off" : "visibility"}</span
+                ></button
+              >
+            </div>
+            <div class="compact-actions">
+              <div style="flex:4; display:flex;">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  width="100%"
+                  disabled={radarrTesting}
+                  onclick={testRadarrConnection}
+                >
+                  <span class="material-icons" class:rotating={radarrTesting}
+                    >{radarrTesting ? "refresh" : "sync_alt"}</span
+                  > TEST</Button
+                >
+              </div>
+              <div style="flex:6; display:flex;">
+                <Button
+                  accent="#f59e0b"
+                  size="sm"
+                  width="100%"
+                  onclick={saveRadarrSettings}>SAVE</Button
+                >
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- ═══════════ RIGHT: System Log / Activity Panel ═══════════ -->
+    <aside class="log-panel">
+      <div class="log-panel-header">
+        <div class="log-toggle">
           <button
-            class="tab-btn-v3"
-            class:active={activeCategory === "accounts"}
-            onclick={() => (activeCategory = "accounts")}
-          >
-            <span class="material-icons">account_circle</span>
-            <span>Accounts</span>
-          </button>
-          <button
-            class="tab-btn-v3"
-            class:active={activeCategory === "engine"}
-            onclick={() => (activeCategory = "engine")}
-          >
-            <span class="material-icons">bolt</span>
-            <span>Engine</span>
-          </button>
-          <button
-            class="tab-btn-v3"
+            class="log-tab"
             class:active={activeCategory === "services"}
             onclick={() => (activeCategory = "services")}
           >
-            <span class="material-icons">hub</span>
-            <span>Services</span>
+            <span class="material-icons">terminal</span> System Log
           </button>
           <button
-            class="tab-btn-v3"
+            class="log-tab"
             class:active={activeCategory === "system"}
             onclick={() => (activeCategory = "system")}
           >
-            <span class="material-icons">terminal</span>
-            <span>System</span>
+            <span class="material-icons">history</span> Activity
           </button>
-        </nav>
+        </div>
+        {#if activeCategory === "services"}
+          <button class="btn-clear-log" onclick={clearLogs} title="Clear logs">
+            <span class="material-icons">delete_sweep</span>
+          </button>
+        {/if}
       </div>
-    </header>
 
-    <!-- Main Dynamic Content -->
-    <main class="settings-main-v3">
-      <div class="content-container-v3">
-        {#if activeCategory === "accounts"}
-          <section class="settings-section max-w-3xl">
-            <div class="section-v3-title">
-              <h3>FShare Account</h3>
-              <p>
-                Configure your FShare premium account credentials and monitor
-                quota usage.
-              </p>
+      <div class="log-panel-body">
+        {#if activeCategory === "services"}
+          <!-- System Log Mode -->
+          {#if logs.length === 0}
+            <div class="log-empty">
+              <span class="material-icons">hourglass_empty</span> Waiting for system
+              signals...
             </div>
-
-            {#if accountStore.listFormatted.length > 0}
-              {#each accountStore.listFormatted as acc}
-                <div class="account-status-card">
-                  <div class="account-header">
-                    <div class="account-info">
-                      <div class="account-avatar">
-                        <span class="material-icons">account_circle</span>
-                      </div>
-                      <div class="account-details">
-                        <div class="account-email">{acc.email}</div>
-                        <div class="account-rank">{acc.rank} Account</div>
-                      </div>
-                    </div>
-                    <button
-                      class="btn-refresh"
-                      onclick={() => accountStore.refresh(acc.email)}
+          {:else}
+            {#each logs as log}
+              <div class="log-line {log.level.toLowerCase()}">
+                <span class="log-ts">[{log.timestamp}]</span>
+                <span class="log-lvl">{log.level}</span>
+                <span class="log-msg">{log.message}</span>
+              </div>
+            {/each}
+          {/if}
+        {:else}
+          <!-- Activity Mode -->
+          <div class="activity-feed">
+            {#if logs.length === 0}
+              <div class="log-empty">
+                <span class="material-icons">inbox</span> No recent activity
+              </div>
+            {:else}
+              {#each logs.filter((l) => l.level === "INFO" || l.level === "WARN") as log}
+                <div class="activity-item">
+                  <div class="activity-icon">
+                    <span class="material-icons"
+                      >{log.level === "WARN"
+                        ? "warning"
+                        : log.message.includes("download")
+                          ? "cloud_download"
+                          : log.message.includes("import")
+                            ? "move_to_inbox"
+                            : "check_circle"}</span
                     >
-                      <span class="material-icons">refresh</span>
-                      REFRESH
-                    </button>
                   </div>
-
-                  <div class="quota-section">
-                    <div class="quota-header">
-                      <span>Storage Quota</span>
-                      <span class="quota-text"
-                        >{acc.quotaUsed} / {acc.quotaTotal}</span
-                      >
-                    </div>
-                    <div class="quota-bar">
-                      <div
-                        class="quota-fill"
-                        style="width: {acc.quotaPercent}%"
-                      ></div>
-                    </div>
-                  </div>
-
-                  <div class="account-meta">
-                    <div class="meta-item">
-                      <span class="material-icons">event</span>
-                      <span>Expires: {acc.expiry}</span>
-                    </div>
+                  <div class="activity-content">
+                    <span class="activity-msg">{log.message}</span>
+                    <span class="activity-time">{log.timestamp}</span>
                   </div>
                 </div>
               {/each}
-            {:else}
-              <div class="premium-config-card">
-                <div class="empty-state">
-                  <span class="material-icons">cloud_off</span>
-                  <h4>No Account Connected</h4>
-                  <p>
-                    Please complete the setup wizard to configure your FShare
-                    account.
-                  </p>
-                </div>
-              </div>
             {/if}
-          </section>
-        {/if}
-
-        {#if activeCategory === "engine"}
-          <section class="settings-section max-w-3xl">
-            <div class="section-v3-title">
-              <h3>Download Engine</h3>
-              <p>Core performance tuning and storage orchestration.</p>
-            </div>
-            <div class="premium-config-card">
-              <div class="input-v3-group">
-                <label for="v3-path">SYSTEM DOWNLOAD PATH</label>
-                <div class="input-v3-box">
-                  <span class="material-icons">folder</span>
-                  <input
-                    type="text"
-                    id="v3-path"
-                    bind:value={downloadPath}
-                    placeholder="/media/downloads"
-                  />
-                </div>
-                <small>Absolute path on host filesystem</small>
-              </div>
-
-              <div class="input-v3-group">
-                <div class="label-flex">
-                  <label for="v3-concurrency">MAX CONCURRENCY</label>
-                  <span class="value-chip">{concurrency} TASKS</span>
-                </div>
-                <div
-                  class="range-v3-wrapper"
-                  style="--slider-val: {((concurrency - 1) / 9) *
-                    100}%; --current-val: '{concurrency}';"
-                >
-                  <div class="v3-track-dots">
-                    {#each Array(10) as _, i}
-                      <div class="dot" class:active={concurrency > i}></div>
-                    {/each}
-                  </div>
-                  <input
-                    type="range"
-                    id="v3-concurrency"
-                    min="1"
-                    max="10"
-                    bind:value={concurrency}
-                  />
-                  <div class="marks-premium">
-                    <span>1</span>
-                    <span>5</span>
-                    <span>10</span>
-                  </div>
-                </div>
-              </div>
-
-              <div class="card-action-v3">
-                <button class="btn-apply-v3" onclick={saveEngineConfig}>
-                  <span class="material-icons">save</span>
-                  APPLY ENGINE SETTINGS
-                </button>
-              </div>
-            </div>
-          </section>
-        {/if}
-
-        {#if activeCategory === "services"}
-          <section class="settings-section">
-            <div class="section-v3-title">
-              <h3>Services & Integrations</h3>
-              <p>Configure Newznab indexer API and Arr cloud integrations.</p>
-            </div>
-            <div class="services-grid-3col">
-              <!-- Newznab Indexer -->
-              <div class="integration-card">
-                <div class="integration-card-header">
-                  <div class="integration-brand">
-                    <img
-                      src="/images/newznab-logo.png"
-                      alt="Newznab"
-                      class="integration-icon"
-                    />
-                    <span>Newznab</span>
-                  </div>
-                </div>
-                <div class="integration-card-body">
-                  <div class="node-field">
-                    <label for="indexer-endpoint">INDEXER ENDPOINT</label>
-                    <input
-                      type="text"
-                      id="indexer-endpoint"
-                      value="http://flasharr:8484/newznab/api"
-                      readonly
-                      class="readonly-input"
-                    />
-                  </div>
-                  <div class="node-field">
-                    <label for="newznab-username">USERNAME</label>
-                    <input
-                      type="text"
-                      id="newznab-username"
-                      value="flasharr"
-                      readonly
-                      class="readonly-input"
-                    />
-                  </div>
-                  <div class="node-field">
-                    <label for="newznab-password">PASSWORD</label>
-                    <input
-                      type="text"
-                      id="newznab-password"
-                      value="flasharr-pwd"
-                      readonly
-                      class="readonly-input"
-                    />
-                  </div>
-                  <div class="node-field">
-                    <label for="indexer-key">API KEY</label>
-                    <div class="pass-box">
-                      <input
-                        type={showApiKey ? "text" : "password"}
-                        id="indexer-key"
-                        value={indexerApiKey}
-                        readonly
-                      />
-                      <button
-                        class="visibility-toggle"
-                        onclick={() => (showApiKey = !showApiKey)}
-                      >
-                        <span class="material-icons"
-                          >{showApiKey ? "visibility_off" : "visibility"}</span
-                        >
-                      </button>
-                    </div>
-                  </div>
-                  <div class="node-actions">
-                    <button
-                      class="btn-save full-width"
-                      onclick={generateApiKey}
-                    >
-                      <span class="material-icons">refresh</span>
-                      REGENERATE KEY
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <!-- SABnzbd Download Client -->
-              <div class="integration-card">
-                <div class="integration-card-header">
-                  <div class="integration-brand">
-                    <img
-                      src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/sabnzbd.png"
-                      alt="SABnzbd"
-                      class="integration-icon"
-                    />
-                    <span>SABnzbd</span>
-                  </div>
-                </div>
-                <div class="integration-card-body">
-                  <div class="node-field">
-                    <label for="sabnzbd-endpoint"
-                      >DOWNLOAD CLIENT ENDPOINT</label
-                    >
-                    <input
-                      type="text"
-                      id="sabnzbd-endpoint"
-                      value="http://flasharr:8484/sabnzbd/api"
-                      readonly
-                      class="readonly-input"
-                    />
-                  </div>
-                  <div class="node-field">
-                    <label for="sabnzbd-username">USERNAME</label>
-                    <input
-                      type="text"
-                      id="sabnzbd-username"
-                      value="flasharr"
-                      readonly
-                      class="readonly-input"
-                    />
-                  </div>
-                  <div class="node-field">
-                    <label for="sabnzbd-password">PASSWORD</label>
-                    <input
-                      type="text"
-                      id="sabnzbd-password"
-                      value="flasharr-pwd"
-                      readonly
-                      class="readonly-input"
-                    />
-                  </div>
-                  <div class="node-field">
-                    <label for="sabnzbd-key">API KEY</label>
-                    <div class="pass-box">
-                      <input
-                        type={showApiKey ? "text" : "password"}
-                        id="sabnzbd-key"
-                        value={indexerApiKey}
-                        readonly
-                      />
-                      <button
-                        class="visibility-toggle"
-                        onclick={() => (showApiKey = !showApiKey)}
-                      >
-                        <span class="material-icons"
-                          >{showApiKey ? "visibility_off" : "visibility"}</span
-                        >
-                      </button>
-                    </div>
-                  </div>
-                  <div class="node-field">
-                    <div class="field-label">COMPATIBILITY</div>
-                    <div class="info-badge">
-                      <span class="material-icons">check_circle</span>
-                      <span>SABnzbd v3.0.0 Compatible</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Sonarr -->
-              <div class="integration-card">
-                <div class="integration-card-header">
-                  <div class="integration-brand">
-                    <img
-                      src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/sonarr.png"
-                      alt="Sonarr"
-                      class="integration-icon"
-                    />
-                    <span>Sonarr</span>
-                  </div>
-                  <label class="hybrid-switch">
-                    <input type="checkbox" bind:checked={sonarrEnabled} />
-                    <span class="switch-ui"></span>
-                  </label>
-                </div>
-                {#if sonarrEnabled}
-                  <div class="integration-card-body">
-                    <div class="node-field">
-                      <label for="sn-url">SERVICE URL</label>
-                      <input
-                        type="text"
-                        id="sn-url"
-                        bind:value={sonarrUrl}
-                        placeholder="http://localhost:8989"
-                      />
-                    </div>
-                    <div class="node-field">
-                      <label for="sn-key">API KEY</label>
-                      <div class="pass-box">
-                        <input
-                          type={showSonarrApiKey ? "text" : "password"}
-                          id="sn-key"
-                          bind:value={sonarrApiKey}
-                          placeholder="Enter your Sonarr API key"
-                        />
-                        <button
-                          class="visibility-toggle"
-                          onclick={() => (showSonarrApiKey = !showSonarrApiKey)}
-                        >
-                          <span class="material-icons"
-                            >{showSonarrApiKey
-                              ? "visibility_off"
-                              : "visibility"}</span
-                          >
-                        </button>
-                      </div>
-                    </div>
-                    <div class="node-toggle">
-                      <div class="txt">
-                        <span>Auto-Import</span>
-                        <small>Trigger import on download completion</small>
-                      </div>
-                      <label class="v3-switch-mini">
-                        <input
-                          type="checkbox"
-                          bind:checked={sonarrAutoImport}
-                        />
-                        <span class="slider-mini"></span>
-                      </label>
-                    </div>
-                    <div class="node-actions">
-                      <button
-                        class="btn-test"
-                        onclick={testSonarrConnection}
-                        disabled={sonarrTesting}
-                      >
-                        <span
-                          class="material-icons"
-                          class:rotating={sonarrTesting}
-                          >{sonarrTesting ? "refresh" : "sync_alt"}</span
-                        >
-                        {sonarrTesting ? "TESTING" : "TEST"}
-                      </button>
-                      <button class="btn-save" onclick={saveSonarrSettings}
-                        >SAVE</button
-                      >
-                    </div>
-                  </div>
-                {/if}
-              </div>
-
-              <!-- Radarr -->
-              <div class="integration-card">
-                <div class="integration-card-header">
-                  <div class="integration-brand">
-                    <img
-                      src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/radarr.png"
-                      alt="Radarr"
-                      class="integration-icon"
-                    />
-                    <span>Radarr</span>
-                  </div>
-                  <label class="hybrid-switch">
-                    <input type="checkbox" bind:checked={radarrEnabled} />
-                    <span class="switch-ui"></span>
-                  </label>
-                </div>
-                {#if radarrEnabled}
-                  <div class="integration-card-body">
-                    <div class="node-field">
-                      <label for="rd-url">SERVICE URL</label>
-                      <input
-                        type="text"
-                        id="rd-url"
-                        bind:value={radarrUrl}
-                        placeholder="http://localhost:7878"
-                      />
-                    </div>
-                    <div class="node-field">
-                      <label for="rd-key">API KEY</label>
-                      <div class="pass-box">
-                        <input
-                          type={showRadarrApiKey ? "text" : "password"}
-                          id="rd-key"
-                          bind:value={radarrApiKey}
-                          placeholder="Enter your Radarr API key"
-                        />
-                        <button
-                          class="visibility-toggle"
-                          onclick={() => (showRadarrApiKey = !showRadarrApiKey)}
-                        >
-                          <span class="material-icons"
-                            >{showRadarrApiKey
-                              ? "visibility_off"
-                              : "visibility"}</span
-                          >
-                        </button>
-                      </div>
-                    </div>
-                    <div class="node-toggle">
-                      <div class="txt">
-                        <span>Auto-Import</span>
-                        <small>Trigger import on download completion</small>
-                      </div>
-                      <label class="v3-switch-mini">
-                        <input
-                          type="checkbox"
-                          bind:checked={radarrAutoImport}
-                        />
-                        <span class="slider-mini"></span>
-                      </label>
-                    </div>
-                    <div class="node-actions">
-                      <button
-                        class="btn-test"
-                        onclick={testRadarrConnection}
-                        disabled={radarrTesting}
-                      >
-                        <span
-                          class="material-icons"
-                          class:rotating={radarrTesting}
-                          >{radarrTesting ? "refresh" : "sync_alt"}</span
-                        >
-                        {radarrTesting ? "TESTING" : "TEST"}
-                      </button>
-                      <button class="btn-save" onclick={saveRadarrSettings}
-                        >SAVE</button
-                      >
-                    </div>
-                  </div>
-                {/if}
-              </div>
-            </div>
-          </section>
-        {/if}
-
-        {#if activeCategory === "system"}
-          <section
-            class="settings-section h-full flex flex-col overflow-hidden"
-          >
-            <div class="section-v3-title">
-              <h3>System Core Logs</h3>
-              <p>
-                Real-time telemetry stream and internal security diagnostics.
-              </p>
-            </div>
-
-            <div class="system-v3-layout">
-              <div class="terminal-pane-v3">
-                <div class="pane-header">
-                  <div class="stream-status">
-                    <span class="dot-pulse"></span>
-                    <span>LIVE_EVENT_FEED</span>
-                  </div>
-                  <button class="btn-clear" onclick={clearLogs}>
-                    <span class="material-icons">delete_sweep</span>
-                    CLEAR
-                  </button>
-                </div>
-                <div class="pane-body">
-                  {#if logs.length === 0}
-                    <div class="empty-feed">Waiting for system signals...</div>
-                  {:else}
-                    {#each logs as log}
-                      <div class="log-line-v3 {log.level.toLowerCase()}">
-                        <span class="log-ts">[{log.timestamp}]</span>
-                        <span class="log-lvl">{log.level}</span>
-                        <span class="log-msg">{log.message}</span>
-                      </div>
-                    {/each}
-                  {/if}
-                </div>
-              </div>
-
-              <div class="controls-pane-v3">
-                <div class="v3-side-card">
-                  <div class="card-title">
-                    <span class="material-icons">security</span>
-                    <h4>Core Config</h4>
-                  </div>
-                  <div class="card-list">
-                    <div class="v3-toggle-item">
-                      <div class="info">
-                        <span>Debug logs</span>
-                        <p>Verbose diagnostics</p>
-                      </div>
-                      <label class="v3-switch-mini">
-                        <input type="checkbox" checked={true} />
-                        <span class="slider-mini"></span>
-                      </label>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
+          </div>
         {/if}
       </div>
-    </main>
+
+      <div class="log-panel-footer">
+        <span class="dot-pulse"></span>
+        <span class="log-status">LIVE · {logs.length} events</span>
+      </div>
+    </aside>
   </div>
 </div>
 
+<SwitchAccountModal
+  bind:open={showSwitchModal}
+  onclose={() => (showSwitchModal = false)}
+/>
+
 <style>
+  /* ============================== */
+  /* Two-Column Settings Layout      */
+  /* ============================== */
   .settings-viewport {
     height: 100%;
     overflow: hidden;
-    background: #06080b;
+    padding: 1rem;
   }
-
-  .settings-layout-v3 {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-  }
-
-  .settings-sub-header {
-    background: rgba(10, 12, 18, 0.8);
-    backdrop-filter: blur(20px);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    padding: 0 2rem;
-    z-index: 100;
-    flex-shrink: 0;
-  }
-
-  .header-content {
-    max-width: 1400px;
-    margin: 0 auto;
-    height: 80px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .header-brand {
-    display: flex;
-    align-items: center;
+  .settings-two-col {
+    display: grid;
+    grid-template-columns: 3fr 1fr;
     gap: 1rem;
-  }
-
-  .header-brand .material-icons {
-    font-size: 2rem;
-    color: var(--color-primary);
-    filter: drop-shadow(0 0 8px rgba(0, 243, 255, 0.3));
-  }
-
-  .brand-text h2 {
-    font-size: 0.9rem;
-    font-weight: 900;
-    letter-spacing: 0.1em;
-    color: #fff;
-    margin: 0;
-  }
-
-  .status-badge {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.6rem;
-    font-weight: 800;
-    color: var(--color-primary);
-    opacity: 0.8;
-  }
-
-  .status-badge .dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--color-primary);
-  }
-
-  .settings-tabs-v3 {
-    display: flex;
-    gap: 0.5rem;
     height: 100%;
-    align-items: center;
-  }
-
-  .tab-btn-v3 {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.75rem 1.25rem;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 12px;
-    color: var(--text-muted);
-    cursor: pointer;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-    font-weight: 700;
-    font-size: 0.85rem;
-  }
-
-  .tab-btn-v3:hover {
-    color: #fff;
-    background: rgba(255, 255, 255, 0.03);
-  }
-
-  .tab-btn-v3.active {
-    color: var(--color-primary);
-    background: rgba(0, 243, 255, 0.08);
-    border-color: rgba(0, 243, 255, 0.2);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-  }
-
-  .settings-main-v3 {
-    flex: 1;
-    overflow-y: auto;
-    padding: 2rem;
-    background: radial-gradient(
-      circle at 50% 0%,
-      rgba(0, 243, 255, 0.03) 0%,
-      transparent 70%
-    );
-  }
-
-  .content-container-v3 {
-    max-width: 1400px;
-    margin: 0 auto;
-    min-height: 100%;
-  }
-
-  .settings-section {
     animation: slideUp 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   }
-
   @keyframes slideUp {
     from {
       opacity: 0;
-      transform: translateY(15px);
+      transform: translateY(12px);
     }
     to {
       opacity: 1;
@@ -922,312 +883,1238 @@
     }
   }
 
-  .section-v3-title {
-    margin-bottom: 2.5rem;
-  }
-
-  .section-v3-title h3 {
-    font-size: 1.75rem;
-    font-weight: 800;
-    color: #fff;
-    margin: 0 0 0.5rem 0;
-  }
-
-  .section-v3-title p {
-    color: var(--text-secondary);
-    font-size: 1rem;
-    margin: 0;
-  }
-
-  .accounts-grid-v3 {
+  /* ── Left: 3-Column Widget Grid ── */
+  .widget-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-    gap: 1.5rem;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.1fr) minmax(0, 1.1fr);
+    gap: 0.65rem;
+    height: 100%;
+    overflow: hidden;
   }
-
-  .add-account-card-v3 {
-    background: rgba(255, 255, 255, 0.02);
-    border: 2px dashed rgba(255, 255, 255, 0.1);
-    border-radius: 24px;
-    padding: 3rem;
-    cursor: pointer;
-    transition: all 0.3s;
-    color: var(--text-muted);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .add-account-card-v3:hover {
-    border-color: var(--color-primary);
-    background: rgba(0, 243, 255, 0.05);
-    color: var(--color-primary);
-    transform: translateY(-4px);
-  }
-
-  /* Account Status Card */
-  .account-status-card {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 20px;
-    padding: 2rem;
+  .widget-col {
     display: flex;
     flex-direction: column;
-    gap: 1.5rem;
+    gap: 0.65rem;
+    min-height: 0;
+  }
+  .widget-col .bento-card {
+    flex: 1;
+    min-height: 0;
+  }
+  .col-first .bento-card:first-child {
+    flex: 1;
+  }
+  .col-first .bento-card:last-child {
+    flex: 2;
   }
 
-  .account-header {
+  .bento-card {
+    border-radius: 14px;
+    background: rgba(8, 10, 15, 0.7);
+    backdrop-filter: blur(12px);
+    border: 1px solid
+      color-mix(
+        in srgb,
+        var(--card-accent, rgba(255, 255, 255, 0.05)) 35%,
+        transparent
+      );
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
+    flex-direction: column;
+    overflow: hidden;
+    transition:
+      transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 0.25s,
+      box-shadow 0.3s;
   }
-
-  .account-info {
-    display: flex;
-    align-items: center;
-    gap: 1.25rem;
-  }
-
-  .account-avatar {
-    width: 56px;
-    height: 56px;
-    border-radius: 50%;
-    background: linear-gradient(
-      135deg,
-      rgba(0, 243, 255, 0.2),
-      rgba(0, 243, 255, 0.05)
+  .bento-card:hover {
+    transform: translateY(-3px);
+    border-color: color-mix(
+      in srgb,
+      var(--card-accent, rgba(255, 255, 255, 0.12)) 80%,
+      transparent
     );
+    box-shadow:
+      0 0 0 1px
+        color-mix(in srgb, var(--card-accent, transparent) 40%, transparent),
+      0 12px 40px rgba(0, 0, 0, 0.4),
+      0 0 32px
+        color-mix(in srgb, var(--card-accent, transparent) 20%, transparent);
+  }
+  /* Per-card accent colors */
+  .bento-account {
+    --card-accent: rgba(220, 60, 60, 0.5);
+  }
+  .bento-download {
+    --card-accent: rgba(0, 243, 255, 0.4);
+  }
+  .bento-newznab {
+    --card-accent: rgba(139, 92, 246, 0.5);
+  }
+  .bento-sonarr {
+    --card-accent: rgba(56, 189, 248, 0.5);
+  }
+  .bento-radarr {
+    --card-accent: rgba(245, 158, 11, 0.5);
+  }
+  .bento-sabnzbd {
+    --card-accent: rgba(0, 212, 170, 0.5);
+  }
+
+  /* ── Card Header ── */
+  .bento-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.55rem 0.7rem;
+    border-bottom: none;
+    font-family: var(--font-mono, monospace);
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+    overflow: hidden;
+    background: transparent;
+  }
+  .bento-head::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(rgba(0, 0, 0, 0.25) 1px, transparent 1px);
+    background-size: 6px 6px;
+    mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 100%
+    );
+    -webkit-mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 100%
+    );
+    pointer-events: none;
+  }
+  .bento-head h3 {
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    color: #fff;
+    margin: 0;
+    flex: 1;
+  }
+  .bento-head .material-icons {
+    font-size: 1.2rem;
+  }
+  .head-logo {
+    width: 22px;
+    height: 22px;
+    border-radius: 4px;
+    object-fit: contain;
+  }
+  .bento-sw {
+    margin-left: auto;
+  }
+
+  /* ── Accent Colors ── */
+  .cyan-accent {
+    border-left: 3px solid rgba(0, 243, 255, 0.5);
+  }
+  .cyan-accent .material-icons {
+    color: #00f3ff;
+  }
+  .cyan-accent::after {
+    background-image: radial-gradient(
+      rgba(0, 243, 255, 0.25) 1px,
+      transparent 1px
+    );
+    mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 70%
+    );
+    -webkit-mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 70%
+    );
+  }
+
+  .red-accent {
+    border-left: 3px solid rgba(220, 60, 60, 0.6);
+  }
+  .red-accent .material-icons {
+    color: #dc3c3c;
+  }
+  .red-accent::after {
+    background-image: radial-gradient(
+      rgba(220, 60, 60, 0.3) 1px,
+      transparent 1px
+    );
+    mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 70%
+    );
+    -webkit-mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 70%
+    );
+  }
+
+  .violet-accent {
+    border-left: 3px solid rgba(139, 92, 246, 0.5);
+  }
+  .violet-accent .material-icons {
+    color: #8b5cf6;
+  }
+  .violet-accent::after {
+    background-image: radial-gradient(
+      rgba(139, 92, 246, 0.25) 1px,
+      transparent 1px
+    );
+    mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 70%
+    );
+    -webkit-mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 70%
+    );
+  }
+
+  .sky-accent {
+    border-left: 3px solid rgba(56, 189, 248, 0.5);
+  }
+  .sky-accent .material-icons {
+    color: #38bdf8;
+  }
+  .sky-accent::after {
+    background-image: radial-gradient(
+      rgba(56, 189, 248, 0.25) 1px,
+      transparent 1px
+    );
+    mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 70%
+    );
+    -webkit-mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 70%
+    );
+  }
+
+  .amber-accent {
+    border-left: 3px solid rgba(245, 158, 11, 0.5);
+  }
+  .amber-accent .material-icons {
+    color: #f59e0b;
+  }
+  .amber-accent::after {
+    background-image: radial-gradient(
+      rgba(245, 158, 11, 0.25) 1px,
+      transparent 1px
+    );
+    mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 70%
+    );
+    -webkit-mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 70%
+    );
+  }
+
+  .teal-accent {
+    border-left: 3px solid rgba(0, 212, 170, 0.5);
+  }
+  .teal-accent .material-icons {
+    color: #00d4aa;
+  }
+  .teal-accent::after {
+    background-image: radial-gradient(
+      rgba(0, 212, 170, 0.25) 1px,
+      transparent 1px
+    );
+    mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 70%
+    );
+    -webkit-mask-image: linear-gradient(
+      to right,
+      rgba(0, 0, 0, 1) 0%,
+      rgba(0, 0, 0, 0) 70%
+    );
+  }
+
+  /* ── Shared Card Banner ── */
+  .card-banner {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
-    border: 2px solid rgba(0, 243, 255, 0.3);
+    height: 115px;
+    box-sizing: border-box;
+    flex-shrink: 0;
+  }
+  .banner-dots {
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(rgba(0, 0, 0, 0.25) 1px, transparent 1px);
+    background-size: 6px 6px;
+    pointer-events: none;
+  }
+  .banner-logo-ring {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.15);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    position: relative;
+    z-index: 1;
+  }
+  .banner-logo-ring img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .banner-logo-ring .material-icons {
+    font-size: 1.4rem;
+    color: rgba(255, 255, 255, 0.7);
   }
 
-  .account-avatar .material-icons {
-    font-size: 2rem;
-    color: var(--color-primary);
+  /* Glow variant: for transparent-bg logos — no crop, color drop-shadow */
+  .banner-logo-ring.glow {
+    border-radius: 0;
+    border: none;
+    overflow: visible;
+    background: transparent;
+    box-shadow: none;
+  }
+  .banner-logo-ring.glow img {
+    /* Base: overridden per card below */
+    width: 44px;
+    height: 44px;
+    object-fit: contain;
+  }
+  /* Optical normalization: target ~33px visible content.
+     each logo's fill ratio = visible content / canvas size.
+     img size = 33px / fill_ratio                            */
+  .bento-download .banner-logo-ring.glow img {
+    width: 94px;
+    height: 94px;
+  } /* Flasharr: ~40% fill, +15% */
+  .bento-newznab .banner-logo-ring.glow img {
+    width: 44px;
+    height: 44px;
+  } /* Newznab:  ~87% fill, +15% */
+  .bento-sonarr .banner-logo-ring.glow img {
+    width: 40px;
+    height: 40px;
+  } /* Sonarr:   ~82% fill */
+  .bento-radarr .banner-logo-ring.glow img {
+    width: 44px;
+    height: 44px;
+  } /* Radarr:   ~75% fill */
+  .bento-sabnzbd .banner-logo-ring.glow img {
+    width: 44px;
+    height: 44px;
+  } /* SABnzbd:  ~75% fill */
+
+  /* ── Status Dot ── */
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.2);
+    margin-left: auto;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.06);
+    transition:
+      background 0.3s,
+      box-shadow 0.3s;
+  }
+  .status-dot.active {
+    background: #22c55e;
+    box-shadow:
+      0 0 6px rgba(34, 197, 94, 0.7),
+      0 0 0 2px rgba(34, 197, 94, 0.2);
   }
 
-  .account-details {
+  /* Banner logo status dot — bottom-right overlay */
+  .banner-logo-ring {
+    position: relative;
+  }
+  .banner-status-dot {
+    position: absolute;
+    bottom: -3px;
+    right: -3px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: rgba(80, 80, 90, 0.85);
+    border: 2px solid rgba(8, 10, 15, 0.95);
+    transition:
+      background 0.3s,
+      box-shadow 0.3s;
+    z-index: 2;
+  }
+  .banner-status-dot.active {
+    background: #22c55e;
+    box-shadow: 0 0 8px rgba(34, 197, 94, 0.85);
+  }
+  .cyan-banner .banner-logo-ring.glow img {
+    filter: drop-shadow(0 0 10px rgba(0, 243, 255, 0.7))
+      drop-shadow(0 0 20px rgba(0, 243, 255, 0.35));
+  }
+  .sky-banner .banner-logo-ring.glow img {
+    filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.7))
+      drop-shadow(0 0 20px rgba(56, 189, 248, 0.35));
+  }
+  .amber-banner .banner-logo-ring.glow img {
+    filter: drop-shadow(0 0 10px rgba(245, 158, 11, 0.7))
+      drop-shadow(0 0 20px rgba(245, 158, 11, 0.35));
+  }
+  .teal-banner .banner-logo-ring.glow img {
+    filter: drop-shadow(0 0 10px rgba(0, 212, 170, 0.7))
+      drop-shadow(0 0 20px rgba(0, 212, 170, 0.35));
+  }
+  .violet-banner .banner-logo-ring.glow img {
+    filter: drop-shadow(0 0 10px rgba(139, 92, 246, 0.7))
+      drop-shadow(0 0 20px rgba(139, 92, 246, 0.35));
+  }
+
+  /* Also glow the Fshare logo in Account card */
+  .acc-logo-ring img {
+    filter: drop-shadow(0 0 8px rgba(220, 60, 60, 0.5));
+  }
+
+  /* Banner color variants */
+  .cyan-banner {
+    background: linear-gradient(
+      135deg,
+      rgba(0, 243, 255, 0.15) 0%,
+      rgba(0, 180, 200, 0.06) 50%,
+      rgba(10, 10, 15, 0.5) 100%
+    );
+  }
+  .violet-banner {
+    background: linear-gradient(
+      135deg,
+      rgba(139, 92, 246, 0.15) 0%,
+      rgba(100, 60, 200, 0.06) 50%,
+      rgba(10, 10, 15, 0.5) 100%
+    );
+  }
+  .sky-banner {
+    background: linear-gradient(
+      135deg,
+      rgba(56, 189, 248, 0.15) 0%,
+      rgba(40, 140, 200, 0.06) 50%,
+      rgba(10, 10, 15, 0.5) 100%
+    );
+  }
+  .amber-banner {
+    background: linear-gradient(
+      135deg,
+      rgba(245, 158, 11, 0.15) 0%,
+      rgba(200, 120, 10, 0.06) 50%,
+      rgba(10, 10, 15, 0.5) 100%
+    );
+  }
+  .teal-banner {
+    background: linear-gradient(
+      135deg,
+      rgba(0, 212, 170, 0.15) 0%,
+      rgba(0, 160, 130, 0.06) 50%,
+      rgba(10, 10, 15, 0.5) 100%
+    );
+  }
+
+  /* ── Card Body ── */
+  .bento-body {
+    padding: 0.5rem 0.75rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    flex: 1;
+    overflow-y: auto;
+  }
+  .bento-disabled {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    flex: 1;
+    color: rgba(255, 255, 255, 0.2);
+    font-size: 0.7rem;
+    font-family: var(--font-mono, monospace);
+    letter-spacing: 0.1em;
+  }
+  .bento-disabled .material-icons {
+    font-size: 1.1rem;
+  }
+
+  /* ── Account Card (Profile Hero) ── */
+  .bento-account {
+    overflow: hidden;
+  }
+
+  .acc-hero-banner {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 115px;
+    box-sizing: border-box;
+    background: linear-gradient(
+      135deg,
+      rgba(220, 60, 60, 0.25) 0%,
+      rgba(180, 40, 40, 0.12) 50%,
+      rgba(10, 10, 15, 0.6) 100%
+    );
+    flex-shrink: 0;
+  }
+  .acc-dots-overlay {
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(rgba(0, 0, 0, 0.3) 1px, transparent 1px);
+    background-size: 6px 6px;
+    pointer-events: none;
+  }
+  .acc-logo-ring {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    border: 2.5px solid rgba(255, 255, 255, 0.2);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.3);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    position: relative;
+    z-index: 1;
+  }
+  .acc-logo-ring img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .acc-card-info {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 0.85rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  }
+  .acc-info-left {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex: 1;
+    min-width: 0;
+  }
+  .acc-card-email {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: #fff;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .acc-card-expiry {
+    font-size: 0.7rem;
+    color: rgba(255, 255, 255, 0.35);
+    font-family: var(--font-mono, monospace);
+  }
+  .acc-type-badge {
+    padding: 0.25rem 0.65rem;
+    border-radius: 6px;
+    font-size: 0.65rem;
+    font-weight: 900;
+    letter-spacing: 0.1em;
+    font-family: var(--font-mono, monospace);
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    flex-shrink: 0;
+  }
+  .acc-type-badge.vip {
+    background: rgba(0, 243, 255, 0.1);
+    color: #00f3ff;
+    border-color: rgba(0, 243, 255, 0.3);
+  }
+
+  .acc-card-actions {
+    display: flex;
+    gap: 0.4rem;
+    padding: 0 0.75rem 0.75rem;
+    margin-top: auto;
+  }
+  .acc-action-btn.icon-only {
+    flex: none;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    aspect-ratio: 1;
+  }
+  .acc-action-btn.primary {
+    flex: 5;
+  }
+  .acc-action-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.55rem 0.6rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.72rem;
+    font-weight: 700;
+    font-family: var(--font-mono, monospace);
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .acc-action-btn .material-icons {
+    font-size: 1rem;
+  }
+  .acc-action-btn:hover {
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #fff;
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .acc-action-btn.primary {
+    background: rgba(0, 243, 255, 0.08);
+    border-color: rgba(0, 243, 255, 0.2);
+    color: #00f3ff;
+  }
+  .acc-action-btn.primary:hover {
+    background: rgba(0, 243, 255, 0.15);
+    border-color: rgba(0, 243, 255, 0.4);
+    box-shadow: 0 0 12px rgba(0, 243, 255, 0.1);
+  }
+
+  /* ── Compact field ── */
+  .compact-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .compact-field label {
+    font-size: 0.55rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: rgba(255, 255, 255, 0.4);
+    font-family: var(--font-mono, monospace);
+  }
+  .compact-field input[type="text"],
+  .compact-field input[type="password"] {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: #fff;
+    font-size: 0.72rem;
+    padding: 0.35rem 0.5rem;
+    font-family: var(--font-mono, monospace);
+    transition: border-color 0.2s;
+  }
+  .compact-field input:focus {
+    border-color: rgba(0, 243, 255, 0.4);
+    outline: none;
+  }
+  .compact-actions {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: auto;
+    /* same bottom padding as .acc-card-actions so all card buttons sit at equal distance from card edge */
+    padding: 0.4rem 0.75rem 0.75rem;
+  }
+
+  /* ── Download Engine Card ── */
+  /* Two-section body: PATH above, CONCURRENCY below */
+  .dl-body {
+    gap: 0; /* sections carry their own padding; no extra gap */
+    padding: 0; /* sections carry horizontal padding */
+  }
+  .dl-section {
+    padding: 0.85rem 0.85rem;
+  }
+  .dl-section--conc {
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .dl-path-field {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
   }
-
-  .account-email {
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: #fff;
-  }
-
-  .account-rank {
-    font-size: 0.85rem;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .btn-refresh {
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: var(--text-secondary);
-    border-radius: 12px;
-    height: 44px;
-    padding: 0 1.5rem;
-    font-weight: 700;
-    cursor: pointer;
+  .dl-path-label {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-size: 0.75rem;
-    transition: all 0.2s;
+    gap: 0.35rem;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: rgba(255, 255, 255, 0.4);
+    font-family: var(--font-mono, monospace);
+    margin-bottom: 0.35rem;
+  }
+  .dl-path-label .material-icons {
+    font-size: 1rem;
+    color: var(--color-primary, #00f3ff);
+    opacity: 0.65;
+  }
+  .dl-path-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: rgba(0, 243, 255, 0.03);
+    border: 1px solid rgba(0, 243, 255, 0.12);
+    border-radius: 8px;
+    color: #fff;
+    font-size: 0.82rem;
+    padding: 0.45rem 0.65rem;
+    font-family: var(--font-mono, monospace);
+    outline: none;
+    transition:
+      border-color 0.2s,
+      box-shadow 0.2s;
+  }
+  .dl-path-input::placeholder {
+    color: rgba(255, 255, 255, 0.2);
+  }
+  .dl-path-input:focus {
+    border-color: rgba(0, 243, 255, 0.4);
+    box-shadow: 0 0 10px rgba(0, 243, 255, 0.1);
   }
 
-  .btn-refresh:hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: var(--color-primary);
-    color: var(--color-primary);
-  }
-
-  .btn-refresh .material-icons {
-    font-size: 1.1rem;
-  }
-
-  .quota-section {
+  .dl-conc-hud {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
-    padding: 1.5rem;
-    background: rgba(0, 0, 0, 0.3);
-    border-radius: 14px;
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    gap: 0.6rem;
+    flex: 1;
   }
-
-  .quota-header {
+  .dl-conc-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    font-size: 0.85rem;
-    color: var(--text-muted);
-    font-weight: 600;
+    justify-content: space-between;
+  }
+  .dl-conc-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: rgba(255, 255, 255, 0.4);
+    font-family: var(--font-mono, monospace);
+  }
+  .dl-conc-value {
+    font-size: 1rem;
+    font-weight: 900;
+    font-family: var(--font-mono, monospace);
+    color: var(--color-primary, #00f3ff);
+    text-shadow: 0 0 12px rgba(0, 243, 255, 0.6);
+    min-width: 1.5ch;
+    text-align: right;
   }
 
-  .quota-text {
-    color: #fff;
-    font-family: var(--font-mono);
+  /* Segmented bar */
+  /* ── Dot-track slider ── */
+  .dl-dot-slider {
+    position: relative;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    cursor: col-resize;
+    outline: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .dl-dot-slider:focus-visible {
+    outline: 1px solid rgba(0, 243, 255, 0.35);
+    border-radius: 24px;
   }
 
-  .quota-bar {
-    width: 100%;
+  /* Track line: cyan left of orb, dim right */
+  .dl-dot-slider::before {
+    content: "";
+    position: absolute;
+    left: 22px; /* half of new 44px orb */
+    right: 22px;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 1.5px;
+    background: linear-gradient(
+      to right,
+      rgba(0, 243, 255, 0.5) 0%,
+      rgba(0, 243, 255, 0.5) calc(var(--pct, 0) * 100%),
+      rgba(255, 255, 255, 0.07) calc(var(--pct, 0) * 100%),
+      rgba(255, 255, 255, 0.07) 100%
+    );
+    border-radius: 1px;
+    pointer-events: none;
+  }
+
+  /* 10 dots — absolute, each positioned to match orb travel axis */
+  .dl-dots {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .dl-dot {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 8px;
     height: 8px;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 10px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.12);
+    transition:
+      background 0.15s,
+      box-shadow 0.15s,
+      transform 0.15s,
+      opacity 0.12s;
+  }
+  .dl-dot.lit {
+    background: rgba(0, 243, 255, 0.85);
+    box-shadow: 0 0 9px rgba(0, 243, 255, 0.75);
+    transform: translateY(-50%) scale(1.25);
+  }
+  /* Hide dot sitting beneath the orb so value text is readable */
+  .dl-dot.hidden {
+    opacity: 0;
+  }
+
+  /* Pulsing circle thumb — value inside */
+  .dl-thumb-orb {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    left: calc(var(--pct, 0) * (100% - 44px));
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: radial-gradient(
+      circle at 38% 32%,
+      rgba(180, 255, 255, 0.22) 0%,
+      rgba(0, 180, 210, 0.14) 60%,
+      rgba(0, 80, 120, 0.08) 100%
+    );
+    border: 2px solid #00f3ff;
+    color: #00f3ff;
+    font-family: var(--font-mono, monospace);
+    font-weight: 900;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 5;
+    transition: left 0.04s linear;
+    animation: orb-pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes orb-pulse {
+    0%,
+    100% {
+      box-shadow:
+        0 0 10px rgba(0, 243, 255, 0.4),
+        0 0 20px rgba(0, 243, 255, 0.15),
+        inset 0 0 8px rgba(0, 243, 255, 0.1);
+    }
+    50% {
+      box-shadow:
+        0 0 20px rgba(0, 243, 255, 0.8),
+        0 0 42px rgba(0, 243, 255, 0.3),
+        inset 0 0 14px rgba(0, 243, 255, 0.2);
+    }
+  }
+
+  /* ── Inline field ── */
+  .inline-field {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  }
+  .inline-field:last-of-type {
+    border-bottom: none;
+  }
+  .inline-label {
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: rgba(255, 255, 255, 0.35);
+    font-family: var(--font-mono, monospace);
+    min-width: 32px;
+  }
+  .inline-value {
+    flex: 1;
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.8);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .inline-value.mono {
+    font-family: var(--font-mono, monospace);
+  }
+  /* Editable inline input — matches .inline-value visually but is an <input> */
+  .inline-input-edit {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 0.8rem;
+    font-family: inherit;
+    padding: 0.05rem 0.2rem;
+    outline: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: border-color 0.2s;
+  }
+  .inline-input-edit.mono {
+    font-family: var(--font-mono, monospace);
+  }
+  .inline-input-edit::placeholder {
+    color: rgba(255, 255, 255, 0.2);
+  }
+  .inline-input-edit:focus {
+    border-bottom-color: rgba(0, 243, 255, 0.4);
+  }
+  .copy-inline-btn {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.25);
+    cursor: pointer;
+    padding: 2px;
+    display: flex;
+    transition: color 0.2s;
+  }
+  .copy-inline-btn .material-icons {
+    font-size: 0.8rem;
+  }
+  .copy-inline-btn:hover {
+    color: #00f3ff;
+  }
+
+  .info-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.5rem;
+    background: rgba(0, 255, 163, 0.06);
+    border: 1px solid rgba(0, 255, 163, 0.15);
+    border-radius: 6px;
+    color: rgba(0, 255, 163, 0.8);
+    font-size: 0.6rem;
+    font-weight: 600;
+    font-family: var(--font-mono, monospace);
+  }
+  .info-badge .material-icons {
+    font-size: 0.85rem;
+  }
+
+  .btn-regen {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.3rem 0.5rem;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.6rem;
+    font-weight: 700;
+    font-family: var(--font-mono, monospace);
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-top: auto;
+  }
+  .btn-regen .material-icons {
+    font-size: 0.85rem;
+  }
+  .btn-regen:hover {
+    border-color: rgba(0, 243, 255, 0.3);
+    color: #00f3ff;
+    background: rgba(0, 243, 255, 0.06);
+  }
+
+  /* ═══════════════════════════════ */
+  /* Right: Log / Activity Panel    */
+  /* ═══════════════════════════════ */
+  .log-panel {
+    display: flex;
+    flex-direction: column;
+    border-radius: 14px;
+    background: rgba(8, 10, 15, 0.85);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.05);
     overflow: hidden;
   }
 
-  .quota-fill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--color-primary), #00d4ff);
-    border-radius: 10px;
-    transition: width 0.3s ease;
-  }
-
-  .account-meta {
-    display: flex;
-    gap: 1.5rem;
-    padding-top: 0.5rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.05);
-  }
-
-  .meta-item {
+  .log-panel-header {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    font-size: 0.85rem;
-    color: var(--text-muted);
+    justify-content: space-between;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    flex-shrink: 0;
   }
-
-  .meta-item .material-icons {
-    font-size: 1.1rem;
-    color: var(--color-primary);
-  }
-
-  .empty-state {
+  .log-toggle {
     display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 1rem;
-    padding: 3rem 2rem;
-    text-align: center;
-  }
-
-  .empty-state .material-icons {
-    font-size: 4rem;
-    color: var(--text-muted);
-    opacity: 0.5;
-  }
-
-  .empty-state h4 {
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: #fff;
-    margin: 0;
-  }
-
-  .empty-state p {
-    font-size: 0.9rem;
-    color: var(--text-muted);
-    margin: 0;
-    max-width: 400px;
-  }
-
-  .premium-config-card {
+    gap: 0.25rem;
     background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 24px;
-    padding: 2.5rem;
-    display: flex;
-    flex-direction: column;
-    gap: 2rem;
+    border-radius: 8px;
+    padding: 2px;
   }
-
-  .input-v3-group {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .input-v3-group label {
-    font-size: 0.7rem;
-    font-weight: 900;
-    color: var(--text-muted);
-    letter-spacing: 0.1em;
-  }
-
-  .input-v3-box {
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 12px;
-    height: 54px;
+  .log-tab {
     display: flex;
     align-items: center;
-    padding: 0 1.25rem;
-  }
-
-  .input-v3-box input {
-    background: transparent;
+    gap: 0.35rem;
+    padding: 0.4rem 0.75rem;
     border: none;
-    color: #fff;
-    flex: 1;
-    padding-left: 1rem;
-    outline: none;
-    font-family: var(--font-mono);
-    font-size: 0.85rem;
-  }
-
-  .input-v3-box.readonly {
-    background: rgba(0, 0, 0, 0.5);
-    border-color: rgba(255, 255, 255, 0.05);
-  }
-
-  .input-v3-box.readonly input {
-    color: rgba(255, 255, 255, 0.7);
-    cursor: default;
-  }
-
-  .icon-action {
+    border-radius: 6px;
     background: transparent;
-    border: none;
-    color: var(--text-muted);
-    width: 36px;
-    height: 36px;
-    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 0.75rem;
+    font-weight: 700;
+    font-family: var(--font-mono, monospace);
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .log-tab .material-icons {
+    font-size: 1rem;
+  }
+  .log-tab.active {
+    background: rgba(0, 243, 255, 0.1);
+    color: #00f3ff;
+    box-shadow: 0 0 8px rgba(0, 243, 255, 0.08);
+  }
+  .log-tab:hover:not(.active) {
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .btn-clear-log {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.3);
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     transition: all 0.2s;
-    margin-left: 0.25rem;
+  }
+  .btn-clear-log .material-icons {
+    font-size: 0.9rem;
+  }
+  .btn-clear-log:hover {
+    color: #ff5252;
+    border-color: rgba(255, 82, 82, 0.3);
+    background: rgba(255, 82, 82, 0.06);
   }
 
-  .icon-action:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--color-primary);
+  /* ── Log Panel Body ── */
+  .log-panel-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0.5rem;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.65rem;
+    line-height: 1.6;
+  }
+  .log-panel-body::-webkit-scrollbar {
+    width: 4px;
+  }
+  .log-panel-body::-webkit-scrollbar-thumb {
+    background: rgba(0, 243, 255, 0.15);
+    border-radius: 2px;
   }
 
-  .icon-action .material-icons {
-    font-size: 1.1rem;
-  }
-
-  .card-action-v3 {
+  .log-empty {
     display: flex;
-    justify-content: flex-end;
-    padding-top: 0.5rem;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    height: 100%;
+    color: rgba(255, 255, 255, 0.2);
+    font-size: 0.7rem;
+  }
+  .log-empty .material-icons {
+    font-size: 1.2rem;
   }
 
+  .log-line {
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .log-line:hover {
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .log-ts {
+    color: rgba(255, 255, 255, 0.25);
+    margin-right: 0.4rem;
+  }
+  .log-lvl {
+    font-weight: 800;
+    margin-right: 0.4rem;
+    min-width: 36px;
+    display: inline-block;
+  }
+  .log-msg {
+    color: rgba(255, 255, 255, 0.7);
+  }
+
+  .log-line.info .log-lvl {
+    color: #00f3ff;
+  }
+  .log-line.warn .log-lvl {
+    color: #ffb400;
+  }
+  .log-line.error .log-lvl {
+    color: #ff5252;
+  }
+  .log-line.debug .log-lvl {
+    color: rgba(255, 255, 255, 0.35);
+  }
+
+  /* ── Activity Feed ── */
+  .activity-feed {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .activity-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    border-radius: 8px;
+    transition: background 0.2s;
+  }
+  .activity-item:hover {
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .activity-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    background: rgba(0, 243, 255, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .activity-icon .material-icons {
+    font-size: 0.85rem;
+    color: #00f3ff;
+  }
+  .activity-content {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .activity-msg {
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.75);
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .activity-time {
+    font-size: 0.55rem;
+    color: rgba(255, 255, 255, 0.25);
+  }
+
+  /* ── Log Panel Footer ── */
+  .log-panel-footer {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.75rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+    flex-shrink: 0;
+  }
+  .log-status {
+    font-size: 0.55rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.3);
+    font-family: var(--font-mono, monospace);
+    letter-spacing: 0.05em;
+  }
+  .dot-pulse {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #00ffa3;
+    animation: dot-blink 1.5s ease-in-out infinite;
+  }
+  @keyframes dot-blink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.3;
+    }
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 1100px) {
+    .settings-two-col {
+      grid-template-columns: 1fr;
+      height: auto;
+      overflow-y: auto;
+    }
+    .log-panel {
+      min-height: 300px;
+    }
+  }
+  @media (max-width: 700px) {
+    .widget-grid {
+      grid-template-columns: 1fr;
+      height: auto;
+    }
+    .widget-col {
+      min-height: 300px;
+    }
+  }
+
+  /* ============================== */
+  /* Glass Card System              */
+  /* ============================== */
   .btn-apply-v3 {
     background: var(--color-primary);
     color: #000;
@@ -1290,8 +2177,8 @@
 
   .services-grid-3col {
     display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 1.5rem;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
   }
 
   @media (max-width: 900px) {
@@ -1412,7 +2299,7 @@
     background: rgba(255, 255, 255, 0.02);
     border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: 12px;
-    padding: 1.25rem;
+    padding: 1rem;
     transition: all 0.2s;
   }
 
@@ -1424,15 +2311,15 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding-bottom: 1rem;
+    padding-bottom: 0.5rem;
   }
 
   .integration-card-body {
     display: flex;
     flex-direction: column;
-    gap: 1.5rem;
-    margin-top: 1rem;
-    padding-top: 1rem;
+    gap: 0.6rem;
+    margin-top: 0.5rem;
+    padding-top: 0.5rem;
     border-top: 1px solid rgba(255, 255, 255, 0.05);
   }
 
@@ -1443,11 +2330,11 @@
   }
 
   .integration-icon {
-    width: 48px;
-    height: 48px;
+    width: 32px;
+    height: 32px;
     object-fit: contain;
-    padding: 6px;
-    border-radius: 12px;
+    padding: 4px;
+    border-radius: 8px;
     position: relative;
     z-index: 1;
     filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.5))
@@ -1456,7 +2343,7 @@
 
   .integration-brand > span {
     font-weight: 600;
-    font-size: 1rem;
+    font-size: 0.9rem;
     color: #fff;
   }
 
@@ -1554,7 +2441,7 @@
   .node-field {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0.4rem;
   }
 
   .node-field label,
@@ -1569,14 +2456,14 @@
   .node-field input,
   .pass-box input {
     width: 100%;
-    background: rgba(0, 0, 0, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 12px;
-    height: 48px;
-    padding: 0 1rem;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    height: 40px;
+    padding: 0 0.85rem;
     color: #fff;
     font-family: var(--font-mono);
-    font-size: 0.85rem;
+    font-size: 0.8rem;
     outline: none;
     transition: all 0.2s;
   }
@@ -1627,8 +2514,8 @@
     justify-content: space-between;
     align-items: center;
     background: rgba(255, 255, 255, 0.03);
-    padding: 1rem 1.25rem;
-    border-radius: 12px;
+    padding: 0.65rem 1rem;
+    border-radius: 10px;
     transition: background 0.2s;
   }
 
@@ -1697,7 +2584,7 @@
   .node-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 1rem;
+    gap: 0.75rem;
   }
 
   .node-actions.single-action {
@@ -1839,8 +2726,8 @@
 
   .btn-test,
   .btn-save {
-    height: 46px;
-    border-radius: 12px;
+    height: 40px;
+    border-radius: 10px;
     font-weight: 800;
     cursor: pointer;
     display: flex;
@@ -1848,6 +2735,8 @@
     justify-content: center;
     gap: 0.5rem;
     transition: all 0.2s;
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
   }
 
   .btn-save {

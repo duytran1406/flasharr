@@ -131,6 +131,8 @@ pub fn format_duration(seconds: f64) -> String {
 /// Broadcast update for WebSocket clients
 #[derive(Debug, Clone, Serialize)]
 pub struct ProgressUpdate {
+    /// Event type to distinguish add/update/remove
+    pub event: TaskEvent,
     pub task_id: String,
     pub downloaded_bytes: u64,
     pub total_bytes: u64,
@@ -138,6 +140,18 @@ pub struct ProgressUpdate {
     pub eta_seconds: f64,
     pub percentage: f64,
     pub state: String,
+}
+
+/// Task event type for WebSocket routing
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Default)]
+pub enum TaskEvent {
+    /// New task was added
+    Added,
+    /// Existing task was updated (progress, state change)
+    #[default]
+    Updated,
+    /// Task was removed/deleted
+    Removed,
 }
 
 #[cfg(test)]

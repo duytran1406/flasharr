@@ -13,8 +13,12 @@ class UIState {
   // Global intro animation states
   showIntro = $state(true);
   showTagline = $state(false);
+  private _introFinished = false;
 
   startIntroSequence() {
+    // Don't restart the intro if it's already finished
+    if (this._introFinished) return;
+    
     this.showIntro = true;
     this.showTagline = false;
     setTimeout(() => {
@@ -23,6 +27,7 @@ class UIState {
   }
 
   finishIntro() {
+    this._introFinished = true;
     this.showIntro = false;
   }
   
@@ -49,6 +54,39 @@ class UIState {
   closeSmartSearch() {
     this.smartSearchModalOpen = false;
     this.smartSearchData = null;
+  }
+
+  // Smart Grab Modal (separate from Smart Search)
+  smartGrabModalOpen = $state(false);
+  smartGrabData = $state<{
+    tmdbId: string;
+    type: "movie" | "tv";
+    title: string;
+    year?: string | number;
+    seasons: any[]; // Seasons data from Smart Search results
+    // TMDB episode counts per season for uncut detection
+    // { 1: 35, 2: 41 } means Season 1 has 35 eps, Season 2 has 41 eps
+    tmdbSeasonEpisodeCounts?: Record<number, number>;
+  } | null>(null);
+
+  openSmartGrab(data: {
+    tmdbId: string;
+    type: "movie" | "tv";
+    title: string;
+    year?: string | number;
+    seasons: any[];
+    tmdbSeasonEpisodeCounts?: Record<number, number>;
+  }) {
+    console.log("[SmartGrab] openSmartGrab called with:", data);
+    console.log("[SmartGrab] seasons length:", data.seasons?.length);
+    this.smartGrabData = data;
+    this.smartGrabModalOpen = true;
+    console.log("[SmartGrab] Modal open state:", this.smartGrabModalOpen, "Data set:", !!this.smartGrabData);
+  }
+
+  closeSmartGrab() {
+    this.smartGrabModalOpen = false;
+    this.smartGrabData = null;
   }
 }
 

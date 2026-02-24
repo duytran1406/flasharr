@@ -26,10 +26,10 @@
   }
 </script>
 
-<section class="box-section netflow-section">
-  <div class="box-label">
+<section class="premium-card netflow-section">
+  <div class="card-header-premium">
     <span class="material-icons">insights</span>
-    NETFLOW STATISTIC
+    <span class="label-text">NETFLOW STATISTIC</span>
   </div>
 
   <div class="netflow-telemetry">
@@ -44,12 +44,13 @@
       <div class="telemetry-label">INBOUND BITRATE</div>
     </div>
 
-    <div class="telemetry-grid">
-      <div class="tele-item">
+    <div class="telemetry-sub">
+      <div class="sub-item">
         <span class="l">SESSION PEAK</span>
-        <span class="v">{sessionPeak.toFixed(1)} MB/s</span>
+        <span class="v">{sessionPeak.toFixed(1)} <small>MB/s</small></span>
       </div>
-      <div class="tele-item">
+      <div class="sub-separator"></div>
+      <div class="sub-item">
         <span class="l">SESSION DATA</span>
         <span class="v">{formatBytes(sessionTotalBytes)}</span>
       </div>
@@ -62,50 +63,7 @@
 </section>
 
 <style>
-  .box-section {
-    background: rgba(10, 15, 25, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 0;
-    position: relative;
-    padding: 1.25rem;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-  }
-
-  .box-section::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 2px;
-    height: 100%;
-    background: var(--color-primary);
-    opacity: 0.5;
-  }
-
-  .box-label {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    font-size: 0.65rem;
-    font-weight: 900;
-    letter-spacing: 0.2rem;
-    text-transform: uppercase;
-    margin-bottom: 0.75rem;
-    color: var(--text-muted);
-    font-family: var(--font-mono, monospace);
-    padding: 0 0.5rem;
-    flex-shrink: 0;
-  }
-
-  .box-label .material-icons {
-    font-size: 1.1rem;
-    opacity: 0.8;
-  }
-
   .netflow-section {
-    flex: 1;
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -113,26 +71,28 @@
 
   .netflow-telemetry {
     display: flex;
-    flex-direction: column;
-    gap: 1rem;
-    margin-bottom: 0.5rem;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 1.5rem;
+    margin-bottom: 1rem;
+    padding: 0 0.5rem;
   }
 
   .telemetry-main {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 0.25rem;
+    align-items: flex-start;
+    gap: 0;
   }
 
   .telemetry-core {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.5rem;
   }
 
   .telemetry-core .material-icons {
-    font-size: 2rem;
+    font-size: 1.5rem;
     color: var(--color-primary);
   }
 
@@ -157,57 +117,70 @@
   }
 
   .core-text .v {
-    font-size: 2.5rem;
+    font-size: 2rem;
     font-weight: 900;
-    color: #fff;
+    color: var(--text-primary);
     font-family: var(--font-mono, monospace);
+    line-height: 1;
   }
 
   .core-text .u {
-    font-size: 0.9rem;
+    font-size: 0.8rem;
     font-weight: 700;
     color: var(--text-muted);
     font-family: var(--font-mono, monospace);
   }
 
   .telemetry-label {
-    font-size: 0.6rem;
-    font-weight: 800;
-    color: var(--text-muted);
-    letter-spacing: 0.15em;
-    font-family: var(--font-mono, monospace);
-  }
-
-  .telemetry-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-  }
-
-  .tele-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.75rem;
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(255, 255, 255, 0.03);
-    border-radius: 8px;
-  }
-
-  .tele-item .l {
     font-size: 0.55rem;
     font-weight: 800;
     color: var(--text-muted);
-    letter-spacing: 0.1em;
+    letter-spacing: 0.1rem;
+    font-family: var(--font-mono, monospace);
+    opacity: 0.6;
+    margin-top: 0.2rem;
+  }
+
+  .telemetry-sub {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+    background: rgba(255, 255, 255, 0.02);
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.03);
+  }
+
+  .sub-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  .sub-item .l {
+    font-size: 0.5rem;
+    font-weight: 800;
+    color: var(--text-muted);
+    letter-spacing: 0.05rem;
+    opacity: 0.5;
+  }
+
+  .sub-item .v {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-family: var(--font-mono, monospace);
+  }
+
+  .sub-item .v small {
+    font-size: 0.6rem;
     opacity: 0.7;
   }
 
-  .tele-item .v {
-    font-size: 0.85rem;
-    font-weight: 700;
-    color: #fff;
-    font-family: var(--font-mono, monospace);
+  .sub-separator {
+    width: 1px;
+    height: 20px;
+    background: rgba(255, 255, 255, 0.1);
   }
 
   .chart-wrapper {

@@ -14,6 +14,13 @@
   import { toasts } from "$lib/stores/toasts";
   import { ui } from "$lib/stores/ui.svelte";
   import { MediaCard } from "$lib/components";
+  import Button from "$lib/components/ui/Button.svelte";
+  import {
+    fetchAllMovies,
+    formatDiskSize,
+    findMovieInList,
+    type RadarrMovie,
+  } from "$lib/stores/arr";
 
   const movieId = $derived(page.params.id as string);
 
@@ -23,6 +30,9 @@
   let loading = $state(true);
   let posterLoaded = $state(false);
   let backdropLoaded = $state(false);
+  // Library integration
+  let libraryMovie = $state<RadarrMovie | null>(null);
+  let inLibrary = $derived(libraryMovie !== null);
   let isUpcoming = $derived(
     !movie ||
       movie.status === "Planned" ||
@@ -42,6 +52,18 @@
       movie = details;
       similar = sim.slice(0, 4);
       recommended = reco.slice(0, 4);
+
+      // Parallel: fetch Radarr library data
+      try {
+        const allMovies = await fetchAllMovies();
+        const tmdbIdNum = Number(movieId);
+        const match = findMovieInList(allMovies, tmdbIdNum);
+        if (match) {
+          libraryMovie = match;
+        }
+      } catch {
+        // Library lookup is best-effort
+      }
     } catch (error) {
       console.error("Failed to load movie data:", error);
       toasts.error("Failed to load movie intelligence brief");
@@ -312,14 +334,28 @@
       <!-- Sidebar -->
       <aside class="detail-sidebar">
         <div class="action-panel glass-panel">
-          <button
-            class="smart-search-btn"
+          {#if inLibrary}
+            <div class="library-badge">
+              <span class="material-icons">video_library</span>
+              IN LIBRARY
+            </div>
+          {/if}
+          <Button
+            icon="manage_search"
+            size="md"
+            width="100%"
             disabled={loading}
-            onclick={handleSmartSearch}
+            onclick={handleSmartSearch}>Smart Search</Button
           >
-            <span class="material-icons">manage_search</span>
-            SMART SEARCH
-          </button>
+          {#if !inLibrary && !loading}
+            <Button
+              variant="ghost"
+              icon="library_add"
+              size="md"
+              width="100%"
+              disabled>Add to Library</Button
+            >
+          {/if}
         </div>
 
         <div class="stats-panel glass-panel">
@@ -418,6 +454,38 @@
                 </a>
               {/if}
             </div>
+
+            {#if inLibrary && libraryMovie}
+              <div class="info-section-label">Library Data</div>
+              <div class="info-row">
+                <span class="label">Monitored</span>
+                <span
+                  class="value"
+                  style="color: {libraryMovie.monitored
+                    ? '#34d399'
+                    : '#94a3b8'}"
+                >
+                  {libraryMovie.monitored ? "Yes" : "No"}
+                </span>
+              </div>
+              <div class="info-row">
+                <span class="label">File Status</span>
+                <span
+                  class="value"
+                  style="color: {libraryMovie.hasFile ? '#34d399' : '#ef4444'}"
+                >
+                  {libraryMovie.hasFile ? "Acquired" : "Missing"}
+                </span>
+              </div>
+              {#if libraryMovie.sizeOnDisk && libraryMovie.sizeOnDisk > 0}
+                <div class="info-row">
+                  <span class="label">On Disk</span>
+                  <span class="value"
+                    >{formatDiskSize(libraryMovie.sizeOnDisk)}</span
+                  >
+                </div>
+              {/if}
+            {/if}
           {/if}
         </div>
 
@@ -1033,5 +1101,46 @@
     .detail-grid {
       padding: 2rem 1rem;
     }
+  }
+
+  /* Library Integration Styles */
+  .library-badge {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
+    background: rgba(52, 211, 153, 0.1);
+    border: 1px solid rgba(52, 211, 153, 0.3);
+    border-radius: 8px;
+    color: #34d399;
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    font-family: var(--font-mono);
+    margin-bottom: 0.5rem;
+  }
+
+  .library-badge .material-icons {
+    font-size: 1rem;
+  }
+
+  .add-library-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    width: 100%;
+    padding: 0.85rem 1.5rem;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    cursor: not-allowed;
+    opacity: 0.5;
+    margin-top: 0.5rem;
   }
 </style>

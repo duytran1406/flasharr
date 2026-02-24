@@ -222,10 +222,10 @@
     tl.finished.then(() => playIdle());
   }
 
-  /* ── Continuous particle emitter ── */
+  /* ── Continuous particle emitter (halftone dots) ── */
   function startParticleEmitter() {
     if (!particleBox) return;
-    // Emit one particle every ~16ms for a dense, continuous stream (5x rate)
+    const DOT_COLORS = ["#00f3ff", "#00f3ff", "#00f3ff", "#a855f7", "#ec4899"];
     const emitInterval = setInterval(() => {
       if (!particleBox) {
         clearInterval(emitInterval);
@@ -236,13 +236,14 @@
       const angle = Math.random() * Math.PI * 2;
       const dist = 80 + Math.random() * 300;
       const dur = 1000 + Math.random() * 800;
+      const color = DOT_COLORS[Math.floor(Math.random() * DOT_COLORS.length)];
       p.style.setProperty("--tx", `${Math.cos(angle) * dist}px`);
       p.style.setProperty("--ty", `${Math.sin(angle) * dist}px`);
       p.style.setProperty("--delay", "0ms");
       p.style.setProperty("--dur", `${dur}ms`);
-      p.style.setProperty("--size", `${1 + Math.random() * 3}px`);
+      p.style.setProperty("--size", `${2 + Math.random() * 3}px`);
+      p.style.setProperty("--pcolor", color);
       particleBox.appendChild(p);
-      // Self-remove after animation completes to keep DOM clean
       setTimeout(() => p.remove(), dur + 50);
     }, 16);
     activeIntervals.push(emitInterval as any);
@@ -553,21 +554,99 @@
     justify-content: center;
   }
 
-  /* Subtle depth grid */
+  /* Halftone Aurora — logo-centered dot radiation */
   .bg-void {
     position: absolute;
     inset: 0;
+    /* Primary halftone dot field — cyan dots radiating from center */
+    background-image: radial-gradient(circle, #00f3ff 1.5px, transparent 1.5px);
+    background-size: 10px 10px;
+    opacity: 0.15;
+    mask-image: radial-gradient(
+      circle at 50% 45%,
+      black 0%,
+      rgba(0, 0, 0, 0.7) 8%,
+      rgba(0, 0, 0, 0.3) 20%,
+      rgba(0, 0, 0, 0.08) 35%,
+      rgba(0, 0, 0, 0.02) 50%,
+      transparent 70%
+    );
+    -webkit-mask-image: radial-gradient(
+      circle at 50% 45%,
+      black 0%,
+      rgba(0, 0, 0, 0.7) 8%,
+      rgba(0, 0, 0, 0.3) 20%,
+      rgba(0, 0, 0, 0.08) 35%,
+      rgba(0, 0, 0, 0.02) 50%,
+      transparent 70%
+    );
+  }
+
+  /* Aurora glow behind the dots — colored light pools */
+  .bg-void::before {
+    content: "";
+    position: absolute;
+    inset: -20%;
     background: radial-gradient(
-        ellipse at 50% 50%,
-        rgba(0, 40, 60, 0.25) 0%,
-        transparent 70%
+        circle at 50% 45%,
+        rgba(0, 243, 255, 0.2) 0%,
+        transparent 35%
       ),
-      linear-gradient(rgba(0, 243, 255, 0.015) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0, 243, 255, 0.015) 1px, transparent 1px);
-    background-size:
-      100% 100%,
-      60px 60px,
-      60px 60px;
+      radial-gradient(
+        ellipse at 15% 25%,
+        rgba(168, 85, 247, 0.12) 0%,
+        transparent 40%
+      ),
+      radial-gradient(
+        ellipse at 85% 25%,
+        rgba(168, 85, 247, 0.1) 0%,
+        transparent 40%
+      ),
+      radial-gradient(
+        ellipse at 50% 85%,
+        rgba(236, 72, 153, 0.08) 0%,
+        transparent 35%
+      );
+    filter: blur(60px);
+    z-index: -1;
+    animation: intro-aurora-breathe 8s ease-in-out infinite alternate;
+  }
+
+  /* Secondary dot layer — larger purple dots for depth */
+  .bg-void::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(circle, #a855f7 1px, transparent 1px);
+    background-size: 14px 14px;
+    background-position: 7px 7px; /* offset from primary dots */
+    opacity: 0.06;
+    mask-image: radial-gradient(
+      circle at 50% 45%,
+      black 0%,
+      rgba(0, 0, 0, 0.4) 12%,
+      rgba(0, 0, 0, 0.1) 25%,
+      transparent 45%
+    );
+    -webkit-mask-image: radial-gradient(
+      circle at 50% 45%,
+      black 0%,
+      rgba(0, 0, 0, 0.4) 12%,
+      rgba(0, 0, 0, 0.1) 25%,
+      transparent 45%
+    );
+    z-index: 0;
+  }
+
+  @keyframes intro-aurora-breathe {
+    0% {
+      transform: scale(1);
+      opacity: 0.8;
+    }
+    100% {
+      transform: scale(1.05);
+      opacity: 1;
+    }
   }
 
   /* ════════════ Glow Orb ════════════ */
@@ -665,13 +744,13 @@
   }
   .particle-box :global(.particle) {
     position: absolute;
-    width: var(--size, 2px);
-    height: var(--size, 2px);
-    border-radius: 50%;
-    background: #00f3ff;
+    width: var(--size, 3px);
+    height: var(--size, 3px);
+    border-radius: 2px; /* square dots, slightly rounded */
+    background: var(--pcolor, #00f3ff);
     box-shadow:
-      0 0 6px #00f3ff,
-      0 0 12px rgba(0, 243, 255, 0.4);
+      0 0 4px var(--pcolor, #00f3ff),
+      0 0 8px var(--pcolor, rgba(0, 243, 255, 0.3));
     animation: particleFly var(--dur, 1s) var(--delay, 0ms) ease-out forwards;
   }
   @keyframes particleFly {
@@ -679,11 +758,11 @@
       transform: translate(0, 0) scale(1);
       opacity: 1;
     }
-    70% {
-      opacity: 0.6;
+    60% {
+      opacity: 0.5;
     }
     100% {
-      transform: translate(var(--tx), var(--ty)) scale(0.3);
+      transform: translate(var(--tx), var(--ty)) scale(0);
       opacity: 0;
     }
   }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { toasts } from "$lib/stores/toasts";
-  import { fly, fade } from "svelte/transition";
+  import { animePop, animeFade } from "$lib/animations";
 
   // Subscribe to toasts store
   let toastList = $derived($toasts);
@@ -10,8 +10,8 @@
   {#each toastList as toast (toast.id)}
     <div
       class="toast-terminal toast-{toast.type}"
-      in:fly={{ y: -20, duration: 300 }}
-      out:fade={{ duration: 200 }}
+      in:animePop={{ duration: 400, scale: 0.9 }}
+      out:animeFade={{ duration: 200 }}
     >
       <div class="toast-header">
         <div class="toast-icon">
@@ -64,6 +64,38 @@
     pointer-events: auto;
     font-family: "JetBrains Mono", "Fira Code", monospace;
     min-width: 350px;
+    position: relative;
+  }
+
+  /* Halftone dot bleed from left border */
+  .toast-terminal::before {
+    content: "";
+    position: absolute;
+    top: -5px;
+    bottom: -5px;
+    left: -20px;
+    width: 80px;
+    background-image: radial-gradient(
+      circle,
+      var(--toast-color, #00d4ff) 0.8px,
+      transparent 0.8px
+    );
+    background-size: 5px 5px;
+    opacity: 0.12;
+    pointer-events: none;
+    z-index: 0;
+    mask-image: radial-gradient(
+      ellipse at 0% 50%,
+      black 0%,
+      rgba(0, 0, 0, 0.3) 20%,
+      transparent 60%
+    );
+    -webkit-mask-image: radial-gradient(
+      ellipse at 0% 50%,
+      black 0%,
+      rgba(0, 0, 0, 0.3) 20%,
+      transparent 60%
+    );
   }
 
   .toast-header {
@@ -131,6 +163,7 @@
   /* Toast Type Specific Styles */
   .toast-success {
     border-left-color: #00ffa3;
+    --toast-color: #00ffa3;
   }
 
   .toast-success .toast-icon .material-icons {
@@ -143,6 +176,7 @@
 
   .toast-error {
     border-left-color: #ff5252;
+    --toast-color: #ff5252;
   }
 
   .toast-error .toast-icon .material-icons {
@@ -155,6 +189,7 @@
 
   .toast-warning {
     border-left-color: #ffd700;
+    --toast-color: #ffd700;
   }
 
   .toast-warning .toast-icon .material-icons {
@@ -167,6 +202,7 @@
 
   .toast-info {
     border-left-color: #00d4ff;
+    --toast-color: #00d4ff;
   }
 
   .toast-info .toast-icon .material-icons {

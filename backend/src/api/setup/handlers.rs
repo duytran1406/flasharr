@@ -92,26 +92,28 @@ pub async fn get_setup_status(State(state): State<Arc<AppState>>) -> Json<SetupS
 }
 
 /// POST /api/setup/fshare - Validate and save Fshare credentials
+/// Tries API login first, falls back to web form login if API is unreachable
 pub async fn setup_fshare(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<FshareCredentials>,
 ) -> Result<Json<TestResult>, StatusCode> {
-    // Validate credentials by attempting to login directly
     let client = &*HTTP_CLIENT;
     
-    match client
+    // Try API login first
+    let api_result = client
         .post("https://download.fsharegroup.site/api/user/login")
         .json(&serde_json::json!({
             "user_email": payload.email,
             "password": payload.password,
         }))
+        .timeout(std::time::Duration::from_secs(10))
         .send()
-        .await
-    {
+        .await;
+    
+    match api_result {
         Ok(response) => {
             if let Ok(data) = response.json::<serde_json::Value>().await {
                 if data["code"] == 200 {
-                    // Save credentials to database
                     if let Err(e) = state.db.save_fshare_credentials(&payload.email, &payload.password) {
                         tracing::error!("Failed to save Fshare credentials: {}", e);
                         return Ok(Json(TestResult {
@@ -120,33 +122,163 @@ pub async fn setup_fshare(
                             version: None,
                         }));
                     }
-
-                    Ok(Json(TestResult {
+                    return Ok(Json(TestResult {
                         success: true,
-                        message: "Connected successfully".to_string(),
+                        message: "Connected via API successfully".to_string(),
                         version: None,
-                    }))
+                    }));
                 } else {
                     let msg = data["msg"].as_str().unwrap_or("Invalid credentials");
-                    Ok(Json(TestResult {
+                    return Ok(Json(TestResult {
                         success: false,
                         message: msg.to_string(),
                         version: None,
-                    }))
+                    }));
                 }
+            } else {
+                return Ok(Json(TestResult {
+                    success: false,
+                    message: "Failed to parse API response".to_string(),
+                    version: None,
+                }));
+            }
+        }
+        Err(e) => {
+            let err_str = format!("{}", e);
+            // Only fall back on connectivity errors, not other failures
+            if err_str.contains("timed out") || err_str.contains("connect") || err_str.contains("dns") {
+                tracing::warn!("[SETUP] FShare API unreachable ({}), trying web form login", err_str);
+            } else {
+                return Ok(Json(TestResult {
+                    success: false,
+                    message: format!("Connection failed: {}", e),
+                    version: None,
+                }));
+            }
+        }
+    }
+    
+    // Fallback: Web form login via www.fshare.vn/site/login
+    tracing::info!("[SETUP] Attempting web form login for FShare credentials validation");
+    
+    let web_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    
+    // Step 1: GET login page for CSRF token
+    let login_page = match web_client
+        .get("https://www.fshare.vn/site/login")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            return Ok(Json(TestResult {
+                success: false,
+                message: format!("Both API and web login unreachable: {}", e),
+                version: None,
+            }));
+        }
+    };
+    
+    // Extract cookies from login page
+    let initial_cookies: String = login_page.headers()
+        .get_all(reqwest::header::SET_COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .filter_map(|s| s.split(';').next().map(|c| c.trim().to_string()))
+        .collect::<Vec<_>>()
+        .join("; ");
+    
+    let html = match login_page.text().await {
+        Ok(h) => h,
+        Err(_) => {
+            return Ok(Json(TestResult {
+                success: false,
+                message: "Failed to read login page".to_string(),
+                version: None,
+            }));
+        }
+    };
+    
+    // Extract CSRF token
+    let csrf_token = {
+        let marker = "name=\"csrf-token\" content=\"";
+        html.find(marker).and_then(|pos| {
+            let start = pos + marker.len();
+            html[start..].find('"').map(|end| html[start..start + end].to_string())
+        })
+    };
+    
+    let csrf_token = match csrf_token {
+        Some(t) => t,
+        None => {
+            return Ok(Json(TestResult {
+                success: false,
+                message: "Could not extract CSRF token from login page".to_string(),
+                version: None,
+            }));
+        }
+    };
+    
+    // Step 2: POST form login
+    let form_body = format!(
+        "_csrf-app={}&LoginForm%5Bemail%5D={}&LoginForm%5Bpassword%5D={}&LoginForm%5BrememberMe%5D=1",
+        urlencoding::encode(&csrf_token),
+        urlencoding::encode(&payload.email),
+        urlencoding::encode(&payload.password),
+    );
+    
+    match web_client
+        .post("https://www.fshare.vn/site/login")
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("Referer", "https://www.fshare.vn/site/login")
+        .header("Cookie", &initial_cookies)
+        .body(form_body)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            
+            if status == reqwest::StatusCode::FOUND || status == reqwest::StatusCode::MOVED_PERMANENTLY {
+                // 302 redirect = successful login
+                if let Err(e) = state.db.save_fshare_credentials(&payload.email, &payload.password) {
+                    tracing::error!("Failed to save Fshare credentials: {}", e);
+                    return Ok(Json(TestResult {
+                        success: false,
+                        message: "Failed to save credentials".to_string(),
+                        version: None,
+                    }));
+                }
+                Ok(Json(TestResult {
+                    success: true,
+                    message: "Connected via web login (API unavailable)".to_string(),
+                    version: None,
+                }))
+            } else if status == reqwest::StatusCode::OK {
+                // 200 = login form re-rendered = invalid credentials
+                Ok(Json(TestResult {
+                    success: false,
+                    message: "Invalid credentials (verified via web login)".to_string(),
+                    version: None,
+                }))
             } else {
                 Ok(Json(TestResult {
                     success: false,
-                    message: "Failed to parse response".to_string(),
+                    message: format!("Unexpected web login response: {}", status),
                     version: None,
                 }))
             }
         }
         Err(e) => {
-            tracing::error!("Fshare login failed: {}", e);
             Ok(Json(TestResult {
                 success: false,
-                message: format!("Connection failed: {}", e),
+                message: format!("Both API and web login failed: {}", e),
                 version: None,
             }))
         }

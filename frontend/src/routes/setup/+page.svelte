@@ -4,7 +4,7 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { setupStore } from "$lib/stores/setup.svelte";
   import { toasts } from "$lib/stores/toasts";
-  import { fade, fly } from "svelte/transition";
+  import { animeFly } from "$lib/animations";
 
   let currentStep = $derived(setupStore.currentStep);
   // Access data directly from store for two-way binding (don't use $derived for bindable data)
@@ -144,7 +144,7 @@
   <div class="setup-panel">
     <!-- Step 0: Welcome -->
     {#if currentStep === 0}
-      <div class="panel-content" in:fly={{ y: 20, duration: 400 }}>
+      <div class="panel-content" in:animeFly={{ y: 20, duration: 400 }}>
         <div class="features-grid">
           <div class="feature-item">
             <div class="feature-icon">
@@ -178,14 +178,16 @@
 
     <!-- Step 1: FShare Account -->
     {#if currentStep === 1}
-      <div class="panel-content" in:fly={{ y: 20, duration: 400 }}>
+      <div class="panel-content" in:animeFly={{ y: 20, duration: 400 }}>
         <div class="section-header">
-          <div class="section-icon">
-            <img
-              src="/images/logo_fshare.png"
-              alt="FShare"
-              class="section-logo"
-            />
+          <div class="fshare-logo-container">
+            <div class="fshare-logo-ring">
+              <div class="fshare-logo-inner">
+                <div class="fshare-logo-bg">
+                  <img src="/images/flasharr_logo.png" alt="Flasharr" />
+                </div>
+              </div>
+            </div>
           </div>
           <div>
             <h2>FShare Authentication</h2>
@@ -229,7 +231,7 @@
           {#if fshareValidationError}
             <div
               class="alert-box error"
-              transition:fly={{ y: -10, duration: 300 }}
+              transition:animeFly={{ y: -10, duration: 300 }}
             >
               <span class="material-icons">error_outline</span>
               <div>
@@ -277,7 +279,7 @@
 
     <!-- Step 2: Downloads -->
     {#if currentStep === 2}
-      <div class="panel-content" in:fly={{ y: 20, duration: 400 }}>
+      <div class="panel-content" in:animeFly={{ y: 20, duration: 400 }}>
         <div class="section-header">
           <div class="section-icon">
             <span class="material-icons">folder_open</span>
@@ -343,7 +345,7 @@
 
     <!-- Step 3: Integrations -->
     {#if currentStep === 3}
-      <div class="panel-content" in:fly={{ y: 20, duration: 400 }}>
+      <div class="panel-content" in:animeFly={{ y: 20, duration: 400 }}>
         <div class="section-header">
           <div class="section-icon">
             <span class="material-icons">extension</span>
@@ -379,7 +381,7 @@
             {#if setupStore.data.sonarrEnabled}
               <div
                 class="integration-fields"
-                transition:fly={{ y: -10, duration: 300 }}
+                transition:animeFly={{ y: -10, duration: 300 }}
               >
                 <input
                   type="text"
@@ -430,7 +432,7 @@
             {#if setupStore.data.radarrEnabled}
               <div
                 class="integration-fields"
-                transition:fly={{ y: -10, duration: 300 }}
+                transition:animeFly={{ y: -10, duration: 300 }}
               >
                 <input
                   type="text"
@@ -480,7 +482,7 @@
 
     <!-- Step 4: Review -->
     {#if currentStep === 4}
-      <div class="panel-content" in:fly={{ y: 20, duration: 400 }}>
+      <div class="panel-content" in:animeFly={{ y: 20, duration: 400 }}>
         <div class="section-header">
           <div class="section-icon">
             <span class="material-icons">task_alt</span>
@@ -953,6 +955,71 @@
     width: 40px;
     height: 40px;
     object-fit: contain;
+  }
+
+  /* FShare Logo Styling (matching UserAvatar) */
+  .fshare-logo-container {
+    width: 64px;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+
+  .fshare-logo-ring {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #00f3ff 0%, #4facfe 100%);
+    box-shadow: 0 0 20px rgba(0, 243, 255, 0.3);
+    padding: 2px;
+    transition: all 0.3s ease;
+    animation: pulse-fshare 2s infinite;
+  }
+
+  @keyframes pulse-fshare {
+    0%,
+    100% {
+      box-shadow: 0 0 20px rgba(0, 243, 255, 0.3);
+    }
+    50% {
+      box-shadow: 0 0 30px rgba(0, 243, 255, 0.5);
+    }
+  }
+
+  .fshare-logo-inner {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: #0f172a;
+    padding: 2px;
+    overflow: hidden;
+  }
+
+  .fshare-logo-bg {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #1e293b;
+  }
+
+  .fshare-logo-bg img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+  }
+
+  .fshare-logo-container:hover .fshare-logo-ring {
+    transform: scale(1.05);
   }
 
   .section-header h2 {
