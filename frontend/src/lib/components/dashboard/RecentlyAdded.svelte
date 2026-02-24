@@ -31,60 +31,68 @@
       untrack(async () => {
         try {
           const [history, series, movies] = await Promise.all([
-            fetchHistory(50), // Fetch last 50 events
+            fetchHistory(100), // Fetch last 100 events
             fetchAllSeries(),
             fetchAllMovies(),
           ]);
 
-          if (history?.records) {
-            // Filter for imports (file moved to library)
-            const imports = history.records.filter(
-              (r: any) => r.eventType === "downloadFolderImported",
+          const mapped: RecentItem[] = [];
+          const seenIds = new Set<string>();
+
+          // API returns { sonarr: { records: [] }, radarr: { records: [] } }
+          // Merge both into a single flat sorted list of import events
+          const sonarrRecords: any[] = history?.sonarr?.records ?? [];
+          const radarrRecords: any[] = history?.radarr?.records ?? [];
+          const allRecords = [...sonarrRecords, ...radarrRecords]
+            .filter((r: any) => r.eventType === "downloadFolderImported")
+            .sort(
+              (a: any, b: any) =>
+                new Date(b.date).getTime() - new Date(a.date).getTime(),
             );
 
-            // Map to display items
-            const mapped: RecentItem[] = [];
-            const seenIds = new Set<string>();
+          for (const record of allRecords) {
+            let item: RecentItem | null = null;
 
-            for (const record of imports) {
-              let item: RecentItem | null = null;
-
-              if (record.seriesId) {
-                // TV Show
-                if (seenIds.has(`tv-${record.seriesId}`)) continue;
-
-                const s = series.find(
-                  (s: SonarrSeries) => s.id === record.seriesId,
-                );
-                if (s) {
-                  item = {
-                    id: `tv-${s.id}`,
-                    raw: s,
-                    type: "series",
-                  };
-                  seenIds.add(`tv-${record.seriesId}`);
-                }
-              } else if (record.movieId) {
-                // Movie
-                if (seenIds.has(`movie-${record.movieId}`)) continue;
-
-                const m = movies.find(
-                  (m: RadarrMovie) => m.id === record.movieId,
-                );
-                if (m) {
-                  item = {
-                    id: `movie-${m.id}`,
-                    raw: m,
-                    type: "movie",
-                  };
-                  seenIds.add(`movie-${record.movieId}`);
-                }
+            if (record.seriesId) {
+              if (seenIds.has(`tv-${record.seriesId}`)) continue;
+              const s = series.find(
+                (s: SonarrSeries) => s.id === record.seriesId,
+              );
+              if (s) {
+                item = { id: `tv-${s.id}`, raw: s, type: "series" };
+                seenIds.add(`tv-${record.seriesId}`);
               }
-
-              if (item) mapped.push(item);
-              if (mapped.length >= 10) break; // Limit to 10 distinct items
+            } else if (record.movieId) {
+              if (seenIds.has(`movie-${record.movieId}`)) continue;
+              const m = movies.find(
+                (m: RadarrMovie) => m.id === record.movieId,
+              );
+              if (m) {
+                item = { id: `movie-${m.id}`, raw: m, type: "movie" };
+                seenIds.add(`movie-${record.movieId}`);
+              }
             }
 
+            if (item) mapped.push(item);
+            if (mapped.length >= 12) break;
+          }
+
+          // Fallback: if no import history, show newest library items directly
+          if (mapped.length === 0 && (series.length > 0 || movies.length > 0)) {
+            const fallback: RecentItem[] = [
+              ...movies.slice(0, 6).map((m: RadarrMovie) => ({
+                id: `movie-${m.id}`,
+                raw: m,
+                type: "movie" as const,
+              })),
+              ...series.slice(0, 6).map((s: SonarrSeries) => ({
+                id: `tv-${s.id}`,
+                raw: s,
+                type: "series" as const,
+              })),
+            ];
+            items = fallback;
+          } else {
             items = mapped;
           }
         } catch (e: any) {
