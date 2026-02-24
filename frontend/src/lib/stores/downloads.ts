@@ -1,6 +1,7 @@
 import { writable, derived, get } from 'svelte/store';
 import { wsClient } from './websocket';
 import { toasts } from './toasts';
+import { fetchLibraryOverview } from './arr';
 
 /**
  * Download State (from contract-fe-bridge.md)
@@ -648,6 +649,21 @@ function createDownloadStore() {
         fetchBatches().catch(err => console.error('Failed to refetch batches after delete:', err));
       }
 
+      // If the deleted task was COMPLETED it may have been imported into the Arr
+      // library — refresh library overview so dashboard counts stay in sync.
+      {
+        let wasCompleted = false;
+        update(state => {
+          // Task already removed from map, check batchItems cache too
+          wasCompleted = false; // can't re-check after removal; we captured state above
+          return state;
+        });
+        // We check the pre-deletion state stored in the captured batchId search loop above.
+        // Simplest reliable approach: always refresh after any delete since the cost is one
+        // lightweight /api/arr/library call and the user explicitly requested sync.
+        fetchLibraryOverview().catch(() => {/* silently ignore if Arr is offline */});
+      }
+
       return { success: true };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to delete download';
@@ -816,6 +832,9 @@ function createDownloadStore() {
       
       // Refetch batches to get fresh data from server and update UI
       await fetchBatches();
+
+      // Batch may contain completed items that were imported — sync library counts.
+      fetchLibraryOverview().catch(() => {});
       
       return { success: true, data };
     } catch (err) {
@@ -926,20 +945,24 @@ function createDownloadStore() {
    * Initialize WebSocket handlers
    */
   function initWebSocket(): void {
-    // Handle SYNC_ALL - full sync of all tasks
+    // Handle SYNC_ALL - server sends only ACTIVE tasks on WS connect.
+    // Historical tasks are loaded via paginated REST. We must MERGE (upsert)
+    // into the existing Map rather than replace it, otherwise REST-loaded tasks
+    // vanish the moment the WebSocket fires — causing the Active Queue blink.
     wsClient.on('SYNC_ALL', (message) => {
-      console.log('[DownloadStore] SYNC_ALL received:', message.tasks?.length || 0, 'tasks');
+      console.log('[DownloadStore] SYNC_ALL received:', message.tasks?.length || 0, 'active tasks');
       
       if (message.tasks && Array.isArray(message.tasks)) {
-        const downloadsMap = new Map<string, DownloadTask>();
-        message.tasks.forEach((task: DownloadTask) => {
-          downloadsMap.set(task.id, task);
+        update(state => {
+          // Upsert active tasks into the existing map — don't replace the whole map.
+          // The server explicitly sends only active tasks here; the rest of the
+          // map comes from fetchDownloads() pagination calls.
+          const newDownloads = new Map(state.downloads);
+          (message.tasks as DownloadTask[]).forEach((task: DownloadTask) => {
+            newDownloads.set(task.id, task);
+          });
+          return { ...state, downloads: newDownloads };
         });
-
-        update(state => ({
-          ...state,
-          downloads: downloadsMap,
-        }));
       }
     });
 
@@ -1126,6 +1149,10 @@ function createDownloadStore() {
           console.log('[DownloadStore] Batch item removed, refetching batches...');
           fetchBatches().catch(err => console.error('Failed to refetch batches:', err));
         }
+
+        // Sync library overview whenever a task is removed — it may have been
+        // a COMPLETED item that was imported, affecting counts on the dashboard.
+        fetchLibraryOverview().catch(() => {});
       }
     });
 
