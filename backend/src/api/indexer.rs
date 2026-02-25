@@ -401,25 +401,57 @@ async fn convert_smart_response_to_xml(
     generate_search_xml(indexer_results, query)
 }
 
-/// Fetch TMDB title for a given ID
+/// Fetch TMDB title for a given ID — with in-process caching.
+///
+/// During a batch grab of 71 episodes the orchestrator calls this once per
+/// episode because `meta.title` is None.  Without caching that's 71 TMDB
+/// requests in rapid succession, which hits TMDB's rate limit (~40 req/10s)
+/// and returns 429 errors from episode 31 onwards.
+///
+/// This cache keeps `(tmdb_id, media_type)` → title for 24 hours so the
+/// entire batch costs exactly ONE real TMDB call.
 pub async fn fetch_tmdb_title(tmdb_id: &str, media_type: &str) -> Option<String> {
+    use moka::future::Cache;
+    use once_cell::sync::Lazy;
+
+    static TITLE_CACHE: Lazy<Cache<String, Option<String>>> = Lazy::new(|| {
+        Cache::builder()
+            .max_capacity(2048)
+            .time_to_live(std::time::Duration::from_secs(86400)) // 24h
+            .build()
+    });
+
+    let cache_key = format!("{}:{}", media_type, tmdb_id);
+
+    // Return cached value if present (including a cached None, to avoid re-requesting
+    // IDs that TMDB doesn't know about).
+    if let Some(cached) = TITLE_CACHE.get(&cache_key).await {
+        tracing::debug!("TMDB title cache HIT: {} → {:?}", cache_key, cached);
+        return cached;
+    }
+
+    tracing::info!("TMDB title cache MISS: {} — fetching from API", cache_key);
     let client = Client::new();
     let endpoint = if media_type == "tv" { "tv" } else { "movie" };
     let url = format!(
         "https://api.themoviedb.org/3/{}/{}?api_key={}",
         endpoint, tmdb_id, TMDB_API_KEY
     );
-    
-    let resp = client.get(&url).send().await.ok()?;
-    let data: Value = resp.json().await.ok()?;
-    
-    // TV shows use "name", movies use "title"
-    if media_type == "tv" {
-        data["name"].as_str().map(|s| s.to_string())
-    } else {
-        data["title"].as_str().map(|s| s.to_string())
-    }
+
+    let result: Option<String> = async {
+        let resp = client.get(&url).send().await.ok()?;
+        let data: Value = resp.json().await.ok()?;
+        if media_type == "tv" {
+            data["name"].as_str().map(|s| s.to_string())
+        } else {
+            data["title"].as_str().map(|s| s.to_string())
+        }
+    }.await;
+
+    TITLE_CACHE.insert(cache_key, result.clone()).await;
+    result
 }
+
 
 /// Synthesize a parseable title for Sonarr
 /// Format: "Series Name - S01E01 - Original Filename" or "Series Name - Original Filename"
