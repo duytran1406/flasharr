@@ -492,8 +492,9 @@
   .dashboard-page {
     display: grid;
     grid-template-columns: 70% 30%;
-    /* Pinned exactly to viewport. 2rem = top+bottom padding (1rem each). */
-    height: calc(100vh - var(--header-height) - 2rem);
+    /* Fill whatever .view-container gives us — don't recompute 100vh here.
+       The parent already subtracts the header; we just need to fill it. */
+    height: 100%;
     gap: 1rem;
     padding: 1rem;
     overflow: hidden;
@@ -1169,15 +1170,13 @@
      COLUMN B / QUEUE / PREMIUM-CARD (unchanged)
      ══════════════════════════════════════════════ */
 
-  /* COLUMN B — pinned to exact viewport height, 3 cards split equally */
+  /* COLUMN B — fills its grid cell, no independent 100vh math */
   .column-b {
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    /* Same calc as dashboard-page height so column-b is always viewport-locked.
-       2rem = 1rem top + 1rem bottom padding from dashboard-page.
-       2rem more for the gap between the two columns' padding contribution. */
-    height: calc(100vh - var(--header-height) - 2rem);
+    height: 100%;
+    min-height: 0;
     overflow: hidden;
     box-sizing: border-box;
   }
