@@ -4,6 +4,8 @@
   import { animeFly } from "$lib/animations";
   import type { TMDBMovie, TMDBTVShow } from "$lib/types/tmdb";
   import { MediaCard, ErrorState } from "$lib/components";
+  import { fetchAllMovies, type RadarrMovie } from "$lib/stores/arr";
+  import { integrations } from "$lib/stores/settings";
 
   // ============= CONFIGURATION =============
   const ITEMS_PER_PAGE = 20; // TMDB returns 20 per page
@@ -18,6 +20,7 @@
   }
 
   // ============= STATE =============
+  let activeView: "movie" | "tv" | "collections" = "movie";
   let mediaType: "movie" | "tv" = "movie";
   let sortBy = "popularity.desc";
   let searchQuery = "";
@@ -33,6 +36,73 @@
   let currentPage = 1;
   let hasMore = true;
   let scrollContainer: HTMLElement;
+
+  // ============= COLLECTIONS STATE =============
+  interface CollectionGroup {
+    tmdbId: number;
+    title: string;
+    movies: RadarrMovie[];
+    posterPath: string | null;
+  }
+  let collections: CollectionGroup[] = [];
+  let collectionsLoading = false;
+
+  async function loadCollections() {
+    collectionsLoading = true;
+    try {
+      const allMovies = await fetchAllMovies();
+      // Group by collection
+      const map = new Map<number, CollectionGroup>();
+      for (const m of allMovies) {
+        if (!m.collection?.tmdbId) continue;
+        const existing = map.get(m.collection.tmdbId);
+        if (existing) {
+          existing.movies.push(m);
+        } else {
+          map.set(m.collection.tmdbId, {
+            tmdbId: m.collection.tmdbId,
+            title: m.collection.title,
+            movies: [m],
+            posterPath: null,
+          });
+        }
+      }
+      // Only show collections with 2+ movies (otherwise nothing to complete)
+      const groups = Array.from(map.values()).filter(
+        (g) => g.movies.length >= 2,
+      );
+      // Fetch posters from TMDB collection endpoint in parallel (max 20)
+      const posterFetches = groups.slice(0, 40).map(async (g) => {
+        try {
+          const res = await fetch(`/api/tmdb/collection/${g.tmdbId}`);
+          if (res.ok) {
+            const data = await res.json();
+            g.posterPath = data.poster_path ?? null;
+          }
+        } catch {
+          /* no poster, fine */
+        }
+      });
+      await Promise.all(posterFetches);
+      collections = groups.sort((a, b) => a.title.localeCompare(b.title));
+    } catch (e) {
+      console.error("[Discover] Collections load failed:", e);
+    } finally {
+      collectionsLoading = false;
+    }
+  }
+
+  function switchView(v: "movie" | "tv" | "collections") {
+    activeView = v;
+    if (v === "collections") {
+      if (collections.length === 0 && !collectionsLoading) loadCollections();
+    } else {
+      mediaType = v as "movie" | "tv";
+      selectedGenres = [];
+      fetchGenres();
+      fetchDiscoverData(true);
+    }
+  }
 
   // ============= OBJECT POOL =============
   // Create fixed pool of 1000 slots - NEVER changes length
@@ -333,40 +403,56 @@
       <div class="media-toggle">
         <button
           class="toggle-btn"
-          class:active={mediaType === "movie"}
-          onclick={() => changeMediaType("movie")}
+          class:active={activeView === "movie"}
+          onclick={() => switchView("movie")}
         >
           MOVIES
         </button>
         <button
           class="toggle-btn"
-          class:active={mediaType === "tv"}
-          onclick={() => changeMediaType("tv")}
+          class:active={activeView === "tv"}
+          onclick={() => switchView("tv")}
         >
           TV
         </button>
+        {#if $integrations.radarr_enabled}
+          <button
+            class="toggle-btn"
+            class:active={activeView === "collections"}
+            onclick={() => switchView("collections")}
+          >
+            <span
+              class="material-icons"
+              style="font-size:0.9rem;vertical-align:middle;"
+              >collections_bookmark</span
+            >
+            COLLECTIONS
+          </button>
+        {/if}
       </div>
 
-      <div class="select-wrapper">
-        <select
-          class="sort-select"
-          bind:value={sortBy}
-          onchange={() => changeSort(sortBy)}
+      {#if activeView !== "collections"}
+        <div class="select-wrapper">
+          <select
+            class="sort-select"
+            bind:value={sortBy}
+            onchange={() => changeSort(sortBy)}
+          >
+            {#each sortOptions as option}
+              <option value={option.value}>{option.label}</option>
+            {/each}
+          </select>
+          <span class="material-icons select-chevron">expand_more</span>
+        </div>
+
+        <button
+          class="filter-toggle-btn"
+          class:active={showFilters}
+          onclick={() => (showFilters = !showFilters)}
         >
-          {#each sortOptions as option}
-            <option value={option.value}>{option.label}</option>
-          {/each}
-        </select>
-        <span class="material-icons select-chevron">expand_more</span>
-      </div>
-
-      <button
-        class="filter-toggle-btn"
-        class:active={showFilters}
-        onclick={() => (showFilters = !showFilters)}
-      >
-        <span class="material-icons">tune</span>
-      </button>
+          <span class="material-icons">tune</span>
+        </button>
+      {/if}
     </div>
   </div>
 
@@ -376,56 +462,107 @@
     <div
       class="discover-scroll-container"
       bind:this={scrollContainer}
-      onscroll={handleScroll}
+      onscroll={activeView !== "collections" ? handleScroll : undefined}
     >
-      <div class="discover-grid">
-        {#if loading && pool.filter((s) => s.visible).length === 0}
-          <!-- Show simple loading message -->
+      {#if activeView === "collections"}
+        <!-- ── Collections View ────────────────────────────── -->
+        {#if collectionsLoading}
           <div class="initial-loading">
             <div class="spinner"></div>
-            <p>Loading content...</p>
+            <p>Loading collections...</p>
           </div>
-        {:else if error && pool.filter((s) => s.visible).length === 0}
-          <!-- Show error state -->
-          <div class="error-container">
-            <ErrorState
-              title="Failed to load content"
-              message={error}
-              showRetry={true}
-              onRetry={() => fetchDiscoverData(true)}
-            />
+        {:else if collections.length === 0}
+          <div class="initial-loading">
+            <span class="material-icons" style="font-size:3rem;opacity:0.2;"
+              >collections_bookmark</span
+            >
+            <p>No collections found in your Radarr library.</p>
           </div>
         {:else}
-          <!-- Object Pooling: Fixed array of 60 slots, only render visible ones -->
-          {#each pool as slot (slot.slotId)}
-            {#if slot.visible && slot.data}
-              <MediaCard
-                id={slot.data.id}
-                title={getTitle(slot.data)}
-                posterPath={slot.data.poster_path}
-                voteAverage={slot.data.vote_average}
-                releaseDate={"release_date" in slot.data
-                  ? slot.data.release_date
-                  : slot.data.first_air_date}
-                overview={slot.data.overview}
-                {mediaType}
-                badge={getBadge(slot.data)
-                  ? {
-                      text: getBadge(slot.data)!.text,
-                      variant: getBadge(slot.data)!.variant,
-                    }
-                  : undefined}
-              />
-            {/if}
-          {/each}
+          <div class="collection-grid">
+            {#each collections as col (col.tmdbId)}
+              <a
+                class="collection-card"
+                href="/discover/collection/{col.tmdbId}"
+                onclick={(e) => {
+                  e.preventDefault();
+                  goto(
+                    `/discover?collection=${col.tmdbId}&title=${encodeURIComponent(col.title)}`,
+                  );
+                }}
+              >
+                <div class="col-poster">
+                  {#if col.posterPath}
+                    <img
+                      src="https://image.tmdb.org/t/p/w342{col.posterPath}"
+                      alt={col.title}
+                      loading="lazy"
+                    />
+                  {:else}
+                    <div class="col-poster-placeholder">
+                      <span class="material-icons">collections_bookmark</span>
+                    </div>
+                  {/if}
+                  <div class="col-owned-badge">{col.movies.length} owned</div>
+                </div>
+                <div class="col-info">
+                  <span class="col-title">{col.title}</span>
+                </div>
+              </a>
+            {/each}
+          </div>
         {/if}
-      </div>
-
-      {#if loading && pool.filter((s) => s.visible).length > 0}
-        <div class="loading-indicator">
-          <div class="spinner"></div>
-          <p>Loading more...</p>
+      {:else}
+        <!-- ── Movies / TV View ────────────────────────────── -->
+        <div class="discover-grid">
+          {#if loading && pool.filter((s) => s.visible).length === 0}
+            <!-- Show simple loading message -->
+            <div class="initial-loading">
+              <div class="spinner"></div>
+              <p>Loading content...</p>
+            </div>
+          {:else if error && pool.filter((s) => s.visible).length === 0}
+            <!-- Show error state -->
+            <div class="error-container">
+              <ErrorState
+                title="Failed to load content"
+                message={error}
+                showRetry={true}
+                onRetry={() => fetchDiscoverData(true)}
+              />
+            </div>
+          {:else}
+            <!-- Object Pooling: Fixed array of 60 slots, only render visible ones -->
+            {#each pool as slot (slot.slotId)}
+              {#if slot.visible && slot.data}
+                <MediaCard
+                  id={slot.data.id}
+                  title={getTitle(slot.data)}
+                  posterPath={slot.data.poster_path}
+                  voteAverage={slot.data.vote_average}
+                  releaseDate={"release_date" in slot.data
+                    ? slot.data.release_date
+                    : slot.data.first_air_date}
+                  overview={slot.data.overview}
+                  {mediaType}
+                  badge={getBadge(slot.data)
+                    ? {
+                        text: getBadge(slot.data)!.text,
+                        variant: getBadge(slot.data)!.variant,
+                      }
+                    : undefined}
+                />
+              {/if}
+            {/each}
+          {/if}
         </div>
+
+        {#if loading && pool.filter((s) => s.visible).length > 0}
+          <div class="loading-indicator">
+            <div class="spinner"></div>
+            <p>Loading more...</p>
+          </div>
+        {/if}
       {/if}
     </div>
 
@@ -742,6 +879,92 @@
     grid-template-columns: repeat(5, 1fr);
     gap: 1.5rem;
     padding-bottom: 4rem;
+  }
+
+  /* Collections Grid */
+  .collection-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 1.5rem;
+    padding-bottom: 4rem;
+  }
+
+  .collection-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .col-poster {
+    position: relative;
+    border-radius: 4px;
+    overflow: hidden;
+    aspect-ratio: 2/3;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    transition:
+      transform 0.2s,
+      box-shadow 0.2s;
+  }
+
+  .collection-card:hover .col-poster {
+    transform: scale(1.03) translateY(-3px);
+    box-shadow:
+      0 12px 40px rgba(0, 0, 0, 0.5),
+      0 0 0 1px rgba(0, 243, 255, 0.3);
+  }
+
+  .col-poster img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .col-poster-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.2);
+  }
+
+  .col-poster-placeholder .material-icons {
+    font-size: 3rem;
+  }
+
+  .col-owned-badge {
+    position: absolute;
+    bottom: 6px;
+    right: 6px;
+    background: rgba(0, 243, 255, 0.15);
+    border: 1px solid rgba(0, 243, 255, 0.4);
+    color: var(--color-primary);
+    font-size: 0.55rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    padding: 2px 6px;
+    border-radius: 2px;
+    font-family: var(--font-mono, monospace);
+    backdrop-filter: blur(4px);
+  }
+
+  .col-info {
+    padding: 0 2px;
+  }
+
+  .col-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.85);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    line-height: 1.4;
   }
 
   .error-container,

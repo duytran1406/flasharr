@@ -49,6 +49,11 @@ export interface SonarrSeries {
   statistics?: SonarrStatistics;
 }
 
+export interface RadarrCollection {
+  title: string;
+  tmdbId: number;
+}
+
 export interface RadarrMovie {
   id: number;
   title: string;
@@ -63,6 +68,8 @@ export interface RadarrMovie {
   images?: MediaImage[];
   qualityProfileId?: number;
   runtime?: number;
+  /** Radarr collection grouping (e.g. Marvel Cinematic Universe) */
+  collection?: RadarrCollection;
 }
 
 export interface MediaImage {

@@ -159,23 +159,23 @@
 
   /* Each card slot: fixed width, no overflow needed (title is in scrim) */
   :global(.recently-added .scroller .media-card) {
-    flex: 0 0 160px;
-    width: 160px;
+    flex: 0 0 120px;
+    width: 120px;
   }
 
   :global(.recently-added .scroller .poster-wrap) {
-    height: 240px;
-    width: 160px;
+    height: 180px;
+    width: 120px;
   }
 
   @media (max-width: 768px) {
     :global(.recently-added .scroller .media-card),
     :global(.recently-added .scroller .poster-wrap) {
-      flex: 0 0 130px;
-      width: 130px;
+      flex: 0 0 100px;
+      width: 100px;
     }
     :global(.recently-added .scroller .poster-wrap) {
-      height: 195px;
+      height: 150px;
     }
   }
 </style>

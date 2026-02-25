@@ -15,7 +15,12 @@
   import LibraryCoverage from "$lib/components/dashboard/LibraryCoverage.svelte";
   import RecentlyAdded from "$lib/components/dashboard/RecentlyAdded.svelte";
   import NetflowStats from "$lib/components/dashboard/NetflowStats.svelte";
-  import { engineStats, formatSpeed, downloads } from "$lib/stores/downloads";
+  import {
+    engineStats,
+    formatSpeed,
+    downloads,
+    downloadStore,
+  } from "$lib/stores/downloads";
   import {
     fetchLibraryOverview,
     libraryOverview,
@@ -90,17 +95,52 @@
     $integrations.sonarr_enabled || $integrations.radarr_enabled,
   );
 
-  // Active downloads for queue — states are ALL-CAPS per DownloadState enum
-  let activeDownloads = $derived(
-    ($downloads || [])
-      .filter(
-        (d: any) =>
-          d.state === "DOWNLOADING" ||
-          d.state === "QUEUED" ||
-          d.state === "STARTING",
-      )
-      .slice(0, 4),
-  );
+  // Active downloads for queue — must read both standalone downloads AND batch items
+  // because TASK_BATCH_UPDATE only inserts batch tasks into batchItems, not downloads.
+  let activeDownloads = $derived.by(() => {
+    const state = $downloadStore;
+    const ACTIVE_STATES = new Set([
+      "DOWNLOADING",
+      "QUEUED",
+      "STARTING",
+      "WAITING",
+    ]);
+
+    // Collect from standalone downloads
+    const standalone = Array.from(state.downloads.values()).filter((d) =>
+      ACTIVE_STATES.has(d.state),
+    );
+
+    // Collect from all expanded batch items
+    const fromBatches: any[] = [];
+    for (const items of state.batchItems.values()) {
+      for (const item of items) {
+        if (ACTIVE_STATES.has(item.state)) fromBatches.push(item);
+      }
+    }
+
+    // Merge + deduplicate by task id, sort DOWNLOADING first
+    const seen = new Set<string>();
+    const all = [...standalone, ...fromBatches].filter((d) => {
+      if (seen.has(d.id)) return false;
+      seen.add(d.id);
+      return true;
+    });
+
+    return all
+      .sort((a, b) => {
+        const priority = (s: string) =>
+          s === "DOWNLOADING"
+            ? 0
+            : s === "STARTING"
+              ? 1
+              : s === "WAITING"
+                ? 2
+                : 3;
+        return priority(a.state) - priority(b.state);
+      })
+      .slice(0, 5);
+  });
 
   // Account details for dashboard
   let account = $derived(accountStore.primaryFormatted);

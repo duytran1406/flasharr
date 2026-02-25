@@ -20,9 +20,10 @@
   let sortBy = $state("title");
   let filterStatus = $state("all");
 
-  // Pagination
-  let currentPage = $state(1);
-  const itemsPerPage = 60; // Just enough for a few screens
+  // Infinite scroll: reveal items progressively, 60 at a time
+  let displayCount = $state(60);
+  const ITEMS_STEP = 60;
+  let sentinel: HTMLElement | undefined = $state();
 
   // Data
   let series = $state<SonarrSeries[]>([]);
@@ -63,6 +64,24 @@
     } finally {
       loading = false;
     }
+
+    // Infinite scroll sentinel
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          const total =
+            activeTab === "series"
+              ? filteredSeries().length
+              : filteredMovies().length;
+          if (displayCount < total) displayCount += ITEMS_STEP;
+        }
+      },
+      { rootMargin: "200px" },
+    );
+    $effect(() => {
+      if (sentinel) observer.observe(sentinel);
+      return () => observer.disconnect();
+    });
   });
 
   // Helpers to read stats from nested statistics
@@ -181,26 +200,24 @@
     if (status === "upcoming") return "#fbbf24";
     return "#64748b";
   }
-  // Paginated Results
-  let paginatedItems = $derived(() => {
+  // Progressively-visible items (infinite scroll)
+  let visibleItems = $derived(() => {
     const list = activeTab === "series" ? filteredSeries() : filteredMovies();
-    const start = (currentPage - 1) * itemsPerPage;
-    return list.slice(start, start + itemsPerPage);
+    return list.slice(0, displayCount);
   });
 
-  let totalPages = $derived(() => {
+  let hasMoreItems = $derived(() => {
     const list = activeTab === "series" ? filteredSeries() : filteredMovies();
-    return Math.ceil(list.length / itemsPerPage);
+    return displayCount < list.length;
   });
 
-  // Reset page on filter change
+  // Reset display count on filter change
   $effect(() => {
-    // access reactive values to trigger effect
     activeTab;
     searchQuery;
     filterStatus;
     sortBy;
-    currentPage = 1;
+    displayCount = ITEMS_STEP;
   });
 </script>
 
@@ -356,7 +373,7 @@
   {:else}
     <div class="content-wrapper">
       <div class="media-grid" class:list-view={viewMode === "list"}>
-        {#each paginatedItems() as item (item.id)}
+        {#each visibleItems() as item (item.id)}
           <MediaCard
             {item}
             type={activeTab === "series" ? "series" : "movie"}
@@ -370,24 +387,10 @@
         {/each}
       </div>
 
-      <!-- Pagination Controls -->
-      {#if totalPages() > 1}
-        <div class="pagination">
-          <button
-            disabled={currentPage === 1}
-            onclick={() => currentPage--}
-            class="page-btn"
-          >
-            <span class="material-icons">chevron_left</span>
-          </button>
-          <span class="page-info">Page {currentPage} of {totalPages()}</span>
-          <button
-            disabled={currentPage === totalPages()}
-            onclick={() => currentPage++}
-            class="page-btn"
-          >
-            <span class="material-icons">chevron_right</span>
-          </button>
+      <!-- Infinite scroll sentinel -->
+      {#if hasMoreItems()}
+        <div class="scroll-sentinel" bind:this={sentinel}>
+          <div class="pulse-ring"></div>
         </div>
       {/if}
     </div>
@@ -416,6 +419,12 @@
   .tabs {
     display: flex;
     gap: 2px;
+  }
+
+  .scroll-sentinel {
+    display: flex;
+    justify-content: center;
+    padding: 1.5rem;
   }
 
   .tab {
