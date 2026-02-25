@@ -63,11 +63,22 @@ impl Default for QualityAttributes {
 impl QualityAttributes {
     pub fn quality_name(&self) -> String {
         let src = self.source.as_deref().unwrap_or("Unknown");
-        let res = self.resolution.as_deref().unwrap_or("SD");
-        if src == "Remux" {
-            format!("Remux-{}", res)
-        } else {
-            format!("{}-{}", src, res)
+        match self.resolution.as_deref() {
+            Some(res) => {
+                if src == "Remux" {
+                    format!("Remux-{}", res)
+                } else {
+                    format!("{}-{}", src, res)
+                }
+            }
+            None => {
+                // No resolution detected — don't fraudulently label as SD
+                if src == "Unknown" {
+                    "Unknown".to_string()
+                } else {
+                    format!("{}-Unknown", src)
+                }
+            }
         }
     }
 
@@ -372,7 +383,14 @@ impl FilenameParser {
             attrs.is_hd = true;
         }
 
-        // Source
+        // Source — word-boundary regexes to avoid false positives like "ts" inside "subtitle"
+        static TS_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        static TC_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        static DVD_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+        let ts_re  = TS_RE.get_or_init(|| Regex::new(r"(?i)\b(ts|telesync|telecine)\b").unwrap());
+        let tc_re  = TC_RE.get_or_init(|| Regex::new(r"(?i)\b(tc|telecine)\b").unwrap());
+        let dvd_re = DVD_RE.get_or_init(|| Regex::new(r"(?i)\b(dvd|dvdrip|dvd5|dvd9)\b").unwrap());
+
         if fl.contains("remux") {
             attrs.source = Some("Remux".to_string());
         } else if fl.contains("bluray") || fl.contains("blu-ray") {
@@ -381,13 +399,13 @@ impl FilenameParser {
             attrs.source = Some("BDRip".to_string());
         } else if fl.contains("web-dl") || fl.contains("webdl") {
             attrs.source = Some("WebDL".to_string());
-        } else if fl.contains("webrip") {
+        } else if fl.contains("webrip") || fl.contains("web-rip") {
             attrs.source = Some("WEBRip".to_string());
-        } else if fl.contains("hdtv") {
+        } else if fl.contains("hdtv") || fl.contains("pdtv") {
             attrs.source = Some("HDTV".to_string());
-        } else if fl.contains("dvdrip") || fl.contains("dvd") {
+        } else if dvd_re.is_match(&fl) {
             attrs.source = Some("DVDRip".to_string());
-        } else if fl.contains("ts") || fl.contains("tc") {
+        } else if ts_re.is_match(&fl) || tc_re.is_match(&fl) {
             attrs.source = Some("TS".to_string());
         } else if fl.contains("cam") {
             attrs.source = Some("CAM".to_string());
