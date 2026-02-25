@@ -198,7 +198,7 @@ async fn main() {
     // Initialize Caches
     let search_cache = Cache::builder()
         .max_capacity(100)
-        .time_to_live(Duration::from_secs(3600)) // 1 hour
+        .time_to_live(Duration::from_secs(600)) // 10 minutes — keeps episode counts fresh for ongoing shows
         .build();
 
     let tmdb_cache = Cache::builder()
