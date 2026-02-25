@@ -434,15 +434,31 @@ async fn handle_history(state: Arc<AppState>) -> Result<Json<serde_json::Value>,
                 _ => "Unknown",
             };
             
-            // Map container path to Sonarr path
-            // Container sees: /downloads/...
-            // Sonarr sees: /data/downloads/...
+            // Skip items with no destination — they'd produce an empty path
+            // which Sonarr rejects as "not a valid path".
+            if t.destination.is_empty() {
+                tracing::debug!("SABnzbd history: skipping {} - destination is empty", t.filename);
+                return None;
+            }
+
+            // Map container path to Sonarr path.
+            // Flasharr container:  /downloads/Show/ep.mkv
+            // Sonarr (LXC 110):   /data/downloads/Show/ep.mkv  (has /data → /data)
             let sonarr_path = if t.destination.starts_with("/downloads/") {
+                // Container-internal path → prefix with /data
                 format!("/data{}", t.destination)
-            } else {
+            } else if t.destination.starts_with("/data/downloads/") {
+                // Already the correct Sonarr-visible path (tasks added post-fix)
                 t.destination.clone()
+            } else {
+                // Unknown path — log and skip so Sonarr doesn't get a garbage path
+                tracing::warn!(
+                    "SABnzbd history: unexpected destination path for {}: {}",
+                    t.filename, t.destination
+                );
+                return None;
             };
-            
+
             // Only return completed items where the file actually exists on disk
             // This prevents "No files found are eligible for import" errors
             if status == "Completed" {
@@ -452,6 +468,7 @@ async fn handle_history(state: Arc<AppState>) -> Result<Json<serde_json::Value>,
                     return None;
                 }
             }
+
             
             // Extract storage directory from destination path
             let storage = if let Some(parent) = std::path::Path::new(&sonarr_path).parent() {
