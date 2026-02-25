@@ -33,6 +33,7 @@
   // Library integration
   let libraryMovie = $state<RadarrMovie | null>(null);
   let inLibrary = $derived(libraryMovie !== null);
+  let addingToLibrary = $state(false);
   let isUpcoming = $derived(
     !movie ||
       movie.status === "Planned" ||
@@ -94,6 +95,37 @@
     const hrs = Math.floor(mins / 60);
     const m = mins % 60;
     return hrs > 0 ? `${hrs}h ${m}m` : `${m}m`;
+  }
+
+  async function handleAddToLibrary() {
+    if (!movie || addingToLibrary) return;
+    addingToLibrary = true;
+    try {
+      const resp = await fetch("/api/arr/movies/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tmdb_id: Number(movieId) }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        toasts.success(`"${movie.title}" added to Radarr library`);
+        // Mark as in-library optimistically so the button disappears
+        libraryMovie = {
+          id: data.arr_id,
+          title: movie.title,
+          tmdb_id: Number(movieId),
+        } as any;
+      } else if (resp.status === 409) {
+        toasts.info(`"${movie.title}" is already in your Radarr library`);
+      } else {
+        const text = await resp.text();
+        toasts.error(`Failed to add to library: ${text}`);
+      }
+    } catch {
+      toasts.error("Network error — could not reach server");
+    } finally {
+      addingToLibrary = false;
+    }
   }
 
   function handleSmartSearch() {
@@ -353,7 +385,9 @@
               icon="library_add"
               size="md"
               width="100%"
-              disabled>Add to Library</Button
+              disabled={addingToLibrary}
+              onclick={handleAddToLibrary}
+              >{addingToLibrary ? "Adding..." : "Add to Library"}</Button
             >
           {/if}
         </div>

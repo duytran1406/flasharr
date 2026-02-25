@@ -5,7 +5,7 @@
 
 use axum::{
     extract::{Query, State},
-    routing::get,
+    routing::{get, post},
     Json, Router,
     http::StatusCode,
 };
@@ -32,6 +32,9 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/health", get(arr_health))
         .route("/status", get(arr_status))
         .route("/history", get(history))
+        // Library management
+        .route("/series/add", post(add_series))
+        .route("/movies/add", post(add_movie))
 }
 
 // ============================================================================
@@ -72,6 +75,19 @@ struct MissingQuery {
 #[derive(Deserialize)]
 struct HistoryQuery {
     page_size: Option<i32>,
+}
+
+#[derive(Deserialize)]
+struct AddToLibraryRequest {
+    tmdb_id: i64,
+}
+
+#[derive(Serialize)]
+struct AddToLibraryResponse {
+    success: bool,
+    /// Sonarr series ID or Radarr movie ID
+    arr_id: i32,
+    message: String,
 }
 
 #[derive(Serialize)]
@@ -369,4 +385,80 @@ async fn history(
     };
 
     Ok(Json(HistoryResponse { sonarr, radarr }))
+}
+
+// ============================================================================
+// Library Management Handlers
+// ============================================================================
+
+/// POST /api/arr/series/add — Add TV show to Sonarr by TMDB ID.
+/// Auto-selects the first available root folder; quality profile defaults to 1 ("Any").
+async fn add_series(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<AddToLibraryRequest>,
+) -> Result<Json<AddToLibraryResponse>, (axum::http::StatusCode, String)> {
+    let client = state.download_orchestrator.get_arr_client().await
+        .ok_or_else(|| (axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "Arr client not available".to_string()))?;
+
+    let root_folders = client.get_sonarr_root_folders().await
+        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY,
+            format!("Failed to get Sonarr root folders: {}", e)))?;
+
+    let root_folder = root_folders.first()
+        .ok_or_else(|| (axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "No root folders configured in Sonarr".to_string()))?;
+
+    match client.add_series_by_tmdb(body.tmdb_id, 1, &root_folder.path).await {
+        Ok(series_id) => Ok(Json(AddToLibraryResponse {
+            success: true,
+            arr_id: series_id,
+            message: format!("Series added to Sonarr (ID: {})", series_id),
+        })),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("already exists") || msg.contains("already been added") {
+                Err((axum::http::StatusCode::CONFLICT,
+                    "Series is already in the Sonarr library".to_string()))
+            } else {
+                Err((axum::http::StatusCode::BAD_GATEWAY, format!("Sonarr error: {}", msg)))
+            }
+        }
+    }
+}
+
+/// POST /api/arr/movies/add — Add movie to Radarr by TMDB ID.
+/// Auto-selects the first available root folder; quality profile defaults to 1 ("Any").
+async fn add_movie(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<AddToLibraryRequest>,
+) -> Result<Json<AddToLibraryResponse>, (axum::http::StatusCode, String)> {
+    let client = state.download_orchestrator.get_arr_client().await
+        .ok_or_else(|| (axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "Arr client not available".to_string()))?;
+
+    let root_folders = client.get_radarr_root_folders().await
+        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY,
+            format!("Failed to get Radarr root folders: {}", e)))?;
+
+    let root_folder = root_folders.first()
+        .ok_or_else(|| (axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "No root folders configured in Radarr".to_string()))?;
+
+    match client.add_movie_by_tmdb(body.tmdb_id, 1, &root_folder.path).await {
+        Ok(movie_id) => Ok(Json(AddToLibraryResponse {
+            success: true,
+            arr_id: movie_id,
+            message: format!("Movie added to Radarr (ID: {})", movie_id),
+        })),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("already exists") || msg.contains("already been added") {
+                Err((axum::http::StatusCode::CONFLICT,
+                    "Movie is already in the Radarr library".to_string()))
+            } else {
+                Err((axum::http::StatusCode::BAD_GATEWAY, format!("Radarr error: {}", msg)))
+            }
+        }
+    }
 }

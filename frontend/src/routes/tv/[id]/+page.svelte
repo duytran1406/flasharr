@@ -41,6 +41,7 @@
   let librarySeries = $state<SonarrSeries | null>(null);
   let libraryEpisodes = $state<SonarrEpisode[]>([]);
   let inLibrary = $derived(librarySeries !== null);
+  let addingToLibrary = $state(false);
   let isUpcoming = $derived(
     !tv ||
       tv.status === "Planned" ||
@@ -101,6 +102,33 @@
       toasts.error(`Failed to load Season ${num}`);
     } finally {
       loadingSeason = false;
+    }
+  }
+
+  async function handleAddToLibrary() {
+    if (!tv || addingToLibrary) return;
+    addingToLibrary = true;
+    try {
+      const resp = await fetch("/api/arr/series/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tmdb_id: Number(tvId) }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        toasts.success(`"${tv.name}" added to Sonarr library`);
+        // Mark as in-library optimistically so the button disappears
+        librarySeries = { id: data.arr_id, title: tv.name } as any;
+      } else if (resp.status === 409) {
+        toasts.info(`"${tv.name}" is already in your Sonarr library`);
+      } else {
+        const text = await resp.text();
+        toasts.error(`Failed to add to library: ${text}`);
+      }
+    } catch {
+      toasts.error("Network error — could not reach server");
+    } finally {
+      addingToLibrary = false;
     }
   }
 
@@ -496,7 +524,9 @@
               icon="library_add"
               size="md"
               width="100%"
-              disabled>Add to Library</Button
+              disabled={addingToLibrary}
+              onclick={handleAddToLibrary}
+              >{addingToLibrary ? "Adding..." : "Add to Library"}</Button
             >
           {/if}
         </div>
