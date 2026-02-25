@@ -1301,8 +1301,6 @@ impl DownloadOrchestrator {
                     }
                 }
                 
-                tracing::error!("Worker {}: Download failed for {}: {}", worker_id, task_id, error_string);
-                
                 // Check if user cancelled (not paused)
                 if cancel_token.is_cancelled() {
                     // Check one more time if it was paused
@@ -1315,7 +1313,6 @@ impl DownloadOrchestrator {
                     // True cancellation (delete/stop), not pause
                     task_manager.mark_failed(task_id, "Download cancelled".to_string());
                     
-                    // Broadcast FAILED state to WebSocket
                     let _ = progress_tx.send(ProgressUpdate {
                         event: TaskEvent::Updated,
                         task_id: task_id.to_string(),
@@ -1335,31 +1332,105 @@ impl DownloadOrchestrator {
                     return;
                 }
                 
-                // Check if should retry (only for actual failures, not pauses)
+                // ── Intelligent error classification ──────────────────────────
+                // Use ErrorClassifier to determine the correct recovery strategy
+                // instead of blindly retrying everything with the same config.
+                use super::error_classifier::{ErrorCategory, ErrorClassifier};
+                let category = ErrorClassifier::classify(&e);
+                
+                tracing::warn!(
+                    "Worker {}: Download failed for {} — {:?} — {}",
+                    worker_id, task_id, category, error_string
+                );
+                
                 if let Some(mut task) = task_manager.get_task(task_id) {
-                    if task.retry_count < config.retry.max_retries {
-                        task.retry_count += 1;
-                        task.state = DownloadState::Waiting;
-                        let delay = Self::calculate_retry_delay_static(task.retry_count, config);
-                        task.wait_until = Some(Utc::now() + chrono::Duration::from_std(delay).unwrap());
-                        task.error_message = Some(format!("Retry {}/{}: {}", task.retry_count, config.retry.max_retries, error_string));
-                        task_manager.update_task(task.clone());
+                    match category {
+                        // ── URL expired: refresh the VIP link and try again ──
+                        ErrorCategory::UrlRefreshNeeded { max_retries, reason } => {
+                            if task.retry_count < max_retries {
+                                task.retry_count += 1;
+                                task.state = DownloadState::Waiting;
+                                // Clear the resolved URL so process_task_static re-resolves
+                                // a fresh VIP link on the next attempt via resolve_download_url()
+                                task.url = task.original_url.clone();
+                                task.url_metadata = None;
+                                // Short delay — just enough to avoid hammering the API
+                                task.wait_until = Some(Utc::now() + chrono::Duration::seconds(3));
+                                task.error_message = Some(format!(
+                                    "Link expired ({}/{}): {reason} — getting fresh URL",
+                                    task.retry_count, max_retries
+                                ));
+                                task_manager.update_task(task.clone());
+                                tracing::info!(
+                                    "Worker {}: URL refresh needed for {} — will re-resolve in 3s (attempt {}/{})",
+                                    worker_id, task_id, task.retry_count, max_retries
+                                );
+                            } else {
+                                let msg = format!("Failed after {max_retries} URL refresh attempts: {reason}");
+                                tracing::error!("Worker {}: {}", worker_id, msg);
+                                Self::fail_task(worker_id, task_id, msg, &task_manager, progress_tx, db).await;
+                            }
+                        }
                         
-                        tracing::warn!("Worker {}: Will retry task {} in {:?}", worker_id, task_id, delay);
-                    } else {
-                        task_manager.mark_failed(task_id, format!("Max retries exceeded: {}", error_string));
+                        // ── Retryable: network blip, server busy — retry with delay ──
+                        ErrorCategory::Retryable { max_retries, delay_seconds, reason } => {
+                            if task.retry_count < max_retries {
+                                task.retry_count += 1;
+                                task.state = DownloadState::Waiting;
+                                // Use classifier's delay, bounded by config max
+                                let delay_ms = (delay_seconds * 1000)
+                                    .min(config.retry.max_delay_ms as u64);
+                                task.wait_until = Some(
+                                    Utc::now() + chrono::Duration::milliseconds(delay_ms as i64)
+                                );
+                                task.error_message = Some(format!(
+                                    "Retry {}/{}: {reason}", task.retry_count, max_retries
+                                ));
+                                task_manager.update_task(task.clone());
+                                tracing::warn!(
+                                    "Worker {}: Retryable error for {} in {}ms (attempt {}/{}): {}",
+                                    worker_id, task_id, delay_ms, task.retry_count, max_retries, reason
+                                );
+                            } else {
+                                let msg = format!("Max retries ({max_retries}) exceeded: {reason}");
+                                Self::fail_task(worker_id, task_id, msg, &task_manager, progress_tx, db).await;
+                            }
+                        }
                         
-                        // Broadcast FAILED state to WebSocket
-                        let _ = progress_tx.send(ProgressUpdate {
-                            event: TaskEvent::Updated,
-                            task_id: task_id.to_string(),
-                            downloaded_bytes: 0,
-                            total_bytes: 0,
-                            speed_bytes_per_sec: 0.0,
-                            eta_seconds: 0.0,
-                            percentage: 0.0,
-                            state: "FAILED".to_string(),
-                        });
+                        // ── Permanent: no point retrying ──────────────────────
+                        ErrorCategory::Permanent { reason } => {
+                            let msg = format!("Permanent failure: {reason}");
+                            tracing::error!("Worker {}: {} (task {})", worker_id, msg, task_id);
+                            Self::fail_task(worker_id, task_id, msg, &task_manager, progress_tx, db).await;
+                        }
+                        
+                        // ── Account issue: needs user action ──────────────────
+                        ErrorCategory::AccountIssue { reason, action_required } => {
+                            let msg = format!("Account issue: {reason} — {action_required}");
+                            tracing::error!("Worker {}: {} (task {})", worker_id, msg, task_id);
+                            Self::fail_task(worker_id, task_id, msg, &task_manager, progress_tx, db).await;
+                        }
+                        
+                        // ── System/config issue: retry a few times ────────────
+                        ErrorCategory::SystemIssue { max_retries, reason, fix_suggestion } => {
+                            if task.retry_count < max_retries {
+                                task.retry_count += 1;
+                                task.state = DownloadState::Waiting;
+                                task.wait_until = Some(Utc::now() + chrono::Duration::seconds(10));
+                                task.error_message = Some(format!(
+                                    "System issue ({}/{}): {reason} — Tip: {fix_suggestion}",
+                                    task.retry_count, max_retries
+                                ));
+                                task_manager.update_task(task.clone());
+                                tracing::warn!(
+                                    "Worker {}: System issue for {} (attempt {}/{}): {} — {}",
+                                    worker_id, task_id, task.retry_count, max_retries, reason, fix_suggestion
+                                );
+                            } else {
+                                let msg = format!("{reason} — {fix_suggestion}");
+                                Self::fail_task(worker_id, task_id, msg, &task_manager, progress_tx, db).await;
+                            }
+                        }
                     }
                     
                     if let Some(db) = db {
@@ -1371,6 +1442,7 @@ impl DownloadOrchestrator {
             }
         }
     }
+
     
     /// Calculate retry delay with exponential backoff
     fn calculate_retry_delay_static(retry_count: u32, config: &DownloadConfig) -> Duration {
@@ -1379,6 +1451,38 @@ impl DownloadOrchestrator {
         let delay = base_delay * 2u64.pow(retry_count.saturating_sub(1));
         Duration::from_millis(delay.min(max_delay))
     }
+
+    /// Mark a task as failed and broadcast the state over WebSocket.
+    /// DRY helper shared by all error category handlers in process_task_static.
+    async fn fail_task(
+        worker_id: usize,
+        task_id: uuid::Uuid,
+        message: String,
+        task_manager: &Arc<DownloadTaskManager>,
+        progress_tx: &broadcast::Sender<ProgressUpdate>,
+        db: Option<&Arc<Db>>,
+    ) {
+        tracing::error!("Worker {}: Permanently failing task {}: {}", worker_id, task_id, message);
+        task_manager.mark_failed(task_id, message);
+
+        let _ = progress_tx.send(ProgressUpdate {
+            event: TaskEvent::Updated,
+            task_id: task_id.to_string(),
+            downloaded_bytes: 0,
+            total_bytes: 0,
+            speed_bytes_per_sec: 0.0,
+            eta_seconds: 0.0,
+            percentage: 0.0,
+            state: "FAILED".to_string(),
+        });
+
+        if let Some(db) = db {
+            if let Some(failed_task) = task_manager.get_task(task_id) {
+                let _ = db.save_task(&failed_task);
+            }
+        }
+    }
+
     
     /// Restore tasks from database
     async fn restore_from_db(&self) -> anyhow::Result<()> {

@@ -53,12 +53,22 @@ impl ErrorClassifier {
             return Self::classify_http_error(status, &error_str);
         }
         
-        // Network errors
-        if error_str.contains("timeout") || error_str.contains("timed out") {
+        // Network errors — reqwest reports mid-stream failures as:
+        // "request or response body error: operation timed out"
+        if error_str.contains("timeout") || error_str.contains("timed out") || error_str.contains("operation timed out") {
             return ErrorCategory::Retryable {
                 max_retries: 10,
                 delay_seconds: 5,
-                reason: "Network timeout - connection too slow".to_string(),
+                reason: "Network timeout - server too slow or connection dropped".to_string(),
+            };
+        }
+        
+        // Mid-stream body errors (connection reset mid-download)
+        if error_str.contains("body error") || error_str.contains("incomplete message") {
+            return ErrorCategory::Retryable {
+                max_retries: 10,
+                delay_seconds: 3,
+                reason: "Stream interrupted mid-download".to_string(),
             };
         }
         
@@ -169,7 +179,8 @@ impl ErrorClassifier {
                 action_required: "Add credits to your account".to_string(),
             },
             
-            // 403 Forbidden
+            // 403 Forbidden — Fshare returns 403 for expired VIP download links
+            // (the direct CDN link is only valid for ~6h after generation)
             403 => {
                 if error_str.contains("expired") || error_str.contains("token") {
                     ErrorCategory::UrlRefreshNeeded {
@@ -182,8 +193,11 @@ impl ErrorClassifier {
                         action_required: "Contact support".to_string(),
                     }
                 } else {
-                    ErrorCategory::Permanent {
-                        reason: "Access forbidden".to_string(),
+                    // Generic 403 on a VIP download URL almost always means the link
+                    // has expired — Fshare doesn't include 'expired' in the body
+                    ErrorCategory::UrlRefreshNeeded {
+                        max_retries: 3,
+                        reason: "VIP download link expired or access denied — refreshing URL".to_string(),
                     }
                 }
             },
@@ -277,14 +291,19 @@ impl ErrorClassifier {
     }
     
     /// Extract HTTP status code from error string
+    /// Handles multiple formats:
+    /// - reqwest: "HTTP status 403 Forbidden"
+    /// - anyhow: "HTTP error: 403"
+    /// - plain: "status code 403"
     fn extract_http_status(error_str: &str) -> Option<u16> {
-        // Try different patterns
+        // reqwest native format: "http status 403 forbidden"
+        // Must check this before the generic "http " pattern
         let patterns = [
+            "http status ",
             "http error: ",
             "http ",
             "status code ",
             "status: ",
-            "code ",
         ];
         
         for pattern in &patterns {
@@ -298,7 +317,9 @@ impl ErrorClassifier {
                     .collect();
                 
                 if let Ok(status) = status_str.parse::<u16>() {
-                    return Some(status);
+                    if (100..=599).contains(&status) {
+                        return Some(status);
+                    }
                 }
             }
         }
