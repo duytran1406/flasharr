@@ -199,17 +199,66 @@ async fn movie_details(
 }
 
 /// GET /api/tmdb/tv/:id - Get TV show details
+/// Requests en-US overview first; if empty (non-English original), re-fetches
+/// using the show's original_language so the native overview is returned.
 async fn tv_details(
     State(_state): State<Arc<AppState>>,
     Path(id): Path<u32>,
 ) -> Result<Json<Value>, StatusCode> {
     let client = TmdbClient::new();
     let path = format!("/tv/{}", id);
-    
-    let data = client.get(&path, &[
-        ("append_to_response", "credits,videos,images"),
+
+    let mut data = client.get(&path, &[
+        ("append_to_response", "credits,videos,images,keywords,content_ratings,external_ids"),
+        ("language", "en-US"),
     ]).await?;
-    
+
+    // If the English overview is empty, re-fetch with the show's original language
+    // so Chinese/Korean/Japanese shows display their native-language overview.
+    let overview_empty = data.get("overview")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().is_empty())
+        .unwrap_or(true);
+
+    if overview_empty {
+        if let Some(orig_lang) = data.get("original_language").and_then(|v| v.as_str()) {
+            // Build locale string: zh -> zh-CN, ko -> ko-KR, ja -> ja-JP, etc.
+            let locale = match orig_lang {
+                "zh" => "zh-CN",
+                "ko" => "ko-KR",
+                "ja" => "ja-JP",
+                "vi" => "vi-VN",
+                "th" => "th-TH",
+                "pt" => "pt-BR",
+                "es" => "es-ES",
+                "fr" => "fr-FR",
+                "de" => "de-DE",
+                "it" => "it-IT",
+                "ar" => "ar-SA",
+                "ru" => "ru-RU",
+                _ => orig_lang,
+            };
+
+            if let Ok(native_data) = client.get(&path, &[
+                ("append_to_response", "keywords,content_ratings,external_ids"),
+                ("language", locale),
+            ]).await {
+                // Splice in only the overview (and name if also missing)
+                if let Some(overview) = native_data.get("overview").and_then(|v| v.as_str()) {
+                    if !overview.trim().is_empty() {
+                        if let Some(obj) = data.as_object_mut() {
+                            obj.insert("overview".to_string(), Value::String(overview.to_string()));
+                            // Also expose original-language name for UI display
+                            if let Some(orig_name) = native_data.get("name").and_then(|v| v.as_str()) {
+                                obj.insert("original_name_native".to_string(), Value::String(orig_name.to_string()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(Json(data))
 }
 
