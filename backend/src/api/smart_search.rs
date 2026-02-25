@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use crate::utils::title_matcher::{
-    calculate_unified_similarity, group_by_quality, SmartSearchResult, QualityGroup, 
+    calculate_unified_similarity, group_by_quality, SmartSearchResult, QualityGroup,
     extract_core_title, normalize_vietnamese, is_vietnamese_title, detect_badges
 };
 use crate::utils::unified_scorer::{calculate_match_score, is_valid_match};
@@ -15,6 +15,8 @@ use tracing::info;
 use regex::Regex;
 use std::sync::Arc;
 use crate::AppState;
+use crate::TmdbEnrichmentCache;
+use crate::services::tmdb_service::MediaEnrichment;
 use reqwest::Client;
 use serde_json::Value;
 use std::sync::OnceLock;
@@ -111,147 +113,114 @@ pub async fn handle_movie_search(
     }
 
     let start_time = std::time::Instant::now();
-    
-    // 1. EXECUTE TMDB ENRICHMENT AND CONCURRENT FSHARE KEYWORD SEARCH
-    let tmdb_id_v = req.tmdb_id.clone();
-    let tmdb_id_str = match tmdb_id_v {
+
+    // ── 1. TMDB ENRICHMENT ──────────────────────────────────────────────────
+    let tmdb_id_str = match req.tmdb_id.clone() {
         Some(Value::String(s)) => Some(s),
         Some(Value::Number(n)) => Some(n.to_string()),
         _ => None,
     };
-    
-    let tmdb_service_clone = state.tmdb_service.clone();
-    let id1 = tmdb_id_str.clone();
-    let state_clone = state.clone();
-    let tmdb_handle = tokio::spawn(async move {
-        let mut collections: Vec<(String, String, u64, Option<String>)> = Vec::new();
 
-        if let Some(tmdb_id) = id1.clone() {
-            // Check cache first
-            if let Some(cached) = state_clone.tmdb_cache.get(&tmdb_id).await {
-                return Some((cached.0, cached.1, cached.3, cached.2));
+    let enrichment_cache: TmdbEnrichmentCache = if let Some(ref tmdb_id) = tmdb_id_str {
+        // Check in-memory cache first
+        if let Some(cached) = state.tmdb_cache.get(tmdb_id).await {
+            cached
+        } else {
+            let tmdb_id_num: i64 = tmdb_id.parse().unwrap_or(0);
+            let enrichment = state.tmdb_service.get_movie_enrichment(tmdb_id_num).await;
+            let cache_entry = build_movie_enrichment_cache(enrichment, &title);
+            state.tmdb_cache.insert(tmdb_id.clone(), cache_entry.clone()).await;
+            cache_entry
+        }
+    } else {
+        TmdbEnrichmentCache {
+            official: Some(title.clone()),
+            original_name: None,
+            all_aliases: Vec::new(),
+            vn_titles: Vec::new(),
+            original_lang_titles: Vec::new(),
+            us_titles: Vec::new(),
+            poster: None,
+            collections: Vec::new(),
+        }
+    };
+
+    let official_name = enrichment_cache.official.clone().unwrap_or_else(|| title.clone());
+    let aliases = enrichment_cache.all_aliases.clone();
+    let base_poster = enrichment_cache.poster.clone();
+    let collections = enrichment_cache.collections.clone();
+    let base_tmdb_id = tmdb_id_str.as_ref().and_then(|s| s.parse::<u64>().ok());
+
+    // ── 2. PARALLEL FSHARE SEARCHES ─────────────────────────────────────────
+    // Build all unique query strings across every title category.
+    let mut all_queries: Vec<String> = Vec::new();
+    let mut seen_queries: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    macro_rules! add_query {
+        ($q:expr) => {{
+            let q: String = $q;
+            let key = q.trim().to_lowercase();
+            if !key.is_empty() && seen_queries.insert(key) {
+                all_queries.push(q);
             }
-            
-            // Parse tmdb_id to i64
-            let tmdb_id_num: i64 = match tmdb_id.parse() {
-                Ok(id) => id,
-                Err(_) => return None,
-            };
-            
-            // Use TmdbService for enrichment
-            let enrichment = tmdb_service_clone.get_movie_enrichment(tmdb_id_num).await;
-            
-            let official = enrichment.official_name;
-            let poster = enrichment.poster_path;
-            
-            // Convert alternative titles to iso_titles format
-            let iso_titles: Vec<(String, String)> = enrichment.alternative_titles
-                .into_iter()
-                .map(|t| (t.title, t.iso_3166_1))
-                .collect();
-            
-            // Extract collection parts if present
-            if let Some(coll) = enrichment.collection {
-                for part in coll.parts {
-                    // Note: CollectionPart doesn't have year/poster, fetch separately if needed
-                    collections.push((part.title, String::new(), part.id as u64, None));
-                }
-            }
+        }};
+    }
 
-            if official.is_some() {
-                let mut vn_titles = Vec::new();
-                let mut other_titles = Vec::new();
-                let mut seen_t = std::collections::HashSet::new();
+    // Primary: official name ± year
+    let core_title = extract_core_title(&title);
+    if let Some(ref y) = year_str {
+        add_query!(format!("{} {}", core_title, y));
+    }
+    add_query!(core_title.clone());
 
-                for (title, iso) in iso_titles {
-                    if seen_t.insert(title.clone()) {
-                        if iso == "VN" {
-                            vn_titles.push(title);
-                        } else {
-                            other_titles.push(title);
-                        }
-                    }
-                }
+    // VN titles (+ diacritics-stripped variants)
+    for vn in &enrichment_cache.vn_titles {
+        add_query!(vn.clone());
+        let norm = normalize_vietnamese(vn);
+        if norm.to_lowercase() != vn.to_lowercase() {
+            add_query!(norm);
+        }
+    }
 
-                let mut all_aliases = vn_titles;
-                all_aliases.extend(other_titles);
+    // Original-language titles (Chinese/Korean/Japanese etc.)
+    for orig in &enrichment_cache.original_lang_titles {
+        add_query!(orig.clone());
+    }
 
-                // Cache metadata
-                state_clone.tmdb_cache.insert(tmdb_id, (official.clone(), all_aliases.clone(), poster.clone(), collections.clone())).await;
-                return Some((official, all_aliases, collections, poster));
+    // Original name from TMDB (e.g. "牧神记" for CN shows)
+    if let Some(ref orig_name) = enrichment_cache.original_name {
+        add_query!(orig_name.clone());
+    }
+
+    // US/English alt titles that differ from official name
+    for us in &enrichment_cache.us_titles {
+        if us.to_lowercase() != official_name.to_lowercase() {
+            add_query!(us.clone());
+        }
+    }
+
+    info!("Movie search queries (parallel): {:?}", all_queries);
+
+    let client_arc = Arc::new(client.clone());
+    let fshare_futures: Vec<_> = all_queries.iter().map(|q| {
+        let c = Arc::clone(&client_arc);
+        let q = q.clone();
+        async move { execute_fshare_search(&c, &q, 60).await }
+    }).collect();
+
+    let all_search_batches = futures_util::future::join_all(fshare_futures).await;
+
+    // Flatten + deduplicate by pure fcode
+    let mut results_pool: Vec<RawFshareResult> = Vec::new();
+    let mut seen_fcodes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for batch in all_search_batches {
+        for r in batch {
+            let pure_fcode = r.fcode.split('?').next().unwrap_or(&r.fcode).to_string();
+            if seen_fcodes.insert(pure_fcode) {
+                results_pool.push(r);
             }
         }
-        None
-    });
-
-    let tmdb_res = tmdb_handle.await.unwrap();
-    type Enrichment = (Option<String>, Vec<String>, Vec<(String, String, u64, Option<String>)>, Option<String>);
-    let enrichment: Enrichment = tmdb_res.unwrap_or((None, Vec::new(), Vec::new(), None));
-    let (tmdb_official, aliases, collections, base_poster) = enrichment;
-    let official_name = tmdb_official.clone().unwrap_or_else(|| title.clone());
-    let base_tmdb_id = tmdb_id_str.and_then(|s| s.parse::<u64>().ok());
-
-    // 2. PRIMARY SEARCH EXECUTION (V3: Multiple variations for maximum coverage)
-    let c_primary = client.clone();
-    let title_clean = core_title.clone();
-    let year_val = year_str.clone();
-    let vn_alias_opt = aliases.iter().find(|a| is_vietnamese_title(a)).cloned();
-    
-    let fshare_handle = tokio::spawn(async move {
-        let mut all_res = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        let mut queries = Vec::new();
-        
-        // Variation 1: Title + Year (Precise)
-        if let Some(ref y) = year_val {
-            queries.push(format!("{} {}", title_clean, y));
-        }
-        
-        // Variation 2: Title Only (Loose - handles year mismatches like 2024/2025)
-        queries.push(title_clean.clone());
-        
-        // Variation 3: Vietnamese Alias (if any)
-        if let Some(ref vn) = vn_alias_opt {
-            queries.push(vn.clone());
-            let norm = normalize_vietnamese(vn);
-            if norm != vn.to_lowercase() {
-                queries.push(norm);
-            }
-        }
-        
-        // Variation 4: Non-accented Primary Title (if Vietnamese)
-        if is_vietnamese_title(&title_clean) {
-            let norm = normalize_vietnamese(&title_clean);
-            if norm != title_clean.to_lowercase() {
-                queries.push(norm.clone());
-                if let Some(ref y) = year_val {
-                    queries.push(format!("{} {}", norm, y));
-                }
-            }
-        }
-
-        for q in queries {
-            let res = execute_fshare_search(&c_primary, &q, 60).await;
-            for r in res {
-                let pure_fcode = r.fcode.split('?').next().unwrap_or(&r.fcode).to_string();
-                if seen.insert(pure_fcode) {
-                    all_res.push(r);
-                }
-            }
-            if all_res.len() >= 120 { break; } // Cap at reasonable limit
-        }
-        all_res
-    });
-
-    let fshare_res = fshare_handle.await.unwrap();
-    let mut results_pool = fshare_res;
-    
-    // 3. FINAL DEDUPLICATE AND LIMIT TO 100 (matching V2)
-    let mut final_seen = std::collections::HashSet::new();
-    results_pool.retain(|f| {
-        let pure_fcode = f.fcode.split('?').next().unwrap_or(&f.fcode);
-        final_seen.insert(pure_fcode.to_string())
-    });
+    }
     let target_results = results_pool.into_iter().take(100).collect::<Vec<_>>();
 
     // 4. PARSE AND MAP TOP 100
@@ -415,81 +384,74 @@ pub async fn handle_tv_search(
     }
 
     let start_time = std::time::Instant::now();
-    
+
     // Extract TMDB ID
     let tmdb_id_str = match req.tmdb_id {
         Some(Value::String(ref s)) => Some(s.to_string()),
         Some(Value::Number(ref n)) => Some(n.to_string()),
         _ => None,
     };
-    
+
     info!("📊 [PERF] TV Smart Search START: title='{}', tmdbId={:?}, year={:?}", title, tmdb_id_str, year_str);
-    
-    // 1. EXECUTE TMDB ENRICHMENT AND KEYWORD SEARCH AT ONCE
+
+    // ── 1. TMDB ENRICHMENT ──────────────────────────────────────────────────
     let phase1_start = std::time::Instant::now();
-    
-    let tmdb_service_clone = state.tmdb_service.clone();
-    let id1 = tmdb_id_str.clone();
-    let state_clone = state.clone();
-    let tmdb_handle = tokio::spawn(async move {
-        if let Some(tmdb_id) = id1.clone() {
-            // Check cache first
-            if let Some(cached) = state_clone.tmdb_cache.get(&tmdb_id).await {
-                return Some((cached.0, cached.1, cached.2));
-            }
-            
-            // Parse tmdb_id to i64
-            let tmdb_id_num: i64 = match tmdb_id.parse() {
-                Ok(id) => id,
-                Err(_) => return None,
-            };
-            
-            // Use TmdbService for enrichment
-            info!("Enriching TV metadata from TMDB via TmdbService: tmdb_id={}", tmdb_id_num);
-            let enrichment = tmdb_service_clone.get_tv_enrichment(tmdb_id_num).await;
-            
-            let official = enrichment.official_name;
-            let poster = enrichment.poster_path;
-            
-            // Convert alternative titles + translations to iso_titles format
-            let mut iso_titles: Vec<(String, String)> = enrichment.alternative_titles
-                .into_iter()
-                .map(|t| (t.title, t.iso_3166_1))
-                .collect();
-            
-            // Add translations
-            for t in enrichment.translations {
-                iso_titles.push((t.name, t.iso_3166_1));
-            }
 
-            if official.is_some() {
-                let mut vn_titles = Vec::new();
-                let mut other_titles = Vec::new();
-                let mut seen_t = std::collections::HashSet::new();
-
-                for (title, iso) in iso_titles {
-                    if seen_t.insert(title.clone()) {
-                        if iso == "VN" {
-                            vn_titles.push(title);
-                        } else {
-                            other_titles.push(title);
-                        }
-                    }
-                }
-
-                let mut all_aliases = vn_titles;
-                all_aliases.extend(other_titles);
-                info!("TMDB Enrichment: Official='{}', Aliases={:?}", official.as_deref().unwrap_or("None"), all_aliases);
-
-                // Cache metadata (TV has empty collections)
-                state_clone.tmdb_cache.insert(tmdb_id, (official.clone(), all_aliases.clone(), poster.clone(), Vec::new())).await;
-                return Some((official, all_aliases, poster));
-            }
+    let enrichment_cache: TmdbEnrichmentCache = if let Some(ref tmdb_id) = tmdb_id_str {
+        if let Some(cached) = state.tmdb_cache.get(tmdb_id).await {
+            cached
+        } else {
+            let tmdb_id_num: i64 = tmdb_id.parse().unwrap_or(0);
+            info!("Enriching TV metadata from TMDB: tmdb_id={}", tmdb_id_num);
+            let enrichment = state.tmdb_service.get_tv_enrichment(tmdb_id_num).await;
+            let cache_entry = build_tv_enrichment_cache(enrichment, &title);
+            info!("TMDB enrichment built — official={:?}, vn={:?}, orig_lang={:?}, us={:?}",
+                cache_entry.official, cache_entry.vn_titles,
+                cache_entry.original_lang_titles, cache_entry.us_titles);
+            state.tmdb_cache.insert(tmdb_id.clone(), cache_entry.clone()).await;
+            cache_entry
         }
-        None
-    });
+    } else {
+        TmdbEnrichmentCache {
+            official: Some(title.clone()),
+            original_name: None,
+            all_aliases: Vec::new(),
+            vn_titles: Vec::new(),
+            original_lang_titles: Vec::new(),
+            us_titles: Vec::new(),
+            poster: None,
+            collections: Vec::new(),
+        }
+    };
 
-    // 2. PRIMARY SEARCH EXECUTION (V2 Hard Mode: Single query - matching V2 generic search)
+    let official_name = enrichment_cache.official.clone().unwrap_or_else(|| title.clone());
+    let aliases = enrichment_cache.all_aliases.clone();
+    let base_poster = enrichment_cache.poster.clone();
+    let base_tmdb_id = tmdb_id_str.as_ref().and_then(|s| s.parse::<u64>().ok());
+
+    // ── 2. BUILD ALL FSHARE QUERIES ─────────────────────────────────────────
+    // Collect unique queries across all title categories, then fire them all at once.
+    let core_title = extract_core_title(&title);
+    let query_keyword = if let Some(ref y) = year_str {
+        format!("{} {}", core_title, y)
+    } else {
+        core_title.clone()
+    };
+
+    let mut all_queries: Vec<String> = Vec::new();
+    let mut seen_queries: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    macro_rules! add_query {
+        ($q:expr) => {{
+            let q: String = $q;
+            let key = q.trim().to_lowercase();
+            if !key.is_empty() && seen_queries.insert(key) {
+                all_queries.push(q);
+            }
+        }};
+    }
+
+    // Primary queries: official name + S/E format
     let query_season = if let (Some(s), Some(e)) = (season, episode) {
         format!("{} S{:02}E{:02}", query_keyword, s, e)
     } else if let Some(s) = season {
@@ -497,72 +459,65 @@ pub async fn handle_tv_search(
     } else {
         query_keyword.clone()
     };
-    
-    // V3 EXTRA: Add Sxx variant for better coverage (prevents buried Sxx in loose search)
-    let mut primary_queries = vec![query_season.clone()];
+    add_query!(query_season.clone());
     if season.is_some() && episode.is_none() {
         if let Some(s) = season {
-            primary_queries.push(format!("{} S{:02}", query_keyword, s));
+            add_query!(format!("{} S{:02}", query_keyword, s));
         }
     }
 
-    let c_primary = client.clone();
-    let fshare_handle = tokio::spawn(async move {
-        let mut all_res = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for q in primary_queries {
-            let res = execute_fshare_search(&c_primary, &q, 100).await;
-            for r in res {
-                // Deduplicate by normalized fcode (strip des=)
-                let pure_fcode = r.fcode.split('?').next().unwrap_or("").to_string();
-                if seen.insert(pure_fcode) {
-                    all_res.push(r);
-                }
-            }
+    // VN titles — search with and without diacritics
+    for vn in &enrichment_cache.vn_titles {
+        add_query!(vn.clone());
+        let norm = normalize_vietnamese(vn);
+        if norm.to_lowercase() != vn.to_lowercase() {
+            add_query!(norm);
         }
-        all_res
-    });
-
-    let (tmdb_res, fshare_res) = tokio::join!(tmdb_handle, fshare_handle);
-    info!("📊 [PERF] Phase 1 (TMDB + Primary Search) took: {:?}", phase1_start.elapsed());
-    
-    type Enrichment = (Option<String>, Vec<String>, Option<String>);
-    let enrichment: Enrichment = tmdb_res.unwrap().unwrap_or((None, Vec::new(), None));
-    let (tmdb_official, aliases, base_poster) = enrichment;
-    let official_name = tmdb_official.clone().unwrap_or_else(|| title.clone());
-    let base_tmdb_id = tmdb_id_str.and_then(|s| s.parse::<u64>().ok());
-
-    let mut results_pool: Vec<RawFshareResult> = fshare_res.unwrap_or_default();
-    let mut seen = std::collections::HashSet::new();
-    for r in &results_pool {
-        let pure_fcode = r.fcode.split('?').next().unwrap_or(&r.fcode);
-        seen.insert(pure_fcode.to_string());
     }
 
-    // 2.5. SECONDARY ALIAS SEARCH (V2: First VN alias only)
+    // Original-language titles (e.g. "牧神记", "Mu Shen Ji" for CN shows)
+    for orig in &enrichment_cache.original_lang_titles {
+        add_query!(orig.clone());
+    }
+
+    // Raw original_name from TMDB (e.g. "牧神记")
+    if let Some(ref orig_name) = enrichment_cache.original_name {
+        add_query!(orig_name.clone());
+    }
+
+    // US/English alt titles that differ from official name
+    for us in &enrichment_cache.us_titles {
+        if us.to_lowercase() != official_name.to_lowercase() {
+            add_query!(us.clone());
+        }
+    }
+
+    info!("📊 [PERF] Phase 1 (TMDB enrichment) took: {:?}", phase1_start.elapsed());
+    info!("TV search queries (parallel x{}): {:?}", all_queries.len(), all_queries);
+
+    // ── 3. PARALLEL FSHARE SEARCHES ─────────────────────────────────────────
     let phase2_start = std::time::Instant::now();
-    if let Some(vn_alias) = aliases.iter().find(|a| is_vietnamese_title(a)) {
-        if vn_alias.to_lowercase() != official_name.to_lowercase() {
-            info!("Performing secondary TV search with Vietnamese alias: '{}'", vn_alias);
-            
-            // V2 HARD MODE: Generic alias search (no S/E)
-            let mut vn_results: Vec<RawFshareResult> = execute_fshare_search(&client, &vn_alias, 100).await;
-            
-            let vn_normalized = normalize_vietnamese(vn_alias);
-            if vn_normalized != vn_alias.to_lowercase() {
-                let vn_norm_results: Vec<RawFshareResult> = execute_fshare_search(&client, &vn_normalized, 100).await;
-                vn_results.extend(vn_norm_results);
-            }
-            
-            for vr in vn_results {
-                let pure_fcode = vr.fcode.split('?').next().unwrap_or(&vr.fcode);
-                if seen.insert(pure_fcode.to_string()) {
-                    results_pool.push(vr);
-                }
+    let client_arc = Arc::new(client.clone());
+    let fshare_futures: Vec<_> = all_queries.iter().map(|q| {
+        let c = Arc::clone(&client_arc);
+        let q = q.clone();
+        async move { execute_fshare_search(&c, &q, 100).await }
+    }).collect();
+
+    let all_search_batches = futures_util::future::join_all(fshare_futures).await;
+    info!("📊 [PERF] Phase 2 (parallel Fshare searches) took: {:?}", phase2_start.elapsed());
+
+    // Flatten + deduplicate by pure fcode
+    let mut results_pool: Vec<RawFshareResult> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for batch in all_search_batches {
+        for r in batch {
+            let pure_fcode = r.fcode.split('?').next().unwrap_or(&r.fcode).to_string();
+            if seen.insert(pure_fcode.clone()) {
+                results_pool.push(r);
             }
         }
     }
-    info!("📊 [PERF] Phase 2 (Alias Search) took: {:?}", phase2_start.elapsed());
 
     // 3. FINAL DEDUPLICATE AND LIMIT TO 100 (matching V2)
     let mut final_seen = std::collections::HashSet::new();
@@ -981,4 +936,173 @@ pub async fn handle_tv_search(
 /// Delegate Fshare search to SearchPipeline module
 async fn execute_fshare_search(client: &Client, query: &str, limit: usize) -> Vec<RawFshareResult> {
     SearchPipeline::execute_fshare_search(client, query, limit).await
+}
+
+// =============================================================================
+// TMDB Enrichment Cache Builders
+// =============================================================================
+
+/// Map a TMDB language code (BCP-47) to the ISO-3166-1 country codes used in
+/// alternative_titles and translations responses. We use this to bucket titles
+/// from the content's origin language into `original_lang_titles`.
+fn lang_to_countries(lang: &str) -> &'static [&'static str] {
+    match lang {
+        "zh" => &["CN", "TW", "HK", "SG"],
+        "ko" => &["KR"],
+        "ja" => &["JP"],
+        "vi" => &["VN"],
+        "th" => &["TH"],
+        "en" => &["US", "GB", "AU", "CA"],
+        "pt" => &["PT", "BR"],
+        "es" => &["ES", "MX", "AR"],
+        "fr" => &["FR", "BE", "CH"],
+        "id" => &["ID"],
+        "ms" => &["MY"],
+        _ => &[],
+    }
+}
+
+/// Build a `TmdbEnrichmentCache` from a TV `MediaEnrichment`.
+/// Buckets titles by country code: VN → vn_titles, origin-lang → original_lang_titles,
+/// US → us_titles, everything else → all_aliases (for scoring only).
+fn build_tv_enrichment_cache(enrichment: MediaEnrichment, fallback_title: &str) -> TmdbEnrichmentCache {
+    let official = enrichment.official_name.clone();
+    let original_name = enrichment.original_name.clone();
+    let original_language = enrichment.original_language.clone();
+    let poster = enrichment.poster_path.clone();
+    let orig_countries: &[&str] = original_language
+        .as_deref()
+        .map(lang_to_countries)
+        .unwrap_or(&[]);
+
+    // Merge alt_titles + translations into a single (title, iso) stream, deduped by title
+    let mut iso_titles: Vec<(String, String)> = Vec::new();
+    let mut seen_titles: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for t in enrichment.alternative_titles {
+        if seen_titles.insert(t.title.to_lowercase()) {
+            iso_titles.push((t.title, t.iso_3166_1));
+        }
+    }
+    for t in enrichment.translations {
+        if !t.name.is_empty() && seen_titles.insert(t.name.to_lowercase()) {
+            iso_titles.push((t.name, t.iso_3166_1));
+        }
+    }
+    // Also include original_name if not already present
+    if let Some(ref on) = original_name {
+        if !on.is_empty() && seen_titles.insert(on.to_lowercase()) {
+            let on_country = orig_countries.first().copied().unwrap_or("");
+            iso_titles.push((on.clone(), on_country.to_string()));
+        }
+    }
+
+    let mut vn_titles = Vec::new();
+    let mut original_lang_titles = Vec::new();
+    let mut us_titles = Vec::new();
+    let mut other_titles = Vec::new();
+
+    let official_lower = official.as_deref().unwrap_or(fallback_title).to_lowercase();
+
+    for (title, iso) in &iso_titles {
+        if iso == "VN" {
+            vn_titles.push(title.clone());
+        } else if iso == "US" {
+            if title.to_lowercase() != official_lower {
+                us_titles.push(title.clone());
+            }
+        } else if orig_countries.contains(&iso.as_str()) {
+            original_lang_titles.push(title.clone());
+        } else {
+            other_titles.push(title.clone());
+        }
+    }
+
+    // all_aliases = VN first (priority for scoring), then orig-lang, US, others
+    let mut all_aliases = vn_titles.clone();
+    all_aliases.extend(original_lang_titles.iter().cloned());
+    all_aliases.extend(us_titles.iter().cloned());
+    all_aliases.extend(other_titles);
+
+    TmdbEnrichmentCache {
+        official,
+        original_name,
+        all_aliases,
+        vn_titles,
+        original_lang_titles,
+        us_titles,
+        poster,
+        collections: Vec::new(), // TV has no collections
+    }
+}
+
+/// Build a `TmdbEnrichmentCache` from a Movie `MediaEnrichment`.
+fn build_movie_enrichment_cache(enrichment: MediaEnrichment, fallback_title: &str) -> TmdbEnrichmentCache {
+    let official = enrichment.official_name.clone();
+    let original_name = enrichment.original_name.clone();
+    let original_language = enrichment.original_language.clone();
+    let poster = enrichment.poster_path.clone();
+    let orig_countries: &[&str] = original_language
+        .as_deref()
+        .map(lang_to_countries)
+        .unwrap_or(&[]);
+
+    let mut iso_titles: Vec<(String, String)> = Vec::new();
+    let mut seen_titles: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for t in enrichment.alternative_titles {
+        if seen_titles.insert(t.title.to_lowercase()) {
+            iso_titles.push((t.title, t.iso_3166_1));
+        }
+    }
+    if let Some(ref on) = original_name {
+        if !on.is_empty() && seen_titles.insert(on.to_lowercase()) {
+            let on_country = orig_countries.first().copied().unwrap_or("");
+            iso_titles.push((on.clone(), on_country.to_string()));
+        }
+    }
+
+    let mut vn_titles = Vec::new();
+    let mut original_lang_titles = Vec::new();
+    let mut us_titles = Vec::new();
+    let mut other_titles = Vec::new();
+
+    let official_lower = official.as_deref().unwrap_or(fallback_title).to_lowercase();
+
+    for (title, iso) in &iso_titles {
+        if iso == "VN" {
+            vn_titles.push(title.clone());
+        } else if iso == "US" {
+            if title.to_lowercase() != official_lower {
+                us_titles.push(title.clone());
+            }
+        } else if orig_countries.contains(&iso.as_str()) {
+            original_lang_titles.push(title.clone());
+        } else {
+            other_titles.push(title.clone());
+        }
+    }
+
+    // Extract collection parts
+    let collections = enrichment.collection.map(|coll| {
+        coll.parts.into_iter()
+            .map(|p| (p.title, String::new(), p.id as u64, None::<String>))
+            .collect()
+    }).unwrap_or_default();
+
+    let mut all_aliases = vn_titles.clone();
+    all_aliases.extend(original_lang_titles.iter().cloned());
+    all_aliases.extend(us_titles.iter().cloned());
+    all_aliases.extend(other_titles);
+
+    TmdbEnrichmentCache {
+        official,
+        original_name,
+        all_aliases,
+        vn_titles,
+        original_lang_titles,
+        us_titles,
+        poster,
+        collections,
+    }
 }

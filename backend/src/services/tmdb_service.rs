@@ -34,8 +34,12 @@ pub struct MediaEnrichment {
     pub alternative_titles: Vec<AlternativeTitle>,
     /// Translations
     pub translations: Vec<Translation>,
-    /// Official title/name
+    /// Official title/name (TMDB display name, e.g. "Tales of Herding Gods")
     pub official_name: Option<String>,
+    /// Original title in content's origin language (e.g. "牧神记" for Chinese shows)
+    pub original_name: Option<String>,
+    /// BCP-47 language code for the original language (e.g. "zh", "ko", "ja")
+    pub original_language: Option<String>,
     /// Poster path
     pub poster_path: Option<String>,
     /// Collection info for movies
@@ -186,15 +190,17 @@ impl TmdbService {
         // Fetch details
         if let Some(data) = self.get_tv_details(tmdb_id).await {
             enrichment.official_name = data["name"].as_str().map(|s| s.to_string());
+            enrichment.original_name = data["original_name"].as_str().map(|s| s.to_string());
+            enrichment.original_language = data["original_language"].as_str().map(|s| s.to_string());
             enrichment.poster_path = data["poster_path"].as_str().map(|s| s.to_string());
         }
 
-        // Fetch alternative titles
-        let alt_titles = self.get_tv_alternative_titles(tmdb_id).await;
+        // Fetch alternative titles and translations concurrently
+        let (alt_titles, translations) = tokio::join!(
+            self.get_tv_alternative_titles(tmdb_id),
+            self.get_tv_translations(tmdb_id)
+        );
         enrichment.alternative_titles = alt_titles;
-
-        // Fetch translations
-        let translations = self.get_tv_translations(tmdb_id).await;
         enrichment.translations = translations;
 
         enrichment
@@ -265,6 +271,8 @@ impl TmdbService {
         // Fetch details with collection
         if let Some(data) = self.get_movie_details(tmdb_id).await {
             enrichment.official_name = data["title"].as_str().map(|s| s.to_string());
+            enrichment.original_name = data["original_title"].as_str().map(|s| s.to_string());
+            enrichment.original_language = data["original_language"].as_str().map(|s| s.to_string());
             enrichment.poster_path = data["poster_path"].as_str().map(|s| s.to_string());
 
             // Check for collection

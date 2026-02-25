@@ -27,6 +27,28 @@ mod services;
 
 use std::sync::Arc;
 
+/// Cached TMDB enrichment — stored keyed by tmdb_id (String).
+/// Holds everything the search pipeline needs without re-calling TMDB.
+#[derive(Clone)]
+pub struct TmdbEnrichmentCache {
+    /// Official display title (e.g. "Tales of Herding Gods")
+    pub official: Option<String>,
+    /// Original title in content's native language (e.g. "牧神记")
+    pub original_name: Option<String>,
+    /// All aliases merged (for similarity scoring)
+    pub all_aliases: Vec<String>,
+    /// VN-only titles (searched directly on Fshare as a priority)
+    pub vn_titles: Vec<String>,
+    /// Titles in the content's original language (CN/KR/JP/etc.)
+    pub original_lang_titles: Vec<String>,
+    /// US/English alternative titles (different from official name)
+    pub us_titles: Vec<String>,
+    /// Poster path
+    pub poster: Option<String>,
+    /// Movie collection parts: (title, year, tmdb_id, poster)
+    pub collections: Vec<(String, String, u64, Option<String>)>,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub host_registry: Arc<hosts::registry::HostRegistry>,
@@ -37,7 +59,7 @@ pub struct AppState {
     pub config: config::Config,
     pub db: Arc<db::Db>,
     pub search_cache: Cache<String, api::smart_search::SmartSearchResponse>,
-    pub tmdb_cache: Cache<String, (Option<String>, Vec<String>, Option<String>, Vec<(String, String, u64, Option<String>)>)>,
+    pub tmdb_cache: Cache<String, TmdbEnrichmentCache>,
 }
 
 #[derive(Serialize)]
