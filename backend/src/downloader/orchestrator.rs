@@ -359,10 +359,18 @@ impl DownloadOrchestrator {
         task.batch_id = batch_id;
         task.batch_name = batch_name;
         
-        // Parse quality metadata from filename
-        let quality_attrs = FilenameParser::extract_quality_attributes(&task.filename);
+        // ── Quality metadata ───────────────────────────────────────────────
+        // IMPORTANT: parse from the ORIGINAL API filename (which contains tokens
+        // like "1080p", "WEB-DL", "x265", "AAC") BEFORE it gets replaced by the
+        // clean Sonarr-compatible name ("Series - S01E01.mkv" has no quality tags).
+        let quality_attrs = FilenameParser::extract_quality_attributes(&filename);
         task.quality = Some(quality_attrs.quality_name());
         task.resolution = quality_attrs.resolution.clone();
+        tracing::debug!(
+            "[QUALITY] original='{}' final='{}' → quality={:?} resolution={:?}",
+            filename, task.filename,
+            task.quality, task.resolution
+        );
         
         // Store TMDB metadata for Sonarr/Radarr matching
         if let Some(ref meta) = tmdb_metadata {
