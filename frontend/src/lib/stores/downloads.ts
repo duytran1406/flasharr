@@ -383,26 +383,49 @@ function createDownloadStore() {
         batchesMap.set(batch.batch_id, batch);
       });
 
-      // Convert standalone downloads to Map
-      const downloadsMap = new Map<string, DownloadTask>();
-      data.standalone.forEach((download: DownloadTask) => {
-        downloadsMap.set(download.id, download);
+
+      update(state => {
+        // Merge standalone downloads instead of blindly replacing state.downloads.
+        //
+        // Problem: fetchBatches() used to set downloads = downloadsMap (standalone only).
+        // Tasks that arrived via TASK_BATCH_UPDATE WebSocket *before* this HTTP response
+        // were already in state.downloads. Replacing wholesale wiped them → dashboard
+        // appeared empty right after the first batch-update tick.
+        //
+        // Strategy:
+        //   1. Start from the existing map (keeps in-flight WS tasks)
+        //   2. Upsert API-fresh standalone entries (authoritative for non-active tasks)
+        //   3. Remove tasks whose batch_id is now covered by a batch summary row
+        //      (they moved standalone → batch and should no longer show in downloads)
+        const newDownloads = new Map<string, DownloadTask>(state.downloads);
+
+        data.standalone.forEach((download: DownloadTask) => {
+          newDownloads.set(download.id, download);
+        });
+
+        // Remove tasks that belong to a batch we now know about
+        for (const [id, task] of newDownloads) {
+          if (task.batch_id && batchesMap.has(task.batch_id)) {
+            newDownloads.delete(id);
+          }
+        }
+
+        return {
+          ...state,
+          batches: batchesMap,
+          downloads: newDownloads,
+          stats: data.stats,
+          statusCounts: data.status_counts || state.statusCounts,
+          pagination: {
+            ...state.pagination,
+            page: data.page,
+            total: data.total,
+            totalPages: data.total_pages,
+          },
+          loading: false,
+        };
       });
 
-      update(state => ({
-        ...state,
-        batches: batchesMap,
-        downloads: downloadsMap,
-        stats: data.stats,
-        statusCounts: data.status_counts || state.statusCounts,
-        pagination: {
-          ...state.pagination,
-          page: data.page,
-          total: data.total,
-          totalPages: data.total_pages,
-        },
-        loading: false,
-      }));
 
       console.log('[DownloadStore] Fetched batches page', data.page, ':', data.batches.length, 'batches +', data.standalone.length, 'standalone (total:', data.total, ')');
     } catch (err) {
