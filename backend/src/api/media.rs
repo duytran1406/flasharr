@@ -37,6 +37,12 @@ pub struct DownloadInstance {
     pub state: String,
     pub progress: f32,
     pub created_at: String,
+    /// TMDB ID — matches the search/library key
+    pub tmdb_id: Option<i64>,
+    /// Sonarr series_id (when this download is linked to Sonarr)
+    pub arr_series_id: Option<i64>,
+    /// Radarr movie_id (when this download is linked to Radarr)
+    pub arr_movie_id: Option<i64>,
 }
 
 /// Downloads grouped by episode key (e.g., "S01E01") or "movie"
@@ -118,45 +124,55 @@ async fn get_media_episodes(
     Ok(Json(episodes))
 }
 
-/// GET /api/media/:tmdb_id/downloads — Get downloads grouped by episode with quality info
+/// GET /api/media/:tmdb_id/downloads — Get downloads grouped by episode with quality info.
+/// Always returns 200 — even if no media_items row exists yet (returns empty episodes map).
+/// Downloads are read directly from the `downloads` table by tmdb_id, so this works
+/// before any MediaItem is created, and for downloads queued but not yet started.
 async fn get_media_downloads(
     State(state): State<Arc<AppState>>,
     Path(tmdb_id): Path<i64>,
 ) -> Result<Json<MediaDownloadsResponse>, (axum::http::StatusCode, String)> {
-    let result = state.db.get_media_with_downloads_async(tmdb_id).await
+    // Step 1: Try to get the media item for title/type metadata (optional)
+    let (media_type, title) = if let Ok(Some(item)) = state.db.get_media_item_async(tmdb_id).await {
+        (item.media_type, item.title)
+    } else {
+        // Media item doesn't exist yet — still return the downloads by TMDB ID
+        ("unknown".to_string(), tmdb_id.to_string())
+    };
+
+    // Step 2: Query downloads directly by tmdb_id (no media_items join needed)
+    let downloads = state.db.get_downloads_by_tmdb_id_async(tmdb_id).await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {}", e)))?;
-    
-    match result {
-        Some((item, downloads)) => {
-            let total = downloads.len();
-            let mut episodes: HashMap<String, Vec<DownloadInstance>> = HashMap::new();
-            
-            for dl in downloads {
-                let key = match (dl.tmdb_season, dl.tmdb_episode) {
-                    (Some(s), Some(e)) => format!("S{:02}E{:02}", s, e),
-                    _ => "movie".to_string(),
-                };
-                
-                episodes.entry(key).or_default().push(DownloadInstance {
-                    id: dl.id.to_string(),
-                    filename: dl.filename.clone(),
-                    quality: dl.quality.clone(),
-                    resolution: dl.resolution.clone(),
-                    size: dl.size,
-                    state: format!("{:?}", dl.state).to_uppercase(),
-                    progress: dl.progress,
-                    created_at: dl.created_at.to_rfc3339(),
-                });
-            }
-            
-            Ok(Json(MediaDownloadsResponse {
-                tmdb_id,
-                media_type: item.media_type.clone(),
-                title: item.title.clone(),
-                episodes,
-                total_downloads: total,
-            }))
-        }
-        None => Err((axum::http::StatusCode::NOT_FOUND, format!("Media item {} not found", tmdb_id))),
+
+    let total = downloads.len();
+    let mut episodes: HashMap<String, Vec<DownloadInstance>> = HashMap::new();
+
+    for dl in downloads {
+        let key = match (dl.tmdb_season, dl.tmdb_episode) {
+            (Some(s), Some(e)) => format!("S{:02}E{:02}", s, e),
+            _ => "movie".to_string(),
+        };
+
+        episodes.entry(key).or_default().push(DownloadInstance {
+            id: dl.id.to_string(),
+            filename: dl.filename.clone(),
+            quality: dl.quality.clone(),
+            resolution: dl.resolution.clone(),
+            size: dl.size,
+            state: format!("{:?}", dl.state).to_uppercase(),
+            progress: dl.progress,
+            created_at: dl.created_at.to_rfc3339(),
+            tmdb_id: dl.tmdb_id,
+            arr_series_id: dl.arr_series_id,
+            arr_movie_id: dl.arr_movie_id,
+        });
     }
+
+    Ok(Json(MediaDownloadsResponse {
+        tmdb_id,
+        media_type,
+        title,
+        episodes,
+        total_downloads: total,
+    }))
 }

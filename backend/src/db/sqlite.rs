@@ -1719,6 +1719,39 @@ impl Db {
         }).await.unwrap()
     }
 
+    /// Get all downloads for a given TMDB ID directly from the downloads table.
+    /// Does NOT require a media_items row — works for queued downloads before library sync.
+    pub fn get_downloads_by_tmdb_id(&self, tmdb_id: i64) -> Result<Vec<crate::downloader::task::DownloadTask>> {
+        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let mut stmt = conn.prepare(
+            "SELECT id, url, original_url, filename, destination, state, progress, size,
+                    downloaded, speed, eta, host, category, priority, segments, retry_count,
+                    created_at, started_at, completed_at, wait_until, error_message,
+                    batch_id, batch_name, tmdb_id, tmdb_title, tmdb_season, tmdb_episode,
+                    quality, resolution, arr_series_id, arr_movie_id
+             FROM downloads WHERE tmdb_id = ?1
+             ORDER BY created_at DESC"
+        )?;
+        let task_iter = stmt.query_map(params![tmdb_id], |row| Self::parse_task_from_row(row))?;
+        let mut tasks = Vec::new();
+        for task in task_iter {
+            if let Ok(t) = task {
+                tasks.push(t);
+            }
+        }
+        Ok(tasks)
+    }
+
+    /// Async version of get_downloads_by_tmdb_id
+    pub async fn get_downloads_by_tmdb_id_async(&self, tmdb_id: i64) -> Result<Vec<crate::downloader::task::DownloadTask>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Db { pool };
+            db.get_downloads_by_tmdb_id(tmdb_id)
+        }).await.unwrap()
+    }
+
+
     // ── Row Parsers ───────────────────────────────────────────────────────
 
     fn parse_media_item(row: &rusqlite::Row) -> rusqlite::Result<MediaItem> {
