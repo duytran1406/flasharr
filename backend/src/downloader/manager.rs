@@ -142,16 +142,21 @@ impl DownloadTaskManager {
         None
     }
     
-    /// Resume a paused task
-    /// Creates a new cancel_token and re-queues the task
+    /// Resume a paused or waiting task
+    /// Creates a new cancel_token and re-queues the task with a fresh retry budget.
+    /// Note: retry_count is reset so the task gets all retries back on user-initiated resume.
     pub fn resume_task(&self, id: Uuid) -> Option<DownloadTask> {
         let mut tasks = self.tasks.write().unwrap();
         if let Some(task) = tasks.get_mut(&id) {
             if task.state.can_resume() {
-                // Create a new cancel token since the old one was cancelled
+                // Create a new cancel token since the old one may have been cancelled
                 task.cancel_token = tokio_util::sync::CancellationToken::new();
                 task.state = DownloadState::Queued;
-                tracing::info!("Resumed task {} - re-queued with new cancel token", id);
+                // Reset retry budget — user explicitly requested a fresh attempt
+                task.retry_count = 0;
+                task.wait_until = None;
+                task.error_message = None;
+                tracing::info!("Resumed task {} - re-queued with fresh retry budget", id);
                 return Some(task.clone());
             }
         }
