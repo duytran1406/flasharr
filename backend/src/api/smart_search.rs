@@ -626,8 +626,8 @@ pub async fn handle_tv_search(
         }
 
         // ── Step 2: Build a base → [full_templates] index ──────────────────────────
-        // This lets us know all sibling release groups for any given show/season,
-        // so we can search all of them when looking for a missing episode.
+        // Clusters sibling release groups by show/season so we can search them all
+        // when snowballing one qualifying group.
         let mut base_to_templates: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
         for (tmpl, grp) in &release_groups {
             base_to_templates.entry(grp.base_search.clone())
@@ -635,16 +635,75 @@ pub async fn handle_tv_search(
                 .push(tmpl.clone());
         }
 
-        // ── Step 3: Deep-dive for release groups that have missing episodes ─────────
+        // ── Helper: extract the "basic pattern" from a full_template ────────────────
+        // Given: "Tales of Qin Mu S01E{ep} 4K 8Bit H264 TVP TMPĐ_kimngonx5.mkv"
+        // Returns: "Tales of Qin Mu 4K 8Bit H264 TVP TMPĐ_kimngonx5"
+        //   (title + quality/uploader suffix, no S/E info, no extension)
+        //
+        // This lets Fshare return ALL episodes from one specific release group in one
+        // shot — avoiding the pagination problem that hits broad queries mixing all variants.
+        let extract_basic_pattern = |tmpl: &str| -> String {
+            let ep_placeholder_idx = match tmpl.find("{ep}") {
+                Some(i) => i,
+                None => return String::new(),
+            };
+            let before_ep = &tmpl[..ep_placeholder_idx];
+            let after_ep  = &tmpl[ep_placeholder_idx + 4..]; // skip "{ep}"
+
+            // Strip the trailing "S01E" (or "Tap " or similar) from before_ep
+            // to get just the show title.
+            static RE_STRIP_SE: OnceLock<Regex> = OnceLock::new();
+            static RE_STRIP_TAP: OnceLock<Regex> = OnceLock::new();
+            let re_strip_se  = RE_STRIP_SE.get_or_init(|| Regex::new(r"[\s._-]+[Ss]\d{1,2}[Ee]$").unwrap());
+            let re_strip_tap = RE_STRIP_TAP.get_or_init(|| Regex::new(r"[\s._-]+(?:Tập|[Tt]ap|[Ee]p?)[\s._-]*$").unwrap());
+
+            let title_part = re_strip_se
+                .replace(before_ep, "")
+                .to_string();
+            let title_part = re_strip_tap
+                .replace(&title_part, "")
+                .trim()
+                .to_string();
+
+            // Strip the file extension from the suffix part
+            let suffix_clean = after_ep
+                .trim_start_matches(|c: char| c == ' ' || c == '_' || c == '.')
+                .trim_end_matches(|c: char| matches!(c, 'v'|'k'|'m'|'4'|'p'|'i'))
+                .trim_end_matches('.')
+                .trim();
+
+            if suffix_clean.is_empty() {
+                title_part
+            } else {
+                format!("{} {}", title_part, suffix_clean)
+            }
+        };
+
+        // ── Step 3: Two-tier snowball for release groups with missing episodes ───────
+        //
+        // For show "Tales of Qin Mu S01" with sibling groups A/B/C:
+        //
+        //  Tier 1 — Basic pattern search (one call per sibling release group):
+        //    "Tales of Qin Mu 4K HDR 10Bit TMPĐ_kimngonx5"   → all of Group A's files
+        //    "Tales of Qin Mu 4K 8Bit H264 TMPĐ_kimngonx5"   → all of Group B's files
+        //    "Tales of Qin Mu 4K 8Bit H264 TVP TMPĐ_kimngonx5" → all of Group C (E39-41!)
+        //  Each returns ≤100 files from ONE group → no cross-variant pagination issue.
+        //
+        //  Tier 2 — Targeted per-episode (only for episodes STILL missing after Tier 1):
+        //    "Tales of Qin Mu S01E039 4K 8Bit H264 TVP TMPĐ_kimngonx5"
+        //  Handles edge cases where even a single release group has >100 files.
+        //
         let mut sorted_groups: Vec<_> = release_groups.iter().collect();
         sorted_groups.sort_by(|a, b| b.1.found_eps.len().cmp(&a.1.found_eps.len()));
 
-        // Take the top 5 qualifying groups
+        // Track episodes found across the entire snowball pass (not per-group),
+        // so Tier 2 only fires for truly remaining gaps.
+        let mut snowball_found_eps: std::collections::HashMap<String, std::collections::HashSet<u32>> = std::collections::HashMap::new();
+
         for (_tmpl, grp) in sorted_groups.iter().take(5) {
             info!("Snowball: Evaluating release group '{}' (count: {})",
                 &grp.full_template[..grp.full_template.len().min(60)], grp.found_eps.len());
 
-            // Only deep-dive if the pattern belongs to the show we're searching for
             let sim = calculate_unified_similarity(&official_name, &grp.sample_name, &aliases);
             if !sim.is_valid {
                 info!("Snowball: Skipping '{}' - no title match", &grp.full_template[..grp.full_template.len().min(40)]);
@@ -670,70 +729,89 @@ pub async fn handle_tv_search(
             info!("Snowball deep-dive: '{}' missing {} eps (max={})",
                 &grp.full_template[..grp.full_template.len().min(50)], missing_eps.len(), max_ep);
 
-            // Collect all sibling release group templates (same base = same show/season)
             let sibling_templates = base_to_templates
                 .get(&grp.base_search)
                 .cloned()
                 .unwrap_or_default();
 
-            info!("Snowball: {} sibling release groups for base '{}'",
-                sibling_templates.len(), grp.base_search);
+            info!("Snowball: {} sibling release groups for base '{}'", sibling_templates.len(), grp.base_search);
 
-            let is_large_series = missing_eps.len() > 50 || max_ep > 100;
-            let mut snowball_queries: Vec<String> = Vec::new();
+            // ── Tier 1: Basic pattern search, one call per sibling release group ──────
+            // Each call targets one specific release group's files (title + quality suffix,
+            // no season/episode) so we get all its episodes in ≤100 results.
+            for sibling_tmpl in &sibling_templates {
+                let basic = extract_basic_pattern(sibling_tmpl);
+                if basic.is_empty() { continue; }
 
-            if is_large_series {
-                // Large series: paginated broad queries per sibling
-                for sibling_tmpl in &sibling_templates {
-                    // Extract base from template (strip everything from {ep} onwards)
-                    if let Some(idx) = sibling_tmpl.find("{ep}") {
-                        let base = sibling_tmpl[..idx].trim_end_matches(|c: char| c == 'E' || c == ' ');
-                        for i in 0..10 {
-                            snowball_queries.push(format!("{} {}", base, i));
-                        }
-                    }
-                }
-            } else {
-                // For each missing episode, search using ALL sibling release group
-                // templates — this guarantees we find E39 even if it was only uploaded
-                // in the TVP variant (Group C) which wasn't big enough to qualify alone.
-                for &ep in missing_eps.iter().take(30) {
-                    let ep_str = format!("{:03}", ep);
-                    for sibling_tmpl in &sibling_templates {
-                        // Substitute {ep} with the zero-padded episode number
-                        // and strip the file extension to keep the query clean
-                        let query = sibling_tmpl
-                            .replace("{ep}", &ep_str)
-                            .trim_end_matches(|c: char| matches!(c, 'v'|'k'|'m'|'4'|'p'))
-                            .trim_end_matches('.')
-                            .to_string();
-                        snowball_queries.push(query);
-                    }
-                }
+                info!("Snowball Tier1 Execute: '{}'", basic);
+                let results = execute_fshare_search(&client, &basic, 100).await;
+                info!("Snowball Tier1 Result from '{}': {} files", basic, results.len());
 
-                // Also add a broad base search as a catch-all
-                snowball_queries.insert(0, grp.base_search.clone());
-            }
-
-            // De-duplicate queries (same ep may generate same query across siblings)
-            snowball_queries.dedup();
-
-            for q in snowball_queries {
-                info!("Snowball Search Execute: '{}'", q);
-                let s_results: Vec<RawFshareResult> = execute_fshare_search(&client, &q, 100).await;
-                info!("Snowball Result from '{}': {} files", q, s_results.len());
-                for sr in s_results {
+                for sr in results {
                     let pure_fcode = sr.fcode.split('?').next().unwrap_or("").to_string();
                     if seen.insert(pure_fcode) {
+                        // Track which episodes this result covers for Tier 2 planning
+                        // (this is approximate — Phase 4 will do the full parse anyway)
+                        let sib_eps = snowball_found_eps.entry(sibling_tmpl.clone()).or_default();
+                        // Try to extract ep number from the result name quickly
+                        static RE_EP_QUICK: OnceLock<Regex> = OnceLock::new();
+                        let re_ep = RE_EP_QUICK.get_or_init(|| Regex::new(r"[Ee](\d{1,3})").unwrap());
+                        if let Some(cap) = re_ep.captures(&sr.name) {
+                            if let Ok(ep) = cap[1].parse::<u32>() { sib_eps.insert(ep); }
+                        }
                         results_pool.push(sr);
+                    }
+                }
+            }
+
+            // ── Tier 2: Targeted per-episode for STILL-missing after Tier 1 ──────────
+            // Recalculate missing using Tier 1 additions.
+            // For simplicity, use the cumulative snowball_found_eps across all siblings.
+            let tier1_found: std::collections::HashSet<u32> = sibling_templates.iter()
+                .flat_map(|t| snowball_found_eps.get(t).into_iter().flatten().copied())
+                .collect();
+
+            let still_missing: Vec<u32> = missing_eps.iter()
+                .copied()
+                .filter(|ep| !tier1_found.contains(ep))
+                .collect();
+
+            if still_missing.is_empty() {
+                info!("Snowball Tier2: No remaining gaps after Tier 1 for '{}'",
+                    &grp.base_search);
+                continue;
+            }
+
+            info!("Snowball Tier2: {} eps still missing after Tier 1, doing targeted search",
+                still_missing.len());
+
+            // For each remaining gap × each sibling: targeted full-template query
+            // Limit to 20 missing episodes max to prevent API flooding
+            for &ep in still_missing.iter().take(20) {
+                let ep_str = format!("{:03}", ep);
+                for sibling_tmpl in &sibling_templates {
+                    let query = sibling_tmpl
+                        .replace("{ep}", &ep_str)
+                        .trim_end_matches(|c: char| matches!(c, 'v'|'k'|'m'|'4'|'p'|'i'))
+                        .trim_end_matches('.')
+                        .to_string();
+                    info!("Snowball Tier2 Execute: '{}'", query);
+                    let results = execute_fshare_search(&client, &query, 30).await;
+                    info!("Snowball Tier2 Result from '{}': {} files", query, results.len());
+                    for sr in results {
+                        let pure_fcode = sr.fcode.split('?').next().unwrap_or("").to_string();
+                        if seen.insert(pure_fcode) {
+                            results_pool.push(sr);
+                        }
                     }
                 }
             }
         }
     }
 
+    info!("📊 [PERF] Phase 3 (Snowball Logic) took: {:?}\n  → release groups indexed, Tier1 basic + Tier2 targeted per-gap",
+        phase3_start.elapsed());
 
-    info!("📊 [PERF] Phase 3 (Snowball Logic) took: {:?}", phase3_start.elapsed());
     
     let target_results = results_pool; // Process ALL results, not just first 100
 
