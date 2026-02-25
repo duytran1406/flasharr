@@ -127,19 +127,25 @@ struct BatchSummariesResponse {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TmdbMetadata {
     /// TMDB ID
+    #[serde(default)]
     pub tmdb_id: Option<i64>,
     /// Media type: "movie" or "tv"
+    #[serde(default)]
     pub media_type: Option<String>,
     /// Movie/Show title
+    #[serde(default)]
     pub title: Option<String>,
-    /// Release year
-    #[serde(deserialize_with = "deserialize_year")]
+    /// Release year — optional; if omitted from JSON body, defaults to None
+    #[serde(default, deserialize_with = "deserialize_year")]
     pub year: Option<i32>,
     /// Collection name (for movies in a collection)
+    #[serde(default)]
     pub collection_name: Option<String>,
     /// Season number (for TV)
+    #[serde(default)]
     pub season: Option<i32>,
     /// Episode number (for TV)
+    #[serde(default)]
     pub episode: Option<i32>,
 }
 

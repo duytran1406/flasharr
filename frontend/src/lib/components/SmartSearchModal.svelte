@@ -511,17 +511,20 @@
         const batch = toDownload.slice(i, i + batchSize);
         await Promise.all(
           batch.map(async (item) => {
+            // Reuse TMDB metadata from the store — fetched once when the modal opened.
+            // Guard all fields: undefined is dropped by JSON.stringify → backend 422.
+            const rawId2 = parseInt(ui.smartSearchData?.tmdbId || "");
+            const rawYear2 = ui.smartSearchData?.year ?? null;
             const tmdbMetadata = {
-              tmdb_id: ui.smartSearchData?.tmdbId
-                ? parseInt(ui.smartSearchData.tmdbId)
-                : undefined,
+              tmdb_id: Number.isFinite(rawId2) ? rawId2 : null,
               media_type: "tv",
-              title: ui.smartSearchData?.title, // Include title to avoid TMDB API fetching
-              year: ui.smartSearchData?.year
-                ? typeof ui.smartSearchData.year === "string"
-                  ? parseInt(ui.smartSearchData.year)
-                  : ui.smartSearchData.year
-                : undefined,
+              title: ui.smartSearchData?.title ?? null,
+              year:
+                rawYear2 != null
+                  ? typeof rawYear2 === "string"
+                    ? parseInt(rawYear2)
+                    : rawYear2
+                  : null,
               season: item.seasonNum,
               episode: item.epNum,
             };

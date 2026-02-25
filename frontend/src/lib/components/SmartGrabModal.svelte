@@ -462,15 +462,26 @@
         const batch = files.slice(i, i + batchSize);
         await Promise.all(
           batch.map(async (item, batchIndex) => {
+            // Reuse the same TMDB metadata from the store for every episode in the
+            // batch — the store data was loaded once when the modal opened, no per-item
+            // TMDB API calls are made here.
+            //
+            // Guard tmdb_id: parseInt("") = NaN — send null instead so the backend
+            //   doesn't receive an invalid integer.
+            // Guard year: undefined is silently stripped by JSON.stringify, causing the
+            //   backend to reject with "missing field `year`" — send null explicitly.
+            const rawId = parseInt($smartGrabStore.data?.tmdbId || "");
+            const rawYear = $smartGrabStore.data?.year ?? null;
             const tmdbMetadata = {
-              tmdb_id: parseInt($smartGrabStore.data?.tmdbId || ""),
+              tmdb_id: Number.isFinite(rawId) ? rawId : null,
               media_type: "tv",
-              title: $smartGrabStore.data?.title,
-              year: $smartGrabStore.data?.year
-                ? typeof $smartGrabStore.data.year === "string"
-                  ? parseInt($smartGrabStore.data.year)
-                  : $smartGrabStore.data.year
-                : undefined,
+              title: $smartGrabStore.data?.title ?? null,
+              year:
+                rawYear != null
+                  ? typeof rawYear === "string"
+                    ? parseInt(rawYear)
+                    : rawYear
+                  : null,
               season: item.seasonNum,
               episode: item.epNum,
             };
