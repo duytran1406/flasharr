@@ -531,128 +531,208 @@ pub async fn handle_tv_search(
     info!("Snowball Check: results_pool={}, aliases={}", results_pool.len(), aliases.len());
     if !results_pool.is_empty() && !aliases.is_empty() {
         // Reuse the final_seen set for snowball results
-        let mut seen = final_seen; 
-        // Step 1: Group files by pattern
-            let mut pattern_groups: std::collections::HashMap<String, (std::collections::HashSet<u32>, String, String)> = std::collections::HashMap::new();
-            
-            for r in &results_pool {
-                let name = &r.name;
-                
-                // Try different patterns to extract episode number
-                static RE_S_E: OnceLock<Regex> = OnceLock::new();
-                static RE_TAP: OnceLock<Regex> = OnceLock::new();
-                static RE_LEADING: OnceLock<Regex> = OnceLock::new();
-                static RE_TRAILING: OnceLock<Regex> = OnceLock::new();
+        let mut seen = final_seen;
 
-                let re_s_e = RE_S_E.get_or_init(|| Regex::new(r"^(.+?)[._\s]S(\d{1,2})[Ee](\d{1,3})(.*)$").unwrap());
-                let re_tap = RE_TAP.get_or_init(|| Regex::new(r"^(.+?)(?:[\s_.-]?(?:Tập|[Tt]ap|[Ee]p?))[\s_.-]*(\d{1,4})(.*)$").unwrap());
-                let re_leading = RE_LEADING.get_or_init(|| Regex::new(r"^(\d{1,3})([_\s.].+)$").unwrap());
-                let re_trailing = RE_TRAILING.get_or_init(|| Regex::new(r"^(.+?)[_\s.-](\d{1,3})(\.(?:mkv|mp4))$").unwrap());
-                
-                let (ep, template, base_search) = if let Some(caps) = re_s_e.captures(name) {
-                    let ep = caps.get(3).and_then(|m| m.as_str().parse::<u32>().ok()).unwrap_or(0);
-                    let season = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                    let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                    (ep, format!("{} S{}E{{ep}}", prefix, season), format!("{} S{}", prefix, season))
-                } else if let Some(caps) = re_tap.captures(name) {
-                    let ep = caps.get(2).and_then(|m| m.as_str().parse::<u32>().ok()).unwrap_or(0);
-                    let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                    (ep, format!("{} Tap {{ep}}", prefix), prefix.to_string())
-                } else if let Some(caps) = re_leading.captures(name) {
-                    let ep = caps.get(1).and_then(|m| m.as_str().parse::<u32>().ok()).unwrap_or(0);
-                    let suffix = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                    let base = suffix.trim_start_matches(|c: char| c == '_' || c == '.' || c == ' ').chars().take(30).collect::<String>();
-                    (ep, format!("{{ep}}{}", suffix), base)
-                } else if let Some(caps) = re_trailing.captures(name) {
-                    let ep_str = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                    // Skip if it looks like a resolution (e.g., "1080")
-                    if ep_str.len() >= 3 && ep_str.len() <= 4 {
-                        continue;
-                    }
-                    let ep = ep_str.parse::<u32>().ok().unwrap_or(0);
-                    let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-                    let ext = caps.get(3).map(|m| m.as_str()).unwrap_or("");
-                    let base = prefix.trim().chars().take(40).collect::<String>();
-                    (ep, format!("{} {{ep}}{}", prefix, ext), base)
-                } else {
-                    continue;
-                };
-                
+        // ── Step 1: Group files by FULL filename template (= one release group) ──────
+        //
+        // Key insight: we keep the ENTIRE filename pattern (including quality/uploader
+        // suffix) as the group key, so each distinct release variant is its own group.
+        //
+        // For the show "Tales of Qin Mu S01":
+        //   Group A: "Tales of Qin Mu S01E{ep} 4K HDR 10Bit TMPĐ_kimngonx5.mkv" → E1-38, E42-71
+        //   Group B: "Tales of Qin Mu S01E{ep} 4K 8Bit H264 TMPĐ_kimngonx5.mkv" → E1-38, E42-71
+        //   Group C: "Tales of Qin Mu S01E{ep} 4K 8Bit H264 TVP TMPĐ_kimngonx5.mkv" → E39-41 only
+        //
+        // When Group A runs snowball for missing E39-41, it generates targeted queries
+        // using ALL known templates for the same base ("Tales of Qin Mu S01"):
+        //   → "Tales of Qin Mu S01E039 4K HDR 10Bit TMPĐ_kimngonx5"
+        //   → "Tales of Qin Mu S01E039 4K 8Bit H264 TMPĐ_kimngonx5"
+        //   → "Tales of Qin Mu S01E039 4K 8Bit H264 TVP TMPĐ_kimngonx5"  ← finds it!
+        //
+        // The template has {ep} where the episode number goes so we can substitute.
+        // base_search is the part before the episode number ("Tales of Qin Mu S01")
+        // used to cluster related release groups.
+
+        struct ReleaseGroup {
+            found_eps: std::collections::HashSet<u32>,
+            sample_name: String,
+            base_search: String,   // e.g. "Tales of Qin Mu S01" — links sibling groups
+            /// Full template with {ep} placeholder, e.g.
+            /// "Tales of Qin Mu S01E{ep} 4K 8Bit H264 TVP TMPĐ_kimngonx5.mkv"
+            /// Substituting the ep number gives a precise Fshare search query.
+            full_template: String,
+        }
+
+        static RE_S_E2: OnceLock<Regex> = OnceLock::new();
+        static RE_TAP2: OnceLock<Regex> = OnceLock::new();
+        static RE_LEADING2: OnceLock<Regex> = OnceLock::new();
+        static RE_TRAILING2: OnceLock<Regex> = OnceLock::new();
+
+        let re_s_e2 = RE_S_E2.get_or_init(|| Regex::new(r"^(.+?)[._\s]S(\d{1,2})[Ee](\d{1,3})(.*)$").unwrap());
+        let re_tap2 = RE_TAP2.get_or_init(|| Regex::new(r"^(.+?)(?:[\s_.-]?(?:Tập|[Tt]ap|[Ee]p?))[\s_.-]*(\d{1,4})(.*)$").unwrap());
+        let re_leading2 = RE_LEADING2.get_or_init(|| Regex::new(r"^(\d{1,3})([_\s.].+)$").unwrap());
+        let re_trailing2 = RE_TRAILING2.get_or_init(|| Regex::new(r"^(.+?)[_\s.-](\d{1,3})(\.(?:mkv|mp4))$").unwrap());
+
+        // Map: full_template → ReleaseGroup
+        let mut release_groups: std::collections::HashMap<String, ReleaseGroup> = std::collections::HashMap::new();
+
+        for r in &results_pool {
+            let name = &r.name;
+
+            // Returns (ep, full_template, base_search)
+            let parsed: Option<(u32, String, String)> = if let Some(caps) = re_s_e2.captures(name) {
+                let ep = caps.get(3).and_then(|m| m.as_str().parse::<u32>().ok()).unwrap_or(0);
+                let season = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                let suffix = caps.get(4).map(|m| m.as_str()).unwrap_or("");
+                // full template keeps the suffix so each quality variant is its own group
+                let full_template = format!("{} S{}E{{ep}}{}", prefix, season, suffix);
+                let base_search = format!("{} S{}", prefix, season);
+                Some((ep, full_template, base_search))
+            } else if let Some(caps) = re_tap2.captures(name) {
+                let ep = caps.get(2).and_then(|m| m.as_str().parse::<u32>().ok()).unwrap_or(0);
+                let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                let suffix = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+                let full_template = format!("{} Tap {{ep}}{}", prefix, suffix);
+                Some((ep, full_template, prefix.to_string()))
+            } else if let Some(caps) = re_leading2.captures(name) {
+                let ep = caps.get(1).and_then(|m| m.as_str().parse::<u32>().ok()).unwrap_or(0);
+                let suffix = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                let base = suffix.trim_start_matches(|c: char| c == '_' || c == '.' || c == ' ').chars().take(30).collect::<String>();
+                Some((ep, format!("{{ep}}{}", suffix), base))
+            } else if let Some(caps) = re_trailing2.captures(name) {
+                let ep_str = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                if ep_str.len() >= 3 && ep_str.len() <= 4 { continue; } // likely a resolution
+                let ep = ep_str.parse::<u32>().ok().unwrap_or(0);
+                let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+                let ext = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+                let base = prefix.trim().chars().take(40).collect::<String>();
+                Some((ep, format!("{} {{ep}}{}", prefix, ext), base))
+            } else {
+                None
+            };
+
+            if let Some((ep, full_template, base_search)) = parsed {
                 if ep >= 1 && ep <= 1000 {
-                    pattern_groups.entry(template.clone())
-                        .or_insert_with(|| (std::collections::HashSet::new(), name.clone(), base_search))
-                        .0.insert(ep);
+                    let group = release_groups.entry(full_template.clone()).or_insert_with(|| ReleaseGroup {
+                        found_eps: std::collections::HashSet::new(),
+                        sample_name: name.clone(),
+                        base_search,
+                        full_template: full_template.clone(),
+                    });
+                    group.found_eps.insert(ep);
                 }
             }
-            
-            // Step 2: Deep Dive - find missing episodes
-            let mut sorted_patterns: Vec<_> = pattern_groups.iter().collect();
-            sorted_patterns.sort_by(|a, b| b.1.0.len().cmp(&a.1.0.len()));
-            
-            // INCREASED: Take top 5 patterns to ensure we don't miss our show due to noise
-            for (template, (found_eps, sample_name, base_pattern)) in sorted_patterns.iter().take(5) {
-                info!("Snowball: Evaluating pattern group '{}' (count: {})", template, found_eps.len());
-                
-                // FILTER: Only deep-dive if the pattern likely belongs to the show we're searching for
-                let sim = calculate_unified_similarity(&official_name, sample_name, &aliases);
-                if !sim.is_valid {
-                    info!("Snowball: Skipping group '{}' - matched_title={}, match_type={}", template, sim.match_type, sim.match_type);
-                    continue;
+        }
+
+        // ── Step 2: Build a base → [full_templates] index ──────────────────────────
+        // This lets us know all sibling release groups for any given show/season,
+        // so we can search all of them when looking for a missing episode.
+        let mut base_to_templates: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for (tmpl, grp) in &release_groups {
+            base_to_templates.entry(grp.base_search.clone())
+                .or_default()
+                .push(tmpl.clone());
+        }
+
+        // ── Step 3: Deep-dive for release groups that have missing episodes ─────────
+        let mut sorted_groups: Vec<_> = release_groups.iter().collect();
+        sorted_groups.sort_by(|a, b| b.1.found_eps.len().cmp(&a.1.found_eps.len()));
+
+        // Take the top 5 qualifying groups
+        for (_tmpl, grp) in sorted_groups.iter().take(5) {
+            info!("Snowball: Evaluating release group '{}' (count: {})",
+                &grp.full_template[..grp.full_template.len().min(60)], grp.found_eps.len());
+
+            // Only deep-dive if the pattern belongs to the show we're searching for
+            let sim = calculate_unified_similarity(&official_name, &grp.sample_name, &aliases);
+            if !sim.is_valid {
+                info!("Snowball: Skipping '{}' - no title match", &grp.full_template[..grp.full_template.len().min(40)]);
+                continue;
+            }
+
+            if grp.found_eps.len() < 5 {
+                info!("Snowball: Release group too small ({})", grp.found_eps.len());
+                continue;
+            }
+
+            let max_ep = *grp.found_eps.iter().max().unwrap_or(&0);
+            let check_limit = max_ep.max(50);
+            let missing_eps: Vec<u32> = (1..=check_limit)
+                .filter(|ep| !grp.found_eps.contains(ep))
+                .collect();
+
+            if missing_eps.is_empty() {
+                info!("Snowball: No missing episodes in '{}'", &grp.full_template[..grp.full_template.len().min(40)]);
+                continue;
+            }
+
+            info!("Snowball deep-dive: '{}' missing {} eps (max={})",
+                &grp.full_template[..grp.full_template.len().min(50)], missing_eps.len(), max_ep);
+
+            // Collect all sibling release group templates (same base = same show/season)
+            let sibling_templates = base_to_templates
+                .get(&grp.base_search)
+                .cloned()
+                .unwrap_or_default();
+
+            info!("Snowball: {} sibling release groups for base '{}'",
+                sibling_templates.len(), grp.base_search);
+
+            let is_large_series = missing_eps.len() > 50 || max_ep > 100;
+            let mut snowball_queries: Vec<String> = Vec::new();
+
+            if is_large_series {
+                // Large series: paginated broad queries per sibling
+                for sibling_tmpl in &sibling_templates {
+                    // Extract base from template (strip everything from {ep} onwards)
+                    if let Some(idx) = sibling_tmpl.find("{ep}") {
+                        let base = sibling_tmpl[..idx].trim_end_matches(|c: char| c == 'E' || c == ' ');
+                        for i in 0..10 {
+                            snowball_queries.push(format!("{} {}", base, i));
+                        }
+                    }
+                }
+            } else {
+                // For each missing episode, search using ALL sibling release group
+                // templates — this guarantees we find E39 even if it was only uploaded
+                // in the TVP variant (Group C) which wasn't big enough to qualify alone.
+                for &ep in missing_eps.iter().take(30) {
+                    let ep_str = format!("{:03}", ep);
+                    for sibling_tmpl in &sibling_templates {
+                        // Substitute {ep} with the zero-padded episode number
+                        // and strip the file extension to keep the query clean
+                        let query = sibling_tmpl
+                            .replace("{ep}", &ep_str)
+                            .trim_end_matches(|c: char| matches!(c, 'v'|'k'|'m'|'4'|'p'))
+                            .trim_end_matches('.')
+                            .to_string();
+                        snowball_queries.push(query);
+                    }
                 }
 
-                if found_eps.len() < 5 {
-                    info!("Snowball: Group '{}' too small (count: {})", template, found_eps.len());
-                    continue;
-                }
-                
-                let max_ep = *found_eps.iter().max().unwrap_or(&0);
-                let check_limit = max_ep.max(50); // Increased from 35 to handle shows with 40+ episodes
-                let missing_eps: Vec<u32> = (1..=check_limit).filter(|ep| !found_eps.contains(ep)).collect();
-                
-                if missing_eps.is_empty() {
-                    info!("Snowball: Group '{}' has no missing episodes", template);
-                    continue;
-                }
-                
-                info!("Deep-dive (Snowball): '{}' missing {} episodes (max detected: {})", &template[..template.len().min(50)], missing_eps.len(), max_ep);
-                
-                let is_large_series = missing_eps.len() > 50 || max_ep > 100;
-                let mut snowball_queries = Vec::new();
-                
-                if is_large_series {
-                    for i in 0..10 {
-                        snowball_queries.push(format!("{} {}", base_pattern, i));
-                    }
-                } else {
-                    snowball_queries.push(base_pattern.clone());
-                    // Try to extract the title part by splitting at " S" or " Season"
-                    let lower_base = base_pattern.to_lowercase();
-                    if let Some(idx) = lower_base.find(" s") {
-                        let title_part = &base_pattern[..idx];
-                        if !title_part.trim().is_empty() {
-                            snowball_queries.push(title_part.trim().to_string());
-                        }
-                    } else if let Some(idx) = lower_base.find(" season") {
-                        let title_part = &base_pattern[..idx];
-                        if !title_part.trim().is_empty() {
-                            snowball_queries.push(title_part.trim().to_string());
-                        }
-                    }
-                }
-                
-                for q in snowball_queries {
-                    info!("Snowball Search Execute: '{}'", q);
-                    let s_results: Vec<RawFshareResult> = execute_fshare_search(&client, &q, 100).await;
-                    info!("Snowball Result from '{}': {} files", q, s_results.len());
-                    for sr in s_results {
-                        let pure_fcode = sr.fcode.split('?').next().unwrap_or("").to_string();
-                        if seen.insert(pure_fcode) {
-                            results_pool.push(sr);
-                        }
+                // Also add a broad base search as a catch-all
+                snowball_queries.insert(0, grp.base_search.clone());
+            }
+
+            // De-duplicate queries (same ep may generate same query across siblings)
+            snowball_queries.dedup();
+
+            for q in snowball_queries {
+                info!("Snowball Search Execute: '{}'", q);
+                let s_results: Vec<RawFshareResult> = execute_fshare_search(&client, &q, 100).await;
+                info!("Snowball Result from '{}': {} files", q, s_results.len());
+                for sr in s_results {
+                    let pure_fcode = sr.fcode.split('?').next().unwrap_or("").to_string();
+                    if seen.insert(pure_fcode) {
+                        results_pool.push(sr);
                     }
                 }
             }
+        }
     }
+
+
     info!("📊 [PERF] Phase 3 (Snowball Logic) took: {:?}", phase3_start.elapsed());
     
     let target_results = results_pool; // Process ALL results, not just first 100
