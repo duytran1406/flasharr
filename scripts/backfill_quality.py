@@ -307,37 +307,80 @@ async def main():
 
     # ── Step 3: Detect batches ───────────────────────────────────────────────
     print(f'\n🔍  Detecting batches...')
-    # Group: downloads sharing (tmdb_id, filename_pattern_key) with >1 item
-    groups: dict[tuple, list[dict]] = defaultdict(list)
+
+    # Pass A: group by (tmdb_id, pattern_key) for rows that have TMDB data
+    groups_by_tmdb: dict[tuple, list[dict]] = defaultdict(list)
     for row in rows:
         tmdb_id = row.get('tmdb_id')
         if not tmdb_id:
             continue
         key = (tmdb_id, filename_pattern_key(row['orig_filename'] or row['filename']))
-        groups[key].append(row)
+        groups_by_tmdb[key].append(row)
+
+    # Pass B: group by filename_pattern_key alone for rows WITHOUT tmdb_id
+    # (e.g. downloads that have no TMDB annotation yet)
+    no_tmdb_rows = [r for r in rows if not r.get('tmdb_id')]
+    groups_by_pattern: dict[str, list[dict]] = defaultdict(list)
+    for row in no_tmdb_rows:
+        # Use the DB filename (clean Sonarr name) if orig_filename ≡ redirect
+        fn = row['orig_filename'] or row['filename']
+        groups_by_pattern[filename_pattern_key(fn)].append(row)
+
+    # Merge both group dicts into a unified list for processing
+    all_groups: list[tuple[str, list[dict], int | None]] = []
+    for (tmdb_id, pat), items in groups_by_tmdb.items():
+        all_groups.append((pat, items, tmdb_id))
+    for pat, items in groups_by_pattern.items():
+        all_groups.append((pat, items, None))
 
     batch_updates: list[dict] = []
 
-    for (tmdb_id, pat), items in groups.items():
-        # Only batch if >1 item share the same release pattern
+    for pat, items, tmdb_id in all_groups:
         if len(items) < 2:
             continue
 
-        # Check if already all have the same batch_id
-        existing_bids = {r.get('batch_id') for r in items if r.get('batch_id')}
-        if len(existing_bids) == 1 and None not in existing_bids:
-            print(f'  ⏭  Already batched: tmdb={tmdb_id} ({len(items)} items, bid={next(iter(existing_bids))[:8]})')
+        # Skip if ALL items already share the SAME batch_id (fully batched)
+        all_bids = [r.get('batch_id') for r in items]
+        non_null_bids = {b for b in all_bids if b}
+        fully_batched = (len(non_null_bids) == 1 and all(b is not None for b in all_bids))
+        if fully_batched:
+            bid_short = next(iter(non_null_bids))[:8]
+            label = f'tmdb={tmdb_id}' if tmdb_id else f'pattern={pat[:30]}'
+            print(f'  ⏭  Already batched: {label} ({len(items)} items, bid={bid_short})')
             continue
 
-        # Generate batch ID and name
-        bid = str(uuid.uuid4())
-        sample_fn = items[0]['orig_filename'] or items[0]['filename']
+        # Use an existing batch_id if some items already have one, else create new
+        if non_null_bids:
+            bid = next(iter(non_null_bids))   # reuse existing bid for partial groups
+            action = 'extend'
+        else:
+            bid = str(uuid.uuid4())
+            action = 'new'
+
+        # Build batch name from the richest sample filename available
+        # Prefer orig_filename with quality tags if available
+        sample_fn = next(
+            (r['orig_filename'] for r in items
+             if r.get('orig_filename') and r['orig_filename'] != r['filename']),
+            items[0]['orig_filename'] or items[0]['filename']
+        )
         qname, _ = parse_quality(sample_fn)
-        tmdb_title = items[0].get('tmdb_title') or f'TMDB-{tmdb_id}'
+        if tmdb_id:
+            tmdb_title = items[0].get('tmdb_title') or f'TMDB-{tmdb_id}'
+        else:
+            # Derive series title from filename: strip episode + quality tokens
+            base = re.sub(r'S\d{1,2}E\d{1,3}.*', '', items[0]['filename'], flags=re.IGNORECASE)
+            base = re.sub(r'[._-]', ' ', base).strip()
+            tmdb_title = base or 'Unknown'
         bname = f'{tmdb_title} [{qname}]'
 
-        print(f'  📦  New batch: "{bname}" ({len(items)} items) → {bid[:8]}')
-        for item in sorted(items, key=lambda r: r.get('tmdb_episode') or 0):
+        # Only update items that are missing or have a different batch_id
+        items_to_update = [r for r in items if r.get('batch_id') != bid]
+        label = f'tmdb={tmdb_id}' if tmdb_id else f'filename-pattern'
+        print(f'  📦  {"New" if action=="new" else "Extend"} batch [{label}]: "{bname}" '
+              f'({len(items_to_update)}/{len(items)} items need update) → {bid[:8]}')
+
+        for item in sorted(items_to_update, key=lambda r: r.get('tmdb_episode') or 0):
             batch_updates.append({
                 'id': item['id'],
                 'batch_id': bid,
