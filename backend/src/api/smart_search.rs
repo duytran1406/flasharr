@@ -736,26 +736,39 @@ pub async fn handle_tv_search(
 
             info!("Snowball: {} sibling release groups for base '{}'", sibling_templates.len(), grp.base_search);
 
-            // ── Tier 1: Basic pattern search, one call per sibling release group ──────
-            // Each call targets one specific release group's files (title + quality suffix,
-            // no season/episode) so we get all its episodes in ≤100 results.
-            for sibling_tmpl in &sibling_templates {
-                let basic = extract_basic_pattern(sibling_tmpl);
-                if basic.is_empty() { continue; }
+            // ── Tier 1: Basic pattern search — PARALLEL (one call per sibling group) ──
+            // Build (template, basic_query) pairs, skip empties, fire all at once.
+            static RE_EP_QUICK: OnceLock<Regex> = OnceLock::new();
+            let re_ep = RE_EP_QUICK.get_or_init(|| Regex::new(r"[Ee](\d{1,3})").unwrap());
 
-                info!("Snowball Tier1 Execute: '{}'", basic);
-                let results = execute_fshare_search(&client, &basic, 100).await;
-                info!("Snowball Tier1 Result from '{}': {} files", basic, results.len());
+            let tier1_pairs: Vec<(String, String)> = sibling_templates.iter()
+                .filter_map(|tmpl| {
+                    let basic = extract_basic_pattern(tmpl);
+                    if basic.is_empty() { None } else { Some((tmpl.clone(), basic)) }
+                })
+                .collect();
 
+            info!("Snowball Tier1: {} parallel searches for base '{}'",
+                tier1_pairs.len(), grp.base_search);
+
+            let tier1_futures: Vec<_> = tier1_pairs.iter().map(|(_, basic)| {
+                let c = client.clone();
+                let b = basic.clone();
+                async move {
+                    info!("Snowball Tier1 Execute: '{}'", b);
+                    let r = execute_fshare_search(&c, &b, 100).await;
+                    info!("Snowball Tier1 Result: {} files for '{}'", r.len(), b);
+                    r
+                }
+            }).collect();
+
+            let tier1_batches = futures_util::future::join_all(tier1_futures).await;
+
+            for ((tmpl, _), results) in tier1_pairs.iter().zip(tier1_batches) {
+                let sib_eps = snowball_found_eps.entry(tmpl.clone()).or_default();
                 for sr in results {
                     let pure_fcode = sr.fcode.split('?').next().unwrap_or("").to_string();
                     if seen.insert(pure_fcode) {
-                        // Track which episodes this result covers for Tier 2 planning
-                        // (this is approximate — Phase 4 will do the full parse anyway)
-                        let sib_eps = snowball_found_eps.entry(sibling_tmpl.clone()).or_default();
-                        // Try to extract ep number from the result name quickly
-                        static RE_EP_QUICK: OnceLock<Regex> = OnceLock::new();
-                        let re_ep = RE_EP_QUICK.get_or_init(|| Regex::new(r"[Ee](\d{1,3})").unwrap());
                         if let Some(cap) = re_ep.captures(&sr.name) {
                             if let Ok(ep) = cap[1].parse::<u32>() { sib_eps.insert(ep); }
                         }
@@ -764,9 +777,7 @@ pub async fn handle_tv_search(
                 }
             }
 
-            // ── Tier 2: Targeted per-episode for STILL-missing after Tier 1 ──────────
-            // Recalculate missing using Tier 1 additions.
-            // For simplicity, use the cumulative snowball_found_eps across all siblings.
+            // ── Tier 2: Targeted per-episode — PARALLEL (all gaps × all siblings at once)
             let tier1_found: std::collections::HashSet<u32> = sibling_templates.iter()
                 .flat_map(|t| snowball_found_eps.get(t).into_iter().flatten().copied())
                 .collect();
@@ -777,32 +788,44 @@ pub async fn handle_tv_search(
                 .collect();
 
             if still_missing.is_empty() {
-                info!("Snowball Tier2: No remaining gaps after Tier 1 for '{}'",
-                    &grp.base_search);
+                info!("Snowball Tier2: No remaining gaps after Tier 1 for '{}'", &grp.base_search);
                 continue;
             }
 
-            info!("Snowball Tier2: {} eps still missing after Tier 1, doing targeted search",
-                still_missing.len());
+            // Build every (ep × sibling_tmpl) query upfront, cap at 10 eps to bound parallelism
+            let tier2_queries: Vec<String> = still_missing.iter().take(10)
+                .flat_map(|&ep| {
+                    let ep_str = format!("{:03}", ep);
+                    sibling_templates.iter().map(move |tmpl| {
+                        tmpl.replace("{ep}", &ep_str)
+                            .trim_end_matches(|c: char| matches!(c, 'v'|'k'|'m'|'4'|'p'|'i'))
+                            .trim_end_matches('.')
+                            .to_string()
+                    }).collect::<Vec<_>>()
+                })
+                .collect();
 
-            // For each remaining gap × each sibling: targeted full-template query
-            // Limit to 20 missing episodes max to prevent API flooding
-            for &ep in still_missing.iter().take(20) {
-                let ep_str = format!("{:03}", ep);
-                for sibling_tmpl in &sibling_templates {
-                    let query = sibling_tmpl
-                        .replace("{ep}", &ep_str)
-                        .trim_end_matches(|c: char| matches!(c, 'v'|'k'|'m'|'4'|'p'|'i'))
-                        .trim_end_matches('.')
-                        .to_string();
+            info!("Snowball Tier2: {} parallel targeted searches ({} eps × {} variants)",
+                tier2_queries.len(), still_missing.len().min(10), sibling_templates.len());
+
+            let tier2_futures: Vec<_> = tier2_queries.iter().map(|q| {
+                let c = client.clone();
+                let query = q.clone();
+                async move {
                     info!("Snowball Tier2 Execute: '{}'", query);
-                    let results = execute_fshare_search(&client, &query, 30).await;
-                    info!("Snowball Tier2 Result from '{}': {} files", query, results.len());
-                    for sr in results {
-                        let pure_fcode = sr.fcode.split('?').next().unwrap_or("").to_string();
-                        if seen.insert(pure_fcode) {
-                            results_pool.push(sr);
-                        }
+                    let r = execute_fshare_search(&c, &query, 30).await;
+                    info!("Snowball Tier2 Result: {} files for '{}'", r.len(), query);
+                    r
+                }
+            }).collect();
+
+            let tier2_batches = futures_util::future::join_all(tier2_futures).await;
+
+            for results in tier2_batches {
+                for sr in results {
+                    let pure_fcode = sr.fcode.split('?').next().unwrap_or("").to_string();
+                    if seen.insert(pure_fcode) {
+                        results_pool.push(sr);
                     }
                 }
             }
