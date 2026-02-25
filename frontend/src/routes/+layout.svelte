@@ -374,14 +374,6 @@
       <!-- Global Header (Glass) -->
       <header class="glass-header">
         <div class="header-left">
-          <!-- Mobile hamburger menu -->
-          <button
-            class="mobile-menu-btn"
-            onclick={openMobileDrawer}
-            aria-label="Open menu"
-          >
-            <span class="material-icons">menu</span>
-          </button>
           <div
             id="header-dynamic-content"
             style="flex: 1; margin-right: 2rem;"
