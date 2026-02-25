@@ -272,18 +272,20 @@
 
   function getBadge(
     item: TMDBMovie | TMDBTVShow,
-  ): { text: string; color: string } | null {
+  ): { text: string; variant: string } | null {
     const rating = item.vote_average || 0;
     const year =
       "release_date" in item
         ? parseInt(item.release_date?.substring(0, 4) || "0")
         : parseInt(item.first_air_date?.substring(0, 4) || "0");
 
-    if (rating >= 8.5) return { text: "HIGHLY RATED", color: "gold" };
+    // Use named badge variants so Badge.svelte renders high-contrast text
+    // (passing raw color strings was making text = background = invisible)
+    if (rating >= 8.5) return { text: "TOP RATED", variant: "warning" };
 
     const currentYear = new Date().getFullYear();
     if (year && year <= currentYear - 30)
-      return { text: "CLASSIC", color: "teal" };
+      return { text: "CLASSIC", variant: "primary" };
 
     return null;
   }
@@ -407,7 +409,12 @@
                   : slot.data.first_air_date}
                 overview={slot.data.overview}
                 {mediaType}
-                badge={getBadge(slot.data) || undefined}
+                badge={getBadge(slot.data)
+                  ? {
+                      text: getBadge(slot.data)!.text,
+                      variant: getBadge(slot.data)!.variant,
+                    }
+                  : undefined}
               />
             {/if}
           {/each}

@@ -145,41 +145,37 @@
 
   .scroller {
     display: flex;
-    gap: 1.5rem;
+    gap: 0.875rem;
     overflow-x: auto;
-    overflow-y: visible;
-    /* Bottom padding for title + hover lift */
-    padding: 0.5rem 1.25rem 2.5rem 1.25rem;
+    overflow-y: hidden;
+    padding: 0.25rem 1.25rem 1rem 1.25rem;
     scroll-behavior: smooth;
     scrollbar-width: none;
-    position: relative;
   }
 
   .scroller::-webkit-scrollbar {
     display: none;
   }
 
-  /* Direct targeting of MediaCard instances within scroller */
+  /* Each card slot: fixed width, no overflow needed (title is in scrim) */
   :global(.recently-added .scroller .media-card) {
-    flex: 0 0 150px;
-    width: 150px;
-    overflow: visible !important; /* Ensure children can glow/lift */
+    flex: 0 0 130px;
+    width: 130px;
   }
 
   :global(.recently-added .scroller .poster-wrap) {
-    aspect-ratio: 2/3;
-    height: 225px;
-    width: 150px;
+    height: 195px;
+    width: 130px;
   }
 
   @media (max-width: 768px) {
     :global(.recently-added .scroller .media-card),
     :global(.recently-added .scroller .poster-wrap) {
-      flex: 0 0 120px;
-      width: 120px;
+      flex: 0 0 108px;
+      width: 108px;
     }
     :global(.recently-added .scroller .poster-wrap) {
-      height: 180px;
+      height: 162px;
     }
   }
 </style>
