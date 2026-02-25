@@ -36,6 +36,7 @@
   let showTooltip = $state(false);
   let pollInterval: ReturnType<typeof setInterval> | null = null;
   let hideTimeout: ReturnType<typeof setTimeout> | null = null;
+  let abortController: AbortController | null = null;
 
   // Derived values
   let overallStatus = $derived(healthData?.overall_status || "unhealthy");
@@ -73,26 +74,44 @@
   }
 
   async function fetchHealthStatus() {
+    // Cancel any previous in-flight request (e.g. during rapid navigation)
+    if (abortController) abortController.abort();
+    abortController = new AbortController();
+
+    // 8s timeout — if backend is slow, don't block until the next 30s poll
+    const timeoutId = setTimeout(() => abortController?.abort(), 8000);
+
     try {
-      console.log("[StatusChecker] Fetching health status...");
-      const response = await fetch("/api/health/status");
-      console.log("[StatusChecker] Response status:", response.status);
+      const response = await fetch("/api/health/status", {
+        signal: abortController.signal,
+      });
+      clearTimeout(timeoutId);
       if (response.ok) {
         healthData = await response.json();
-        console.log("[StatusChecker] Health data:", healthData);
         isLoading = false;
       } else {
-        console.error("[StatusChecker] Health check failed:", response.status);
+        console.warn("[StatusChecker] Health check returned:", response.status);
         healthData = null;
       }
-    } catch (error) {
-      console.error("[StatusChecker] Health check error:", error);
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      // AbortError = request was intentionally cancelled (navigation / timeout) — not a real error
+      if (error?.name === "AbortError") {
+        console.debug(
+          "[StatusChecker] Health check aborted (navigation or timeout)",
+        );
+        return;
+      }
+      // Any other fetch failure (offline, DNS, CORS) — log as warn, not error
+      console.warn(
+        "[StatusChecker] Health check unavailable:",
+        error?.message ?? error,
+      );
       healthData = null;
     }
   }
 
   onMount(() => {
-    console.log("[StatusChecker] Component mounted");
     // Initial fetch
     fetchHealthStatus();
 
@@ -101,12 +120,10 @@
   });
 
   onDestroy(() => {
-    if (pollInterval) {
-      clearInterval(pollInterval);
-    }
-    if (hideTimeout) {
-      clearTimeout(hideTimeout);
-    }
+    if (pollInterval) clearInterval(pollInterval);
+    if (hideTimeout) clearTimeout(hideTimeout);
+    // Cancel any pending fetch so it doesn't fire after component unmounts
+    if (abortController) abortController.abort();
   });
 
   // Portal action to move element to document.body
