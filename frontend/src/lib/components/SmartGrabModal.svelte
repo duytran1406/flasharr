@@ -81,6 +81,7 @@
   let totalAvailableEpisodes = $state(0);
   let allExpectedEpisodes = $state<number[]>([]); // All episode numbers expected
   let tmdbEpisodeCount = $state(0); // TMDB official episode count
+  let airedEpisodes = $state(0); // Aired episode count from backend (true denominator)
   let downloadedCount = $state(0); // Episodes already downloaded
 
   let expandedSection = $state<string | null>("quick");
@@ -204,6 +205,14 @@
       }
     }
     tmdbEpisodeCount = officialEpisodeCount;
+
+    // Use aired_episode_count from backend as the true denominator for coverage.
+    // This counts episodes that have actually aired (per TMDB air_date <= today),
+    // including episodes like E39-41 that aired but are not available on Fshare.
+    const airedEpisodeCount = seasons
+      .filter((s: any) => s.season !== 0)
+      .reduce((sum: number, s: any) => sum + (s.aired_episode_count || 0), 0);
+    airedEpisodes = airedEpisodeCount;
 
     // First pass: collect all episode numbers and build sets
     const existing = getExistingDownloads();
@@ -334,7 +343,10 @@
 
     // Store all expected episodes
     allExpectedEpisodes = [...new Set(allEpisodeNumbers)].sort((a, b) => a - b);
-    const totalEps = allExpectedEpisodes.length;
+    // Use aired count from backend as denominator so episodes unavailable on Fshare
+    // (E39, E40, E41, etc.) are counted in coverage — showing e.g. 68/71 not 68/68.
+    const totalEps =
+      airedEpisodeCount > 0 ? airedEpisodeCount : allExpectedEpisodes.length;
 
     // Calculate stats and missing episodes for each set
     const finalizeSets = (
@@ -614,8 +626,10 @@
                 </div>
                 <div class="set-stats">
                   <span
-                    >{quickGrabInfo.count}/{totalAvailableEpisodes} episodes</span
+                    >{quickGrabInfo.count}/{totalAvailableEpisodes} available{#if airedEpisodes > totalAvailableEpisodes}&nbsp;({airedEpisodes}
+                      aired){/if}</span
                   >
+
                   <span class="dot">•</span>
                   <span>~{formatSize(quickGrabInfo.avgSize)} avg</span>
                   <span class="dot">•</span>

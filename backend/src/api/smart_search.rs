@@ -871,27 +871,29 @@ pub async fn handle_tv_search(
             
             let meta = episode_metadata.get(&(s_num, e_num));
 
-            // Filter out unreleased episodes:
-            // 1. If TMDB metadata exists, check air_date
-            // 2. If no metadata exists, check if episode number exceeds aired count
+            // Filter out unreleased episodes.
+            //
+            // Rule: ONLY filter when TMDB explicitly says the air_date is in the future.
+            //
+            // We do NOT filter episodes that have no TMDB metadata at all — they may be:
+            //  a) Shows with continuous flat numbering (S01E69-71) where TMDB splits into
+            //     Season 2, so Season 1 TMDB data only has 68 entries but files go higher.
+            //  b) TMDB data lag — episode has aired but TMDB hasn't added it yet.
+            //
+            // In both cases a real file exists and the user should see it.
             if let Some(m) = meta {
                 if !m.2.is_empty() {
                     if let Ok(date) = chrono::NaiveDate::parse_from_str(&m.2, "%Y-%m-%d") {
                         if date > today {
-                            info!("Filtering unreleased episode S{}E{} (air_date: {})", s_num, e_num, m.2);
+                            info!("Filtering unreleased episode S{}E{} (air_date: {} is in future)", s_num, e_num, m.2);
                             continue;
                         }
                     }
-                } else if aired_count > 0 && e_num > aired_count {
-                    // air_date is empty but episode is beyond aired count
-                    info!("Filtering unreleased episode S{}E{} (no air_date, beyond aired count {})", s_num, e_num, aired_count);
-                    continue;
                 }
-            } else if aired_count > 0 && e_num > aired_count {
-                // No TMDB metadata at all, episode is beyond aired count
-                info!("Filtering unreleased episode S{}E{} (no TMDB metadata, beyond aired count {})", s_num, e_num, aired_count);
-                continue;
+                // air_date empty but metadata exists → assume aired, show it
             }
+            // No TMDB metadata at all → unknown, but file exists → show it
+
             
             episodes_grouped.push(EpisodeGroup {
                 episode_number: e_num,
