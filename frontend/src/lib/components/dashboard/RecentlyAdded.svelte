@@ -148,7 +148,7 @@
     gap: 0.875rem;
     overflow-x: auto;
     overflow-y: hidden;
-    padding: 0.25rem 1.25rem 1rem 1.25rem;
+    padding: 0.25rem 1.25rem 0.75rem 1.25rem;
     scroll-behavior: smooth;
     scrollbar-width: none;
   }
@@ -159,23 +159,23 @@
 
   /* Each card slot: fixed width, no overflow needed (title is in scrim) */
   :global(.recently-added .scroller .media-card) {
-    flex: 0 0 130px;
-    width: 130px;
+    flex: 0 0 160px;
+    width: 160px;
   }
 
   :global(.recently-added .scroller .poster-wrap) {
-    height: 195px;
-    width: 130px;
+    height: 240px;
+    width: 160px;
   }
 
   @media (max-width: 768px) {
     :global(.recently-added .scroller .media-card),
     :global(.recently-added .scroller .poster-wrap) {
-      flex: 0 0 108px;
-      width: 108px;
+      flex: 0 0 130px;
+      width: 130px;
     }
     :global(.recently-added .scroller .poster-wrap) {
-      height: 162px;
+      height: 195px;
     }
   }
 </style>
