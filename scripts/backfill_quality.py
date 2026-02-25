@@ -308,84 +308,106 @@ async def main():
     # ── Step 3: Detect batches ───────────────────────────────────────────────
     print(f'\n🔍  Detecting batches...')
 
-    # Pass A: group by (tmdb_id, pattern_key) for rows that have TMDB data
-    groups_by_tmdb: dict[tuple, list[dict]] = defaultdict(list)
+    def series_stem(filename: str) -> str:
+        """
+        Strip episode markers AND quality tokens to get just the series title stem.
+        Used for grouping no-TMDB rows by show rather than release group.
+        """
+        name = re.sub(r'\.(mkv|mp4|avi|ts|m4v|mov|wmv|flv|webm|m2ts)$', '', filename, flags=re.IGNORECASE)
+        # Remove everything from SxxExx onward (episode + quality trail)
+        name = re.sub(r'[\._\-\s]S\d{1,2}E\d{1,3}.*', '', name, flags=re.IGNORECASE)
+        # Remove everything from ExEp onward
+        name = re.sub(r'[\._\-\s]E\d{1,3}[\._\-\s].*', '', name, flags=re.IGNORECASE)
+        # Remove trailing standalone episode numbers like ".01" at end
+        name = re.sub(r'[\._\-\s]\d{1,3}$', '', name)
+        # Normalise separators
+        name = re.sub(r'[._\-]', ' ', name).strip().lower()
+        return name
+
+    # Pass A: group by tmdb_id alone (quality differences within same show = same batch)
+    groups_by_tmdb: dict[int, list[dict]] = defaultdict(list)
+    # Also build a stem → tmdb_id map so we can absorb no-tmdb rows
+    tmdb_stem_index: dict[str, int] = {}
     for row in rows:
         tmdb_id = row.get('tmdb_id')
         if not tmdb_id:
             continue
-        key = (tmdb_id, filename_pattern_key(row['orig_filename'] or row['filename']))
-        groups_by_tmdb[key].append(row)
+        groups_by_tmdb[tmdb_id].append(row)
+        # Index each TMDB group by its title stem
+        title = row.get('tmdb_title') or ''
+        if title:
+            tmdb_stem_index[series_stem(title)] = tmdb_id
 
-    # Pass B: group by filename_pattern_key alone for rows WITHOUT tmdb_id
-    # (e.g. downloads that have no TMDB annotation yet)
+    # Pass B: group rows WITHOUT tmdb_id —
+    # first try to absorb them into an existing TMDB group by stem match,
+    # otherwise group them by their own filename stem
     no_tmdb_rows = [r for r in rows if not r.get('tmdb_id')]
-    groups_by_pattern: dict[str, list[dict]] = defaultdict(list)
+    groups_by_stem: dict[str, list[dict]] = defaultdict(list)
     for row in no_tmdb_rows:
-        # Use the DB filename (clean Sonarr name) if orig_filename ≡ redirect
         fn = row['orig_filename'] or row['filename']
-        groups_by_pattern[filename_pattern_key(fn)].append(row)
+        stem = series_stem(fn)
+        # Try to match against a known TMDB group
+        matched_tmdb = tmdb_stem_index.get(stem)
+        if matched_tmdb:
+            groups_by_tmdb[matched_tmdb].append(row)
+            print(f'  🔗  Absorbed [{row["id"][:8]}] "{row["filename"]}" → tmdb={matched_tmdb} (stem="{stem}")')
+        elif stem:
+            groups_by_stem[stem].append(row)
 
-    # Merge both group dicts into a unified list for processing
-    all_groups: list[tuple[str, list[dict], int | None]] = []
-    for (tmdb_id, pat), items in groups_by_tmdb.items():
-        all_groups.append((pat, items, tmdb_id))
-    for pat, items in groups_by_pattern.items():
-        all_groups.append((pat, items, None))
+
+    # Unify
+    all_groups: list[tuple[list[dict], int | None, str]] = []
+    for tmdb_id, items in groups_by_tmdb.items():
+        label = f'tmdb={tmdb_id}'
+        all_groups.append((items, tmdb_id, label))
+    for stem, items in groups_by_stem.items():
+        all_groups.append((items, None, f'stem={stem[:30]}'))
 
     batch_updates: list[dict] = []
 
-    for pat, items, tmdb_id in all_groups:
+    for items, tmdb_id, label in all_groups:
         if len(items) < 2:
             continue
 
-        # Skip if ALL items already share the SAME batch_id (fully batched)
+        # Fully batched = all items already share one batch_id
         all_bids = [r.get('batch_id') for r in items]
         non_null_bids = {b for b in all_bids if b}
         fully_batched = (len(non_null_bids) == 1 and all(b is not None for b in all_bids))
         if fully_batched:
             bid_short = next(iter(non_null_bids))[:8]
-            label = f'tmdb={tmdb_id}' if tmdb_id else f'pattern={pat[:30]}'
-            print(f'  ⏭  Already batched: {label} ({len(items)} items, bid={bid_short})')
+            print(f'  ⏭  Already batched [{label}]: {len(items)} items, bid={bid_short}')
             continue
 
-        # Use an existing batch_id if some items already have one, else create new
+        # Reuse existing batch_id if some items already have one, else new UUID
         if non_null_bids:
-            bid = next(iter(non_null_bids))   # reuse existing bid for partial groups
+            bid = next(iter(non_null_bids))
             action = 'extend'
         else:
             bid = str(uuid.uuid4())
             action = 'new'
 
-        # Build batch name from the richest sample filename available
-        # Prefer orig_filename with quality tags if available
-        sample_fn = next(
-            (r['orig_filename'] for r in items
-             if r.get('orig_filename') and r['orig_filename'] != r['filename']),
-            items[0]['orig_filename'] or items[0]['filename']
-        )
-        qname, _ = parse_quality(sample_fn)
+        # Batch name = show title only (no quality suffix — quality varies per episode)
         if tmdb_id:
-            tmdb_title = items[0].get('tmdb_title') or f'TMDB-{tmdb_id}'
+            tmdb_title = next(
+                (r.get('tmdb_title') for r in items if r.get('tmdb_title')),
+                f'TMDB-{tmdb_id}'
+            )
+            bname = tmdb_title
         else:
-            # Derive series title from filename: strip episode + quality tokens
-            base = re.sub(r'S\d{1,2}E\d{1,3}.*', '', items[0]['filename'], flags=re.IGNORECASE)
-            base = re.sub(r'[._-]', ' ', base).strip()
-            tmdb_title = base or 'Unknown'
-        bname = f'{tmdb_title} [{qname}]'
+            # Derive from filename: clean up separators for display
+            stem_items = [r['orig_filename'] or r['filename'] for r in items]
+            base = re.sub(r'S\d{1,2}E\d{1,3}.*', '', stem_items[0], flags=re.IGNORECASE)
+            base = re.sub(r'[._\-]', ' ', base).strip()
+            bname = base or 'Unknown Series'
 
-        # Only update items that are missing or have a different batch_id
         items_to_update = [r for r in items if r.get('batch_id') != bid]
-        label = f'tmdb={tmdb_id}' if tmdb_id else f'filename-pattern'
-        print(f'  📦  {"New" if action=="new" else "Extend"} batch [{label}]: "{bname}" '
-              f'({len(items_to_update)}/{len(items)} items need update) → {bid[:8]}')
+        print(f'  📦  {"New" if action=="new" else "Extend"} batch [{label}]: '
+              f'"{bname}" ({len(items_to_update)}/{len(items)} need update) → {bid[:8]}')
 
         for item in sorted(items_to_update, key=lambda r: r.get('tmdb_episode') or 0):
-            batch_updates.append({
-                'id': item['id'],
-                'batch_id': bid,
-                'batch_name': bname,
-            })
+            batch_updates.append({'id': item['id'], 'batch_id': bid, 'batch_name': bname})
+
+
 
     print(f'\n📦  Batch assignments: {len(batch_updates)}')
 
