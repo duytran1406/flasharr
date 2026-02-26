@@ -2949,7 +2949,7 @@
   }
 
   .data-table td {
-    padding: 0.5rem 1rem;
+    padding: 0.55rem 1rem;
     font-size: 0.75rem;
     color: var(--text-secondary);
     border-bottom: 1px solid rgba(255, 255, 255, 0.02);
