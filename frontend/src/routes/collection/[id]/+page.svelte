@@ -66,12 +66,42 @@
   });
 
   function handleSmartSearch(movie: TMDBMovie) {
+    // Auto-add to Radarr if not already in library (fire-and-forget)
+    if (!libraryTmdbIds.has(movie.id)) {
+      addToRadarrSilent(movie);
+    }
     ui.openSmartSearch({
       tmdbId: String(movie.id),
       type: "movie",
       title: movie.title,
       year: getYear(movie.release_date) || undefined,
     });
+  }
+
+  /** Silently add a movie to Radarr without blocking the UI */
+  async function addToRadarrSilent(movie: TMDBMovie) {
+    try {
+      const resp = await fetch("/api/arr/movies/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tmdb_id: movie.id }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        allMovies = [
+          ...allMovies,
+          {
+            id: data.arr_id,
+            title: movie.title,
+            tmdbId: movie.id,
+          } as any,
+        ];
+        toasts.success(`"${movie.title}" added to Radarr library`);
+      }
+      // 409 = already exists, silently ignore
+    } catch {
+      // Silent — don't block the search flow
+    }
   }
 
   async function handleAddToLibrary(movie: TMDBMovie) {
