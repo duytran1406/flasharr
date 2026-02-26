@@ -110,6 +110,13 @@ pub struct SonarrCalendarSeries {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadarrCollection {
+    pub title: String,
+    #[serde(rename = "tmdbId")]
+    pub tmdb_id: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RadarrMovie {
     pub id: i32,
     pub title: String,
@@ -128,6 +135,9 @@ pub struct RadarrMovie {
     #[serde(rename = "qualityProfileId")]
     pub quality_profile_id: Option<i32>,
     pub runtime: Option<i32>,
+    /// Collection info — present when Radarr has grouped this movie into a collection
+    #[serde(default)]
+    pub collection: Option<RadarrCollection>,
 }
 
 // ============================================================================

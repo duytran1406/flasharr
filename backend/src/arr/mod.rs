@@ -12,7 +12,7 @@ pub use client::{
     // Sonarr types
     SonarrSeries, SonarrStatistics, SonarrEpisode, SonarrCalendarEntry, SonarrCalendarSeries,
     // Radarr types
-    RadarrMovie,
+    RadarrMovie, RadarrCollection,
     // Shared types
     MediaImage, DiskSpace, ArrHistoryRecord, SystemStatus, HealthCheck,
 };
