@@ -555,25 +555,25 @@
     color: #000;
   }
 
-  /* Grid Layout — 10 per row */
+  /* Grid Layout — 5 per row */
   .search-results-grid {
     display: grid;
-    grid-template-columns: repeat(10, 1fr);
-    gap: 0.75rem;
-  }
-  @media (max-width: 1600px) {
-    .search-results-grid {
-      grid-template-columns: repeat(8, 1fr);
-    }
+    grid-template-columns: repeat(5, 1fr);
+    gap: 1.25rem;
   }
   @media (max-width: 1200px) {
     .search-results-grid {
-      grid-template-columns: repeat(6, 1fr);
+      grid-template-columns: repeat(4, 1fr);
     }
   }
-  @media (max-width: 800px) {
+  @media (max-width: 900px) {
     .search-results-grid {
       grid-template-columns: repeat(3, 1fr);
+    }
+  }
+  @media (max-width: 600px) {
+    .search-results-grid {
+      grid-template-columns: repeat(2, 1fr);
     }
   }
 
