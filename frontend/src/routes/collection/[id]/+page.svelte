@@ -12,6 +12,7 @@
   import { toasts } from "$lib/stores/toasts";
   import { ui } from "$lib/stores/ui.svelte";
   import { animeFade, animeFly } from "$lib/animations";
+  import Button from "$lib/components/ui/Button.svelte";
   import {
     fetchAllMovies,
     findMovieInList,
@@ -28,7 +29,6 @@
   let allMovies = $state<RadarrMovie[]>([]);
   let addingIds = $state<Set<number>>(new Set());
 
-  // Lookup helper: check if a TMDB movie is in Radarr library
   function getLibraryMovie(tmdbId: number): RadarrMovie | null {
     return findMovieInList(allMovies, tmdbId);
   }
@@ -57,7 +57,6 @@
     }
   });
 
-  // Analytics derived from collection parts
   let stats = $derived.by(() => {
     if (!collection?.parts) return null;
     const parts = collection.parts;
@@ -92,7 +91,6 @@
       if (resp.ok) {
         const data = await resp.json();
         toasts.success(`"${movie.title}" added to Radarr library`);
-        // Optimistically add to allMovies
         allMovies = [
           ...allMovies,
           {
@@ -189,7 +187,7 @@
           {/if}
         </section>
 
-        <!-- Parts Grid with Library Status -->
+        <!-- Parts Grid — Search Card Layout -->
         <section class="parts-section">
           <div class="section-header">
             <h3 class="section-label">Asset Sequence</h3>
@@ -198,22 +196,26 @@
             >
           </div>
 
-          <div class="assets-grid">
+          <div class="collection-cards-grid">
             {#if loading}
-              {#each Array(4) as _}
-                <div class="asset-skeleton-card"></div>
+              {#each Array(6) as _}
+                <div class="card-skeleton"></div>
               {/each}
             {:else if collection?.parts}
               {#each [...collection.parts].sort((a, b) => new Date(a.release_date || 0).getTime() - new Date(b.release_date || 0).getTime()) as movie}
                 {@const libMovie = getLibraryMovie(movie.id)}
                 {@const inLibrary = libMovie !== null}
                 <div
-                  class="asset-card"
+                  class="col-card"
                   class:owned={inLibrary}
                   in:animeFly={{ y: 20, delay: 100 }}
+                  role="button"
+                  tabindex="0"
+                  onclick={() => goto(`/movie/${movie.id}`)}
+                  onkeydown={(e) =>
+                    e.key === "Enter" && goto(`/movie/${movie.id}`)}
                 >
-                  <!-- Poster -->
-                  <a href="/movie/{movie.id}" class="asset-poster">
+                  <div class="col-card-inner">
                     <img
                       src={movie.poster_path
                         ? getPosterUrl(movie.poster_path, "w342")
@@ -221,61 +223,85 @@
                       alt={movie.title}
                       loading="lazy"
                     />
-                    {#if inLibrary}
-                      <div class="owned-badge">
-                        <span class="material-icons">check_circle</span>
-                        OWNED
-                      </div>
-                    {:else}
-                      <div class="missing-badge">
-                        <span class="material-icons">cloud_off</span>
-                        MISSING
-                      </div>
-                    {/if}
-                  </a>
+                    <div class="card-shine"></div>
 
-                  <!-- Info -->
-                  <div class="asset-info">
-                    <a href="/movie/{movie.id}" class="asset-title"
-                      >{movie.title}</a
-                    >
-                    <div class="asset-meta">
-                      {#if movie.release_date}
-                        <span>{getYear(movie.release_date)}</span>
-                      {/if}
-                      {#if movie.vote_average > 0}
-                        <span class="asset-score">
-                          <span class="material-icons">star</span>
-                          {movie.vote_average.toFixed(1)}
+                    <!-- Library Status Badge (Top Left) -->
+                    <div class="status-tags">
+                      {#if inLibrary}
+                        <span class="status-badge owned-badge">
+                          <span class="material-icons">check_circle</span>
+                          OWNED
+                        </span>
+                      {:else}
+                        <span class="status-badge missing-badge">
+                          <span class="material-icons">cloud_off</span>
+                          MISSING
                         </span>
                       {/if}
                     </div>
-                  </div>
 
-                  <!-- Actions -->
-                  <div class="asset-actions">
-                    <button
-                      class="action-btn search-btn"
-                      title="Smart Search"
-                      onclick={() => handleSmartSearch(movie)}
-                    >
-                      <span class="material-icons">manage_search</span>
-                    </button>
-
-                    {#if !inLibrary}
-                      <button
-                        class="action-btn add-btn"
-                        title="Add to Radarr"
-                        disabled={addingIds.has(movie.id)}
-                        onclick={() => handleAddToLibrary(movie)}
-                      >
-                        {#if addingIds.has(movie.id)}
-                          <span class="material-icons spinning">sync</span>
-                        {:else}
-                          <span class="material-icons">library_add</span>
-                        {/if}
-                      </button>
+                    <!-- Year Badge (Top Right) -->
+                    {#if movie.release_date}
+                      <div class="year-badge">
+                        {getYear(movie.release_date)}
+                      </div>
                     {/if}
+
+                    <!-- Card Overlay -->
+                    <div class="card-overlay">
+                      <div class="overlay-top">
+                        <h3 class="card-title">{movie.title}</h3>
+                        <div class="card-meta">
+                          {#if movie.vote_average > 0}
+                            <span class="meta-rating">
+                              <span
+                                class="material-icons"
+                                style="font-size:0.75rem;vertical-align:middle;color:#f59e0b"
+                                >star</span
+                              >
+                              {movie.vote_average.toFixed(1)}
+                            </span>
+                          {/if}
+                          {#if inLibrary}
+                            <span class="meta-lib-status meta-owned"
+                              >IN LIBRARY</span
+                            >
+                          {:else}
+                            <span class="meta-lib-status meta-missing"
+                              >NOT OWNED</span
+                            >
+                          {/if}
+                        </div>
+                      </div>
+
+                      <div class="overlay-bottom">
+                        <div class="card-actions">
+                          <Button
+                            size="sm"
+                            icon="manage_search"
+                            onclick={(e) => {
+                              e.stopPropagation();
+                              handleSmartSearch(movie);
+                            }}>Search</Button
+                          >
+                          {#if !inLibrary}
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              icon={addingIds.has(movie.id)
+                                ? "sync"
+                                : "library_add"}
+                              disabled={addingIds.has(movie.id)}
+                              onclick={(e) => {
+                                e.stopPropagation();
+                                handleAddToLibrary(movie);
+                              }}
+                              title="Add to Radarr"
+                            ></Button>
+                          {/if}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               {/each}
@@ -348,7 +374,7 @@
     margin: 0 auto;
   }
 
-  /* Hero Section */
+  /* Hero */
   .collection-hero {
     height: 500px;
     position: relative;
@@ -370,11 +396,9 @@
     transform: scale(1.05);
     animation: slowZoom 30s linear infinite alternate;
   }
-
   .backdrop-real.loaded {
     opacity: 0.7;
   }
-
   @keyframes slowZoom {
     from {
       transform: scale(1.05);
@@ -430,13 +454,11 @@
     gap: 3rem;
     margin-top: 2rem;
   }
-
   .hero-stat {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
   }
-
   .stat-label {
     font-family: var(--font-mono, monospace);
     font-size: 0.6rem;
@@ -444,20 +466,18 @@
     color: #64748b;
     letter-spacing: 0.2em;
   }
-
   .stat-value {
     font-size: 1.5rem;
     font-weight: 900;
     color: var(--color-primary, #00f3ff);
     font-family: var(--font-heading, "Outfit", sans-serif);
   }
-
   .stat-value.owned {
     color: #00ff80;
     text-shadow: 0 0 12px rgba(0, 255, 128, 0.3);
   }
 
-  /* Grid Layout */
+  /* Layout */
   .collection-grid-container {
     display: grid;
     grid-template-columns: 1fr 340px;
@@ -467,14 +487,13 @@
     position: relative;
     z-index: 3;
   }
-
   .main-column {
     display: flex;
     flex-direction: column;
     gap: 3rem;
   }
 
-  /* Glass Panels */
+  /* Glass */
   .glass-panel {
     background: rgba(8, 10, 15, 0.7);
     border: 1px solid rgba(255, 255, 255, 0.08);
@@ -490,7 +509,6 @@
       0% calc(100% - 20px)
     );
   }
-
   .section-badge {
     position: absolute;
     top: 0;
@@ -510,7 +528,6 @@
       0% calc(100% - 8px)
     );
   }
-
   .section-label {
     font-family: var(--font-mono, monospace);
     font-size: 0.75rem;
@@ -523,14 +540,12 @@
     align-items: center;
     gap: 1rem;
   }
-
   .section-label::after {
     content: "";
     flex: 1;
     height: 1px;
     background: linear-gradient(to right, rgba(0, 243, 255, 0.2), transparent);
   }
-
   .overview-text {
     font-size: 1rem;
     line-height: 1.8;
@@ -538,18 +553,16 @@
     max-width: 900px;
   }
 
-  /* Asset Grid */
+  /* Parts Section */
   .parts-section {
     margin-bottom: 2rem;
   }
-
   .section-header {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
     margin-bottom: 2rem;
   }
-
   .asset-count {
     font-family: var(--font-mono, monospace);
     font-size: 0.65rem;
@@ -558,73 +571,110 @@
     letter-spacing: 0.1em;
   }
 
-  .assets-grid {
+  /* ================================================================
+     Collection Cards Grid — mirrors SearchResultCard layout
+     ================================================================ */
+  .collection-cards-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 1.5rem;
   }
-
-  /* Asset Card — each movie in collection */
-  .asset-card {
-    display: flex;
-    flex-direction: column;
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 6px;
-    overflow: hidden;
-    transition:
-      transform 0.2s,
-      border-color 0.3s,
-      box-shadow 0.3s;
+  @media (min-width: 1400px) {
+    .collection-cards-grid {
+      grid-template-columns: repeat(4, 1fr);
+    }
   }
 
-  .asset-card:hover {
-    transform: translateY(-4px);
-    box-shadow:
-      0 12px 40px rgba(0, 0, 0, 0.4),
-      0 0 0 1px rgba(0, 243, 255, 0.15);
-  }
-
-  .asset-card.owned {
-    border-color: rgba(0, 255, 128, 0.2);
-  }
-
-  .asset-card.owned:hover {
-    box-shadow:
-      0 12px 40px rgba(0, 0, 0, 0.4),
-      0 0 0 1px rgba(0, 255, 128, 0.3);
-  }
-
-  /* Poster */
-  .asset-poster {
+  /* Card */
+  .col-card {
     position: relative;
     aspect-ratio: 2/3;
-    overflow: hidden;
-    display: block;
+    width: 100%;
+    cursor: pointer;
+    transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    z-index: 1;
+  }
+  .col-card:hover {
+    transform: scale(1.05) translateY(-5px);
+    z-index: 10;
   }
 
-  .asset-poster img {
+  .col-card-inner {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 16px;
+    overflow: hidden;
+    background: #0a0f1e;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    transition: all 0.4s ease;
+  }
+  .col-card:hover .col-card-inner {
+    border-color: rgba(0, 243, 255, 0.4);
+    box-shadow: 0 20px 50px -10px rgba(0, 243, 255, 0.25);
+  }
+  .col-card.owned .col-card-inner {
+    border-color: rgba(0, 255, 128, 0.15);
+  }
+  .col-card.owned:hover .col-card-inner {
+    border-color: rgba(0, 255, 128, 0.4);
+    box-shadow: 0 20px 50px -10px rgba(0, 255, 128, 0.2);
+  }
+
+  .col-card-inner img {
     width: 100%;
     height: 100%;
     object-fit: cover;
-    display: block;
+    transition: transform 0.6s ease;
+  }
+  .col-card:hover img {
+    transform: scale(1.1);
   }
 
-  .owned-badge,
-  .missing-badge {
+  /* Shine */
+  .card-shine {
     position: absolute;
-    top: 8px;
-    right: 8px;
+    inset: 0;
+    background: linear-gradient(
+      135deg,
+      transparent 0%,
+      rgba(255, 255, 255, 0.05) 50%,
+      transparent 100%
+    );
+    transform: translateX(-100%);
+    transition: transform 0.6s ease;
+    z-index: 1;
+  }
+  .col-card:hover .card-shine {
+    transform: translateX(100%);
+  }
+
+  /* Status Badges (Top Left) */
+  .status-tags {
+    position: absolute;
+    top: 0.75rem;
+    left: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    z-index: 5;
+  }
+  .status-badge {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 3px;
     font-family: var(--font-mono, monospace);
     font-size: 0.5rem;
     font-weight: 900;
     letter-spacing: 0.08em;
     padding: 3px 8px;
-    border-radius: 3px;
+    border-radius: 4px;
     backdrop-filter: blur(8px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  }
+  .status-badge .material-icons {
+    font-size: 0.7rem;
   }
 
   .owned-badge {
@@ -632,117 +682,123 @@
     border: 1px solid rgba(0, 255, 128, 0.4);
     color: #00ff80;
   }
-
-  .owned-badge .material-icons {
-    font-size: 0.75rem;
-  }
-
   .missing-badge {
     background: rgba(255, 100, 100, 0.15);
     border: 1px solid rgba(255, 100, 100, 0.3);
     color: #ff8080;
   }
 
-  .missing-badge .material-icons {
-    font-size: 0.75rem;
-  }
-
-  /* Info */
-  .asset-info {
-    padding: 0.75rem;
-    flex: 1;
-  }
-
-  .asset-title {
-    font-size: 0.8rem;
-    font-weight: 700;
-    color: #fff;
-    text-decoration: none;
-    display: block;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-bottom: 4px;
-  }
-
-  .asset-title:hover {
+  /* Year Badge (Top Right) */
+  .year-badge {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    background: rgba(0, 0, 0, 0.6);
     color: var(--color-primary, #00f3ff);
-  }
-
-  .asset-meta {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.65rem;
-    color: #64748b;
     font-family: var(--font-mono, monospace);
-  }
-
-  .asset-score {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    color: #fbbf24;
-  }
-
-  .asset-score .material-icons {
     font-size: 0.7rem;
+    font-weight: 800;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    z-index: 5;
   }
 
-  /* Action buttons */
-  .asset-actions {
+  /* Card Overlay — same gradient style as SearchResultCard */
+  .card-overlay {
+    position: absolute;
+    inset: 0;
     display: flex;
-    gap: 4px;
-    padding: 0 0.75rem 0.75rem;
+    flex-direction: column;
+    justify-content: flex-end;
+    padding: 1.25rem;
+    background: linear-gradient(
+      to top,
+      rgba(10, 15, 30, 0.98) 0%,
+      rgba(10, 15, 30, 0.7) 40%,
+      transparent 100%
+    );
+    z-index: 2;
+    transition: all 0.3s ease;
+  }
+  .col-card:hover .card-overlay {
+    background: linear-gradient(
+      to top,
+      rgba(10, 15, 30, 1) 0%,
+      rgba(10, 15, 30, 0.8) 60%
+    );
   }
 
-  .action-btn {
-    flex: 1;
+  .overlay-top {
+    transform: translateY(0);
+    transition: transform 0.4s ease;
+  }
+  .col-card:hover .overlay-top {
+    transform: translateY(-8px);
+  }
+
+  .card-title {
+    margin: 0 0 0.4rem;
+    font-size: 1rem;
+    font-weight: 800;
+    color: #fff;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .card-meta {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 0.4rem;
-    border-radius: 4px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.03);
-    color: #94a3b8;
+    gap: 0.75rem;
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.7);
+    margin-bottom: 0.5rem;
+  }
+  .meta-rating {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .meta-lib-status {
     font-family: var(--font-mono, monospace);
     font-size: 0.6rem;
-    font-weight: 700;
-    cursor: pointer;
-    transition: all 0.2s;
+    font-weight: 900;
+    letter-spacing: 0.08em;
   }
-
-  .action-btn .material-icons {
-    font-size: 1rem;
-  }
-
-  .search-btn:hover {
-    border-color: rgba(0, 243, 255, 0.4);
-    background: rgba(0, 243, 255, 0.08);
-    color: var(--color-primary, #00f3ff);
-  }
-
-  .add-btn:hover {
-    border-color: rgba(0, 255, 128, 0.4);
-    background: rgba(0, 255, 128, 0.08);
+  .meta-owned {
     color: #00ff80;
   }
-
-  .add-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+  .meta-missing {
+    color: #ff8080;
   }
 
-  .spinning {
-    animation: spin 0.8s linear infinite;
+  /* Bottom actions — hidden until hover, slides up */
+  .overlay-bottom {
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: all 0.4s ease;
+  }
+  .col-card:hover .overlay-bottom {
+    max-height: 120px;
+    opacity: 1;
+    margin-top: 0.5rem;
   }
 
-  @keyframes spin {
-    to {
-      transform: rotate(360deg);
-    }
+  .card-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  /* Search button fills available space */
+  .card-actions :global(.flasharr-btn:first-child) {
+    flex: 1;
   }
 
   /* Sidebar */
@@ -751,13 +807,11 @@
     flex-direction: column;
     gap: 1.5rem;
   }
-
   .telemetry-rows {
     display: flex;
     flex-direction: column;
     gap: 1rem;
   }
-
   .telemetry-row {
     display: flex;
     justify-content: space-between;
@@ -765,31 +819,26 @@
     padding-bottom: 0.75rem;
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   }
-
   .tel-label {
     font-family: var(--font-mono, monospace);
     font-size: 0.6rem;
     font-weight: 800;
     color: #64748b;
   }
-
   .tel-value {
     font-family: var(--font-mono, monospace);
     font-size: 0.8rem;
     font-weight: 700;
     color: #fff;
   }
-
   .terminal-green {
     color: #00ff80;
     text-shadow: 0 0 10px rgba(0, 255, 128, 0.3);
   }
-
   .terminal-amber {
     color: #fbbf24;
     text-shadow: 0 0 10px rgba(251, 191, 36, 0.3);
   }
-
   .terminal-red {
     color: #ff6464;
     text-shadow: 0 0 10px rgba(255, 100, 100, 0.3);
@@ -819,14 +868,12 @@
       0% 8px
     );
   }
-
   .tactical-btn:hover {
     background: rgba(255, 255, 255, 0.05);
     border-color: var(--color-primary, #00f3ff);
     color: var(--color-primary, #00f3ff);
     transform: translateY(-2px);
   }
-
   .tactical-btn .material-icons {
     font-size: 1.2rem;
   }
@@ -839,7 +886,6 @@
     border-radius: 8px;
     animation: shimmer 2s infinite linear;
   }
-
   .skeleton-text {
     width: 100%;
     height: 1rem;
@@ -848,14 +894,12 @@
     border-radius: 4px;
     animation: shimmer 2s infinite linear;
   }
-
-  .asset-skeleton-card {
+  .card-skeleton {
     aspect-ratio: 2/3;
+    border-radius: 16px;
     background: rgba(255, 255, 255, 0.03);
-    border-radius: 6px;
     animation: shimmer 2s infinite linear;
   }
-
   @keyframes shimmer {
     0% {
       opacity: 0.5;
@@ -877,11 +921,9 @@
       grid-template-columns: 1fr;
       padding: 0 2rem;
     }
-
     .collection-hero {
       padding: 3rem 2rem;
     }
-
     .collection-title {
       font-size: 3rem;
     }
@@ -891,13 +933,11 @@
     .hero-stats {
       gap: 1.5rem;
     }
-
     .stat-value {
       font-size: 1.2rem;
     }
-
-    .assets-grid {
-      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    .collection-cards-grid {
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
       gap: 1rem;
     }
   }
