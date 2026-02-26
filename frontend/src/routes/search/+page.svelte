@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { animeFade, animeFly, animeSlide, stagger } from "$lib/animations";
   import { toasts } from "$lib/stores/toasts";
   import { downloadStore } from "$lib/stores/downloads";
@@ -16,16 +16,18 @@
   let hasSearched = $state(false);
   let showTrending = $state(true);
 
-  // Results State (Client-side pagination for enhanced, Trending is single page)
+  // Results State
   let allResults = $state<any[]>([]);
-  let paginatedResults = $state<any[]>([]);
+  let visibleResults = $state<any[]>([]);
   let trendingResults = $state<any[]>([]);
 
-  // Pagination Config
-  let currentPage = $state(1);
-  let itemsPerPage = $state(10); // Normal: 10 per page
+  // Infinite scroll config
+  const BATCH_SIZE = 30;
+  let visibleCount = $state(BATCH_SIZE);
   let totalResults = $state(0);
-  let totalPages = $state(0);
+  let loadingMore = $state(false);
+  let scrollObserver: IntersectionObserver | null = null;
+  let sentinelEl: HTMLDivElement | undefined = $state();
 
   // View mode
   let viewMode = $state<"grid" | "list">("grid");
@@ -99,12 +101,12 @@
     }
   }
 
-  // Enhanced Search (Client-side Pagination)
+  // Enhanced Search (Infinite Scroll)
   async function handleSearch(query: string) {
     if (!query) return;
 
     // Reset state
-    currentPage = 1;
+    visibleCount = BATCH_SIZE;
     hasSearched = true;
     showTrending = false;
     isLoading = true;
@@ -119,40 +121,61 @@
       });
 
       allResults = mapResults(data.results || []);
-      updatePagination();
+      totalResults = allResults.length;
+      visibleResults = allResults.slice(0, visibleCount);
+      setupScrollObserver();
     } catch (err) {
       console.error("Search error:", err);
       toasts.error("Neural link failure: Search connection lost");
       allResults = [];
-      paginatedResults = [];
+      visibleResults = [];
     } finally {
       isLoading = false;
     }
   }
 
-  function updatePagination() {
-    totalResults = allResults.length;
-    totalPages = Math.ceil(totalResults / itemsPerPage);
-
-    const start = (currentPage - 1) * itemsPerPage;
-    const end = start + itemsPerPage;
-    paginatedResults = allResults.slice(start, end);
+  function loadMore() {
+    if (loadingMore || visibleCount >= allResults.length) return;
+    loadingMore = true;
+    // Small delay to show loading indicator
+    setTimeout(() => {
+      visibleCount = Math.min(visibleCount + BATCH_SIZE, allResults.length);
+      visibleResults = allResults.slice(0, visibleCount);
+      loadingMore = false;
+    }, 150);
   }
+
+  function setupScrollObserver() {
+    // Clean up previous observer
+    if (scrollObserver) scrollObserver.disconnect();
+
+    // Wait for DOM to render the sentinel
+    requestAnimationFrame(() => {
+      if (!sentinelEl) return;
+      scrollObserver = new IntersectionObserver(
+        (entries) => {
+          if (entries[0]?.isIntersecting) loadMore();
+        },
+        { rootMargin: "200px" },
+      );
+      scrollObserver.observe(sentinelEl);
+    });
+  }
+
+  // Re-observe when sentinel element changes
+  $effect(() => {
+    if (sentinelEl && hasSearched && allResults.length > 0) {
+      setupScrollObserver();
+    }
+  });
+
+  onDestroy(() => {
+    if (scrollObserver) scrollObserver.disconnect();
+  });
 
   function toggleViewMode(mode: "grid" | "list") {
     if (viewMode === mode) return;
     viewMode = mode;
-    currentPage = 1; // Reset to page 1 on view change to avoid out of bounds
-    updatePagination();
-  }
-
-  function setPage(p: number) {
-    if (p < 1 || p > totalPages) return;
-    currentPage = p;
-    updatePagination();
-    document
-      .querySelector(".search-viewport")
-      ?.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   // Mapper to normalize Backend V3 response for UI
@@ -320,7 +343,7 @@
 
     <!-- Results Grid/List -->
     <div class="results-container">
-      {#if paginatedResults.length === 0}
+      {#if visibleResults.length === 0}
         <div class="empty-state">
           <span class="material-icons">search_off</span>
           <h3>NO MATCHES FOUND</h3>
@@ -328,8 +351,8 @@
         </div>
       {:else if viewMode === "grid"}
         <div class="search-results-grid">
-          {#each paginatedResults as item (item.fcode)}
-            <div in:animeSlide={{ y: 20, duration: 300 }}>
+          {#each visibleResults as item (item.fcode)}
+            <div>
               <SearchResultCard
                 {...item}
                 onDownload={() => handleDownload(item)}
@@ -339,11 +362,8 @@
         </div>
       {:else}
         <div class="search-results-list">
-          {#each paginatedResults as item (item.fcode)}
-            <div
-              class="result-list-item glass-panel"
-              in:animeFly={{ x: -20, duration: 300 }}
-            >
+          {#each visibleResults as item (item.fcode)}
+            <div class="result-list-item glass-panel">
               <div class="item-visual">
                 {#if item.posterPath}
                   <img
@@ -365,12 +385,10 @@
                   <h3 class="title">{item.title}</h3>
                   <span class="year">{item.releaseDate?.substring(0, 4)}</span>
                 </div>
-                <!-- Filename tooltip -->
                 <div class="filename" title={item.originalFilename}>
                   {item.originalFilename}
                 </div>
 
-                <!-- Metadata Badges -->
                 <div class="item-meta">
                   {#if item.resolution}
                     <span
@@ -422,32 +440,24 @@
           {/each}
         </div>
       {/if}
-    </div>
 
-    <!-- Pagination -->
-    {#if totalPages > 1}
-      <div class="pagination-container">
-        <button
-          class="page-nav-btn"
-          disabled={currentPage === 1}
-          onclick={() => setPage(currentPage - 1)}
-        >
-          <span class="material-icons">arrow_back</span>
-        </button>
-
-        <div class="page-numbers">
-          <span class="page-info">{currentPage} / {totalPages}</span>
+      <!-- Infinite scroll sentinel -->
+      {#if visibleCount < allResults.length}
+        <div class="scroll-sentinel" bind:this={sentinelEl}>
+          {#if loadingMore}
+            <div class="loading-more">
+              <div class="loading-spinner small"></div>
+              <span>Loading more results...</span>
+            </div>
+          {/if}
         </div>
-
-        <button
-          class="page-nav-btn"
-          disabled={currentPage === totalPages}
-          onclick={() => setPage(currentPage + 1)}
-        >
-          <span class="material-icons">arrow_forward</span>
-        </button>
-      </div>
-    {/if}
+      {:else if visibleResults.length > 0}
+        <div class="end-of-results">
+          <span class="material-icons">check_circle</span>
+          <span>All {totalResults} results loaded</span>
+        </div>
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -545,18 +555,25 @@
     color: #000;
   }
 
-  /* Grid Layout */
+  /* Grid Layout — 10 per row */
   .search-results-grid {
     display: grid;
-    grid-template-columns: repeat(
-      auto-fill,
-      minmax(252px, 1fr)
-    ); /* Resized by 10% for better density */
-    gap: 2rem;
+    grid-template-columns: repeat(10, 1fr);
+    gap: 0.75rem;
   }
-  @media (min-width: 1800px) {
+  @media (max-width: 1600px) {
     .search-results-grid {
-      grid-template-columns: repeat(5, 1fr);
+      grid-template-columns: repeat(8, 1fr);
+    }
+  }
+  @media (max-width: 1200px) {
+    .search-results-grid {
+      grid-template-columns: repeat(6, 1fr);
+    }
+  }
+  @media (max-width: 800px) {
+    .search-results-grid {
+      grid-template-columns: repeat(3, 1fr);
     }
   }
 
@@ -727,35 +744,38 @@
     transform: translateY(-2px);
   }
 
-  /* Pagination */
-  .pagination-container {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 1rem;
-    margin-top: 3rem;
-    padding-bottom: 2rem;
-  }
-  .page-nav-btn {
-    width: 40px;
-    height: 40px;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #fff;
+  /* Infinite scroll sentinel & indicators */
+  .scroll-sentinel {
+    height: 60px;
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
   }
-  .page-nav-btn:disabled {
-    opacity: 0.3;
-    cursor: not-allowed;
-  }
-  .page-info {
-    font-family: var(--font-mono);
-    font-size: 0.9rem;
+  .loading-more {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
     color: var(--text-muted);
+    font-size: 0.8rem;
+  }
+  .loading-spinner.small {
+    width: 20px;
+    height: 20px;
+    border-width: 2px;
+  }
+  .end-of-results {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 1.5rem 0 2rem;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    opacity: 0.6;
+  }
+  .end-of-results .material-icons {
+    font-size: 16px;
+    color: #00ff80;
   }
 
   .empty-state {
