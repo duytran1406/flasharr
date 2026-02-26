@@ -260,7 +260,7 @@ function createDownloadStore() {
     },
     pagination: {
       page: 1,
-      limit: 20,
+      limit: 15,
       total: 0,
       totalPages: 0,
       sortBy: 'added',
@@ -341,7 +341,7 @@ function createDownloadStore() {
    */
   async function fetchBatches(page?: number): Promise<void> {
     let pageToFetch = page ?? 1;
-    let limit = 20;
+    let limit = 15;
     let sortBy: 'added' | 'status' | 'filename' | 'size' | 'progress' = 'added';
     let sortDir: 'asc' | 'desc' = 'desc';
     let statusFilter: DownloadState | null = null;
