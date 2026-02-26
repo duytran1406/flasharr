@@ -385,30 +385,14 @@ function createDownloadStore() {
 
 
       update(state => {
-        // Merge standalone downloads instead of blindly replacing state.downloads.
-        //
-        // Problem: fetchBatches() used to set downloads = downloadsMap (standalone only).
-        // Tasks that arrived via TASK_BATCH_UPDATE WebSocket *before* this HTTP response
-        // were already in state.downloads. Replacing wholesale wiped them → dashboard
-        // appeared empty right after the first batch-update tick.
-        //
-        // Strategy:
-        //   1. Start from the existing map (keeps in-flight WS tasks)
-        //   2. Upsert API-fresh standalone entries (authoritative for non-active tasks)
-        //   3. Remove tasks whose batch_id is now covered by a batch summary row
-        //      (they moved standalone → batch and should no longer show in downloads)
-        const newDownloads = new Map<string, DownloadTask>(state.downloads);
+        // Replace standalone downloads with exactly what the API returned for
+        // this page. Previously we merged onto the existing map, which caused
+        // items from other pages to persist when paginating back and forth.
+        const newDownloads = new Map<string, DownloadTask>();
 
         data.standalone.forEach((download: DownloadTask) => {
           newDownloads.set(download.id, download);
         });
-
-        // Remove tasks that belong to a batch we now know about
-        for (const [id, task] of newDownloads) {
-          if (task.batch_id && batchesMap.has(task.batch_id)) {
-            newDownloads.delete(id);
-          }
-        }
 
         return {
           ...state,
