@@ -8,6 +8,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{info, warn};
 
+/// Allowed media file extensions (lowercase, without dot)
+pub const MEDIA_EXTENSIONS: &[&str] = &[
+    "mkv", "mp4", "avi", "mov", "wmv", "flv", "webm", "m4v",
+    "mpg", "mpeg", "m2ts", "vob", "3gp", "ogv", "divx", "rmvb",
+    "rar", "zip", "7z",  // archives that often contain media
+];
+
+/// Check if a filename has a media file extension.
+/// Returns true for video files and common archives, false for .ts, .iso, .nfo, .srt, .txt, etc.
+pub fn is_media_file(filename: &str) -> bool {
+    if let Some(dot_pos) = filename.rfind('.') {
+        let ext = &filename[dot_pos + 1..].to_lowercase();
+        MEDIA_EXTENSIONS.contains(&ext.as_str())
+    } else {
+        // No extension — assume it could be media (folder links, etc.)
+        true
+    }
+}
+
 /// Raw search result from TimFshare API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RawFshareResult {
@@ -65,6 +84,8 @@ impl SearchPipeline {
                 warn!("TimFshare search '{}' request failed: {}", query, e);
             }
         }
+        // Filter out non-media files (.ts, .iso, .nfo, .srt, .txt, etc.)
+        results.retain(|r| is_media_file(&r.name));
         results
     }
 

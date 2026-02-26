@@ -11,6 +11,7 @@ use reqwest::Client;
 use crate::AppState;
 use crate::utils::smart_tokenizer::smart_parse;
 use crate::utils::title_matcher::{calculate_unified_similarity, extract_core_title, get_title_keywords};
+use crate::api::search_pipeline::is_media_file;
 use futures_util::future::join_all;
 use std::time::Duration;
 
@@ -197,6 +198,9 @@ async fn enhanced_search(
                         }
                     }).collect::<Vec<SearchResult>>()
                 }).unwrap_or_default();
+
+                // Filter out non-media files (.ts, .iso, .nfo, .srt, .txt, etc.)
+                results.retain(|r| is_media_file(&r.original_filename));
                 
                 // Deep Sort
                 results.sort_by(|a, b| b.score.cmp(&a.score));
