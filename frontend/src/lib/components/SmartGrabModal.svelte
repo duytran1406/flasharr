@@ -152,23 +152,8 @@
   $effect(() => {
     const storeValue = $smartGrabStore;
     const _skip = skipDownloaded; // Track this reactive dependency
-    console.log(
-      "[SmartGrabModal] Effect triggered - isOpen:",
-      storeValue.isOpen,
-      "hasData:",
-      !!storeValue.data,
-      "skipDownloaded:",
-      _skip,
-    );
     const seasons = storeValue.data?.seasons;
     if (seasons && Array.isArray(seasons)) {
-      console.log(
-        "[SmartGrabModal] Building sets for",
-        seasons.length,
-        "seasons",
-        "skipDownloaded:",
-        _skip,
-      );
       // Use untrack to avoid reactive loop when we write to state variables inside buildAllSets
       untrack(() => {
         try {

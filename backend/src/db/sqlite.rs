@@ -264,6 +264,39 @@ impl Db {
             [],
         )?;
         
+        // FTS5 virtual table for folder cache full-text search
+        conn.execute_batch(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS folder_cache USING fts5(
+                linkcode,
+                name,
+                title,
+                category,
+                label,
+                parent_linkcode,
+                fshare_url UNINDEXED,
+                year UNINDEXED,
+                season UNINDEXED,
+                episode UNINDEXED,
+                is_series UNINDEXED,
+                is_directory UNINDEXED,
+                size UNINDEXED,
+                quality UNINDEXED,
+                path UNINDEXED,
+                tokenize='unicode61'
+            );
+            CREATE TABLE IF NOT EXISTS folder_cache_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+            CREATE TABLE IF NOT EXISTS folder_tmdb_map (
+                linkcode TEXT PRIMARY KEY,
+                tmdb_id INTEGER,
+                media_type TEXT NOT NULL DEFAULT '',
+                poster_path TEXT DEFAULT '',
+                mapped_at TEXT DEFAULT ''
+            );"
+        )?;
+        
         Ok(())
     }
 
@@ -1809,4 +1842,278 @@ pub struct Account {
     pub token: Option<String>,
     pub expires_at: Option<i64>,
     pub created_at: Option<i64>,
+}
+
+/// Cached folder item for search results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedFolderItem {
+    pub linkcode: String,
+    pub name: String,
+    pub title: String,
+    pub category: String,
+    pub label: String,
+    pub parent_linkcode: String,
+    pub fshare_url: String,
+    pub year: Option<u32>,
+    pub season: Option<u32>,
+    pub episode: Option<u32>,
+    pub is_series: bool,
+    pub is_directory: bool,
+    pub size: u64,
+    pub quality: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tmdb_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_type_hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poster_path: Option<String>,
+}
+
+/// TMDB mapping for a folder item
+#[derive(Debug, Clone)]
+pub struct FolderTmdbMapping {
+    pub linkcode: String,
+    pub tmdb_id: i64,
+    pub media_type: String,
+    pub poster_path: String,
+}
+
+impl Db {
+    // ============================================================================
+    // Folder Cache Operations
+    // ============================================================================
+
+    /// Clear the entire folder cache
+    pub fn clear_folder_cache(&self) -> Result<()> {
+        let conn = self.pool.get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        conn.execute("DELETE FROM folder_cache", [])?;
+        Ok(())
+    }
+
+    /// Insert a batch of items into the folder cache within a transaction
+    pub fn insert_folder_cache_batch(&self, items: &[CachedFolderItem]) -> Result<usize> {
+        let mut conn = self.pool.get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let tx = conn.transaction()?;
+        
+        let mut count = 0;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO folder_cache (
+                    linkcode, name, title, category, label, parent_linkcode,
+                    fshare_url, year, season, episode, is_series, is_directory,
+                    size, quality, path
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
+            )?;
+            
+            for item in items {
+                stmt.execute(params![
+                    item.linkcode,
+                    item.name,
+                    item.title,
+                    item.category,
+                    item.label,
+                    item.parent_linkcode,
+                    item.fshare_url,
+                    item.year.map(|y| y.to_string()).unwrap_or_default(),
+                    item.season.map(|s| s.to_string()).unwrap_or_default(),
+                    item.episode.map(|e| e.to_string()).unwrap_or_default(),
+                    if item.is_series { "1" } else { "0" },
+                    if item.is_directory { "1" } else { "0" },
+                    item.size.to_string(),
+                    item.quality,
+                    item.path,
+                ])?;
+                count += 1;
+            }
+        }
+        
+        tx.commit()?;
+        Ok(count)
+    }
+
+    /// Search the folder cache using FTS5 full-text search (LEFT JOINs TMDB map)
+    pub fn search_folder_cache(&self, query: &str, limit: u32) -> Result<Vec<CachedFolderItem>> {
+        let conn = self.pool.get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        
+        // Build FTS5 query: add * for prefix matching
+        let fts_query = query.split_whitespace()
+            .map(|word| format!("{}*", word))
+            .collect::<Vec<_>>()
+            .join(" ");
+        
+        let mut stmt = conn.prepare(
+            "SELECT fc.linkcode, fc.name, fc.title, fc.category, fc.label, fc.parent_linkcode,
+                    fc.fshare_url, fc.year, fc.season, fc.episode, fc.is_series, fc.is_directory,
+                    fc.size, fc.quality, fc.path,
+                    COALESCE(tm.tmdb_id, ptm.tmdb_id) as tmdb_id,
+                    COALESCE(tm.media_type, ptm.media_type) as media_type,
+                    COALESCE(tm.poster_path, ptm.poster_path) as poster_path
+             FROM folder_cache fc
+             LEFT JOIN folder_tmdb_map tm ON fc.linkcode = tm.linkcode
+             LEFT JOIN folder_tmdb_map ptm ON fc.parent_linkcode = ptm.linkcode
+             WHERE folder_cache MATCH ?1
+             ORDER BY rank
+             LIMIT ?2"
+        )?;
+        
+        let rows = stmt.query_map(params![fts_query, limit], |row| {
+            let year_str: String = row.get(7)?;
+            let season_str: String = row.get(8)?;
+            let episode_str: String = row.get(9)?;
+            let is_series_str: String = row.get(10)?;
+            let is_dir_str: String = row.get(11)?;
+            let size_str: String = row.get(12)?;
+            let tmdb_id: Option<i64> = row.get(15)?;
+            let media_type_hint: Option<String> = row.get(16)?;
+            let poster_path: Option<String> = row.get(17)?;
+            
+            Ok(CachedFolderItem {
+                linkcode: row.get(0)?,
+                name: row.get(1)?,
+                title: row.get(2)?,
+                category: row.get(3)?,
+                label: row.get(4)?,
+                parent_linkcode: row.get(5)?,
+                fshare_url: row.get(6)?,
+                year: year_str.parse().ok(),
+                season: season_str.parse().ok(),
+                episode: episode_str.parse().ok(),
+                is_series: is_series_str == "1",
+                is_directory: is_dir_str == "1",
+                size: size_str.parse().unwrap_or(0),
+                quality: row.get(13)?,
+                path: row.get(14)?,
+                tmdb_id,
+                media_type_hint: media_type_hint.filter(|s| !s.is_empty()),
+                poster_path: poster_path.filter(|s| !s.is_empty()),
+            })
+        })?;
+        
+        let mut results = Vec::new();
+        for row in rows {
+            if let Ok(item) = row {
+                results.push(item);
+            }
+        }
+        Ok(results)
+    }
+
+    /// Async search wrapper
+    pub async fn search_folder_cache_async(&self, query: String, limit: u32) -> Result<Vec<CachedFolderItem>> {
+        let pool = self.pool.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = Db { pool };
+            db.search_folder_cache(&query, limit)
+        }).await.unwrap()
+    }
+
+    /// Get folder cache metadata value
+    pub fn get_folder_cache_meta(&self, key: &str) -> Result<Option<String>> {
+        let conn = self.pool.get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        conn.query_row(
+            "SELECT value FROM folder_cache_meta WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        ).optional()
+    }
+
+    /// Set folder cache metadata value
+    pub fn set_folder_cache_meta(&self, key: &str, value: &str) -> Result<()> {
+        let conn = self.pool.get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO folder_cache_meta (key, value) VALUES (?1, ?2)",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    /// Get total count of items in folder cache
+    pub fn get_folder_cache_count(&self) -> Result<u64> {
+        let conn = self.pool.get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        conn.query_row(
+            "SELECT COUNT(*) FROM folder_cache",
+            [],
+            |row| row.get(0),
+        )
+    }
+
+    // ============================================================================
+    // Folder TMDB Mapping Operations
+    // ============================================================================
+
+    /// Check if a linkcode already has a TMDB mapping
+    pub fn has_folder_tmdb_mapping(&self, linkcode: &str) -> Result<bool> {
+        let conn = self.pool.get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM folder_tmdb_map WHERE linkcode = ?1",
+            params![linkcode],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Set TMDB mapping for a linkcode
+    pub fn set_folder_tmdb_mapping(&self, linkcode: &str, tmdb_id: i64, media_type: &str, poster_path: &str) -> Result<()> {
+        let conn = self.pool.get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO folder_tmdb_map (linkcode, tmdb_id, media_type, poster_path, mapped_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![linkcode, tmdb_id, media_type, poster_path, chrono::Utc::now().timestamp().to_string()],
+        )?;
+        Ok(())
+    }
+
+    /// Batch set TMDB mappings
+    pub fn set_folder_tmdb_mappings_batch(&self, mappings: &[(String, i64, String, String)]) -> Result<usize> {
+        let mut conn = self.pool.get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let tx = conn.transaction()?;
+        let now = chrono::Utc::now().timestamp().to_string();
+        let mut count = 0;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO folder_tmdb_map (linkcode, tmdb_id, media_type, poster_path, mapped_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)"
+            )?;
+            for (lc, tid, mt, pp) in mappings {
+                stmt.execute(params![lc, tid, mt, pp, now])?;
+                count += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(count)
+    }
+
+    /// Get all existing TMDB mappings as a HashMap for fast lookup
+    pub fn get_all_folder_tmdb_mappings(&self) -> Result<std::collections::HashMap<String, FolderTmdbMapping>> {
+        let conn = self.pool.get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let mut stmt = conn.prepare(
+            "SELECT linkcode, tmdb_id, media_type, poster_path FROM folder_tmdb_map"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(FolderTmdbMapping {
+                linkcode: row.get(0)?,
+                tmdb_id: row.get(1)?,
+                media_type: row.get(2)?,
+                poster_path: row.get(3)?,
+            })
+        })?;
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            if let Ok(m) = row {
+                map.insert(m.linkcode.clone(), m);
+            }
+        }
+        Ok(map)
+    }
 }

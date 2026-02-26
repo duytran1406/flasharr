@@ -7,13 +7,11 @@ use axum::{
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use reqwest::Client;
 use crate::AppState;
 use crate::utils::smart_tokenizer::smart_parse;
 use crate::utils::title_matcher::{calculate_unified_similarity, extract_core_title, get_title_keywords};
 use crate::api::search_pipeline::is_media_file;
 use futures_util::future::join_all;
-use std::time::Duration;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -95,14 +93,11 @@ pub struct SearchResponse {
 const TMDB_KEY: &str = "8d95150f3391194ca66fef44df497ad6";
 
 async fn enhanced_search(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Query(params): Query<SearchQuery>,
 ) -> Json<SearchResponse> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(15))
-        .cookie_store(true)
-        .build()
-        .unwrap_or_default();
+    // Use shared HTTP client for connection pooling + TLS reuse
+    let client = (*state.http_client).clone();
         
     let parsed_query = smart_parse(&params.q);
     
@@ -113,7 +108,6 @@ async fn enhanced_search(
         .header("Content-Length", "0")
         .header("Origin", "https://timfshare.com")
         .header("Referer", format!("https://timfshare.com/search?key={}", urlencoding::encode(&params.q)))
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         .send()
         .await;
         

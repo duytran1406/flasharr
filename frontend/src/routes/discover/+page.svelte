@@ -75,7 +75,6 @@
         break;
       }
     }
-    console.log(`[Discover] Pool updated: ${nextPoolIndex} visible slots`);
   }
 
   // Clear pool and release all data references
@@ -85,7 +84,6 @@
       pool[i].data = null; // Release data reference for GC
     }
     nextPoolIndex = 0; // Reset the index
-    console.log("[Discover] Pool cleared");
   }
 
   // ============= FETCH LOGIC =============
@@ -105,15 +103,11 @@
 
   async function fetchDiscoverData(reset = false) {
     if (!reset && (loading || !hasMore)) {
-      console.log(
-        `[Discover] Skipping fetch - loading: ${loading}, hasMore: ${hasMore}`,
-      );
       return;
     }
 
     // Cancel any in-flight request
     if (activeAbortController) {
-      console.log("[Discover] Aborting previous request");
       activeAbortController.abort();
     }
 
@@ -129,9 +123,6 @@
     const requestSort = sortBy;
     const requestPage = reset ? 1 : currentPage;
 
-    console.log(
-      `[Discover] Starting fetch #${requestId} - Page ${requestPage}, Type: ${requestType}`,
-    );
     loading = true;
 
     if (reset) {
@@ -157,7 +148,6 @@
         if (maxRating < 10) url += `&vote_average.lte=${maxRating}`;
       }
 
-      console.log(`[Discover] Fetching: ${url}`);
       const res = await fetch(url, { signal: activeAbortController.signal });
 
       if (!res.ok) {
@@ -206,9 +196,6 @@
       clearTimeout(timeoutId);
       loading = false;
       activeAbortController = null;
-      console.log(
-        `[Discover] Request #${requestId} complete. Visible slots: ${pool.filter((s) => s.visible).length}`,
-      );
     }
   }
 
@@ -225,7 +212,6 @@
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
 
       if (distanceFromBottom < 500 && !loading && hasMore) {
-        console.log("[Discover] Triggering fetchDiscoverData from scroll");
         fetchDiscoverData();
       }
     }, 100);
@@ -299,7 +285,6 @@
 
   // ============= LIFECYCLE =============
   onMount(() => {
-    console.log("[Discover] 🚀 Version 2.0.3 - 1000-Slot Pool Build");
     fetchGenres();
     fetchDiscoverData(true);
 

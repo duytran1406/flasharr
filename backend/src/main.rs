@@ -55,11 +55,16 @@ pub struct AppState {
     pub download_orchestrator: Arc<downloader::DownloadOrchestrator>,
     pub download_service: Arc<services::DownloadService>,
     pub tmdb_service: Arc<services::TmdbService>,
+    pub folder_cache_service: Arc<services::FolderCacheService>,
     pub tx_broadcast: tokio::sync::broadcast::Sender<downloader::task::DownloadTask>,
     pub config: config::Config,
     pub db: Arc<db::Db>,
     pub search_cache: Cache<String, api::smart_search::SmartSearchResponse>,
     pub tmdb_cache: Cache<String, TmdbEnrichmentCache>,
+    /// Shared HTTP client for search endpoints (connection pooling + TLS reuse)
+    pub http_client: Arc<reqwest::Client>,
+    /// Cache for TimFshare search results (avoids duplicate API calls)
+    pub fshare_search_cache: Cache<String, Vec<api::search_pipeline::RawFshareResult>>,
 }
 
 #[derive(Serialize)]
@@ -205,6 +210,23 @@ async fn main() {
         .max_capacity(500)
         .time_to_live(Duration::from_secs(86400)) // 24 hours
         .build();
+
+    // Shared HTTP client for search endpoints (connection pooling + TLS reuse)
+    let http_client = Arc::new(
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .pool_max_idle_per_host(20)
+            .pool_idle_timeout(Duration::from_secs(90))
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .build()
+            .unwrap_or_default()
+    );
+
+    // TimFshare response cache (5 min TTL)
+    let fshare_search_cache = Cache::builder()
+        .max_capacity(200)
+        .time_to_live(Duration::from_secs(300)) // 5 minutes
+        .build();
     
     // Create DownloadService for business logic abstraction
     let download_service = Arc::new(services::DownloadService::new(
@@ -214,6 +236,9 @@ async fn main() {
     
     // Create TmdbService for centralized TMDB API access
     let tmdb_service = Arc::new(services::TmdbService::new_with_default_client());
+    
+    // Create FolderCacheService for folder source caching
+    let folder_cache_service = Arc::new(services::FolderCacheService::new(Arc::clone(&db), Arc::clone(&tmdb_service)));
     
     // Update config with loaded Arr settings so API sees them
     let mut app_config = config.clone();
@@ -225,11 +250,14 @@ async fn main() {
         download_orchestrator,
         download_service,
         tmdb_service,
+        folder_cache_service: Arc::clone(&folder_cache_service),
         tx_broadcast,
         config: app_config,
         db,
         search_cache,
         tmdb_cache,
+        http_client,
+        fshare_search_cache,
     });
 
     // Build router
@@ -252,6 +280,7 @@ async fn main() {
         .nest("/newznab/api", api::indexer::router())  // Standard Newznab path
         .nest("/api/arr", api::arr::router())
         .nest("/api/media", api::media::router())
+        .nest("/api/folder-source", api::folder_source::router())
         .layer(
             CorsLayer::new()
                 .allow_origin(Any)
@@ -261,6 +290,31 @@ async fn main() {
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .fallback_service(ServeDir::new("static").not_found_service(ServeFile::new("static/index.html")))
         .with_state(state);
+
+    // Spawn folder cache background sync (daily)
+    tokio::spawn(async move {
+        // Initial sync on startup (if cache is stale or empty)
+        folder_cache_service.sync_if_stale().await;
+        
+        // Then sync every 24 hours
+        let mut interval = tokio::time::interval(Duration::from_secs(86400));
+        interval.tick().await; // Skip the first immediate tick (already synced above)
+        loop {
+            interval.tick().await;
+            tracing::info!("[FOLDER-CACHE] Starting scheduled daily sync");
+            match folder_cache_service.sync_all_sources().await {
+                Ok(report) => {
+                    tracing::info!(
+                        "[FOLDER-CACHE] Daily sync complete: {} items from {} sources in {:.1}s",
+                        report.total_items, report.total_sources, report.duration_secs
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("[FOLDER-CACHE] Daily sync failed: {}", e);
+                }
+            }
+        }
+    });
 
     // Run server
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));

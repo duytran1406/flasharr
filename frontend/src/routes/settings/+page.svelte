@@ -200,12 +200,6 @@
       return;
     }
 
-    // Validate file extension
-    if (!url.endsWith(".json")) {
-      toasts.error("Folder source must point to a .json file");
-      return;
-    }
-
     folderCacheRefreshing = true;
     try {
       // Save the URL first
@@ -465,7 +459,7 @@
                     type="text"
                     id="b-folder-source"
                     bind:value={folderSourceGistUrl}
-                    placeholder="https://gist.githubusercontent.com/.../fshare_sources.json"
+                    placeholder="https://gist.githubusercontent.com/.../fshare_folder_list.txt"
                     class="dl-path-input"
                   />
                   <button

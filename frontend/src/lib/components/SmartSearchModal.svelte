@@ -79,10 +79,6 @@
 
       existingDownloads = downloaded;
       if (downloaded.size > 0) {
-        console.log(
-          `[Smart Search] Found ${downloaded.size} existing (Flasharr DB + Sonarr/Radarr library):`,
-          [...downloaded],
-        );
       }
     } catch (e: any) {
       error = e.message || "Network error";
@@ -119,9 +115,6 @@
             existing.add(key);
           }
         }
-        console.log(
-          `[Smart Search] Sonarr: ${existing.size} episodes with files for series '${match.title}' (ID: ${match.id})`,
-        );
       } else if (mediaType === "movie") {
         // For movies, check if Radarr has the file
         const moviesResp = await fetch("/api/arr/movies");
@@ -386,15 +379,11 @@
     }
 
     // Log all patterns for debugging (top 5 by coverage)
-    console.log("[Smart Grab] Pattern Coverage Analysis:");
     const sortedPatterns = [...coverageMap.entries()].sort(
       (a, b) => b[1].coverage - a[1].coverage,
     );
 
     for (const [pattern, stats] of sortedPatterns.slice(0, 5)) {
-      console.log(
-        `  - "${pattern}": ${stats.coverage.toFixed(1)}% coverage (${stats.matchedEpisodes}/${stats.totalEpisodes} eps), avg score: ${stats.avgScore.toFixed(1)}`,
-      );
     }
 
     // Step 2: Find the best pattern based on coverage
@@ -407,10 +396,6 @@
     }
 
     const selectedPattern = best.pattern;
-    console.log(
-      `[Smart Grab] Selected pattern: "${selectedPattern}" with ${best.stats.coverage.toFixed(1)}% coverage`,
-    );
-    console.log(`[Smart Grab] Sample file: "${best.stats.sampleFile.name}"`);
 
     // Step 3: Collect files for each episode using the best pattern
     const toDownload: any[] = [];
@@ -428,7 +413,6 @@
         const epKey = `S${String(season.season).padStart(2, "0")}E${String(ep.episode_number).padStart(2, "0")}`;
         if (existingDownloads.has(epKey)) {
           skippedExisting++;
-          console.log(`[Smart Grab] Skipping ${epKey} — already downloaded`);
           return;
         }
 
@@ -445,9 +429,6 @@
           // Fallback: take the highest-scored file
           selectedFile = ep.files[0];
           fallbacks++;
-          console.log(
-            `[Smart Grab] Fallback S${season.season}E${ep.episode_number}: "${selectedFile.name}"`,
-          );
         }
 
         toDownload.push({
@@ -467,7 +448,6 @@
     }
 
     // Log the final selection table
-    console.log("\n[Smart Grab] Final Selection:");
     console.table(
       toDownload.map((d) => ({
         Episode: `S${d.seasonNum}E${d.epNum}`,
@@ -629,8 +609,62 @@
         <span class="material-icons">error_outline</span>
         <p>{error}</p>
       </div>
-    {:else if results && results.total_found > 0}
+    {:else if results && (results.total_found > 0 || (results.folder_matches && results.folder_matches.length > 0))}
       <div class="results-container">
+        {#if results.folder_matches && results.folder_matches.length > 0}
+          <!-- Folder Cache Matches -->
+          <div class="folder-section">
+            <div class="folder-section-header">
+              <span class="material-icons">folder_special</span>
+              <span class="folder-section-title">Folder Sources</span>
+              <Badge
+                text="{results.folder_matches.length} found"
+                variant="count"
+                size="xs"
+                noDot
+              />
+            </div>
+            <div class="folder-list">
+              {#each results.folder_matches as fm}
+                <a
+                  href={fm.fshare_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="folder-card glass-panel"
+                  class:is-dir={fm.is_directory}
+                >
+                  <div class="folder-icon">
+                    <span class="material-icons"
+                      >{fm.is_directory ? "folder" : "insert_drive_file"}</span
+                    >
+                  </div>
+                  <div class="folder-info">
+                    <div class="folder-name" title={fm.name}>{fm.name}</div>
+                    <div class="folder-meta">
+                      {#if fm.quality && fm.quality !== "Unknown"}
+                        <Badge
+                          text={fm.quality}
+                          variant="quality"
+                          size="xs"
+                          noDot
+                        />
+                      {/if}
+                      {#if fm.year}
+                        <span class="folder-year">{fm.year}</span>
+                      {/if}
+                      {#if fm.size > 0}
+                        <span class="folder-size">{formatSize(fm.size)}</span>
+                      {/if}
+                    </div>
+                  </div>
+                  <span class="material-icons folder-open-icon"
+                    >open_in_new</span
+                  >
+                </a>
+              {/each}
+            </div>
+          </div>
+        {/if}
         {#if results.groups}
           <!-- Movie Layout -->
           {#each results.groups as group}
@@ -1137,6 +1171,112 @@
     display: flex;
     flex-direction: column;
     gap: 1rem;
+  }
+
+  /* Folder Sources Section */
+  .folder-section {
+    margin-bottom: 0.5rem;
+  }
+  .folder-section-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0 0.25rem;
+    margin-bottom: 0.75rem;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .folder-section-header .material-icons {
+    font-size: 1.1rem;
+    color: #f59e0b;
+  }
+  .folder-section-title {
+    flex: 1;
+  }
+  .folder-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .folder-card {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    text-decoration: none;
+    color: inherit;
+    transition: all 0.2s;
+    cursor: pointer;
+  }
+  .folder-card:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(245, 158, 11, 0.3);
+    transform: translateX(2px);
+  }
+  .folder-card.is-dir {
+    border-left: 3px solid rgba(245, 158, 11, 0.4);
+  }
+  .folder-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: rgba(245, 158, 11, 0.1);
+    flex-shrink: 0;
+  }
+  .folder-icon .material-icons {
+    font-size: 1.2rem;
+    color: #f59e0b;
+  }
+  .folder-card:not(.is-dir) .folder-icon {
+    background: rgba(99, 102, 241, 0.1);
+  }
+  .folder-card:not(.is-dir) .folder-icon .material-icons {
+    color: #818cf8;
+  }
+  .folder-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .folder-name {
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.9);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+  }
+  .folder-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.2rem;
+    font-size: 0.72rem;
+    color: rgba(255, 255, 255, 0.4);
+  }
+  .folder-year {
+    color: rgba(255, 255, 255, 0.5);
+  }
+  .folder-size {
+    color: rgba(255, 255, 255, 0.4);
+  }
+  .folder-open-icon {
+    font-size: 1rem;
+    color: rgba(255, 255, 255, 0.2);
+    flex-shrink: 0;
+    transition: color 0.2s;
+  }
+  .folder-card:hover .folder-open-icon {
+    color: #f59e0b;
   }
 
   .quality-card {

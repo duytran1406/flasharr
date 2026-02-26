@@ -1,0 +1,25 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "flasharr",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": false,
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "backend/Cargo.toml",
+          "jsonpath": "$.package.version"
+        },
+        {
+          "type": "json",
+          "path": "frontend/package.json",
+          "jsonpath": "$.version"
+        }
+      ],
+      "include-component-in-tag": false
+    }
+  }
+}

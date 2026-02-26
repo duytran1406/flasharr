@@ -103,6 +103,11 @@ export const systemLoading = writable<boolean>(false);
  */
 export const systemError = writable<string | null>(null);
 
+/**
+ * Folder Source URL Store
+ */
+export const folderSourceUrl = writable<string>('');
+
 // ============================================================================
 // API FUNCTIONS
 // Each function only updates its specific store
@@ -321,6 +326,44 @@ export function clearLogs(): void {
   systemLogs.set([]);
 }
 
+/**
+ * Fetch folder source config - ONLY updates folderSourceUrl store
+ */
+export async function fetchFolderSourceConfig(): Promise<void> {
+  try {
+    const response = await fetch(`${API_BASE}/folder-source/config`);
+    if (response.ok) {
+      const data = await response.json();
+      folderSourceUrl.set(data.gist_url || '');
+    }
+  } catch (err) {
+    console.error('[SystemStore] Fetch folder source config error:', err);
+  }
+}
+
+/**
+ * Save folder source config
+ */
+export async function saveFolderSourceConfig(gistUrl: string): Promise<{ success: boolean; message?: string }> {
+  try {
+    const response = await fetch(`${API_BASE}/folder-source/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gist_url: gistUrl }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      folderSourceUrl.set(gistUrl);
+      return { success: data.success, message: data.message };
+    }
+    return { success: false, message: 'Failed to save folder source config' };
+  } catch (err) {
+    console.error('[SystemStore] Save folder source config error:', err);
+    return { success: false, message: 'Network error' };
+  }
+}
+
 // ============================================================================
 // BACKWARD COMPATIBILITY
 // Expose a systemStore object with the same API as before
@@ -339,4 +382,6 @@ export const systemStore = {
   testRadarrConnection,
   fetchLogs,
   clearLogs,
+  fetchFolderSourceConfig,
+  saveFolderSourceConfig,
 };

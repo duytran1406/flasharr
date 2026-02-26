@@ -41,6 +41,7 @@ test-data/
 
 # Agent and local documentation
 .agent/
+docs/_internal/
 PUBLISHED.md
 PUBLISHING_SETUP.md
 VERSIONING_SETUP.md

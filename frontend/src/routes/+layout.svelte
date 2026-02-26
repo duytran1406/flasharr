@@ -153,8 +153,6 @@
   });
 
   onMount(() => {
-    console.log("[Layout] Initializing system...");
-
     // Start the intro animation sequence
     ui.startIntroSequence();
 
@@ -201,7 +199,6 @@
 
   // Cleanup on unmount
   onDestroy(() => {
-    console.log("[Layout] Disconnecting WebSocket...");
     wsClient.disconnect();
   });
 </script>
@@ -350,18 +347,6 @@
       <!-- ── Footer ── -->
       <div class="sidebar-footer">
         <div class="sidebar-divider"></div>
-        <button
-          class="nav-item theme-toggle-btn"
-          onclick={() => theme.toggle()}
-        >
-          <span class="nav-hover-particles" aria-hidden="true"></span>
-          <span class="nav-icon material-icons">
-            {$theme === "dark" ? "light_mode" : "dark_mode"}
-          </span>
-          <span class="nav-label">
-            {$theme === "dark" ? "Light Mode" : "Dark Mode"}
-          </span>
-        </button>
         <div class="version-chip">
           <span class="version-dot"></span>
           <span class="version-text">v3.0.0</span>
@@ -1045,10 +1030,6 @@
     display: flex;
     flex-direction: column;
     gap: 0.15rem;
-  }
-
-  :global(.theme-toggle-btn) {
-    font-family: var(--font-body, "Inter", sans-serif);
   }
 
   :global(.version-chip) {

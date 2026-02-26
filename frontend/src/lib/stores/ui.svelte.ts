@@ -77,11 +77,8 @@ class UIState {
     seasons: any[];
     tmdbSeasonEpisodeCounts?: Record<number, number>;
   }) {
-    console.log("[SmartGrab] openSmartGrab called with:", data);
-    console.log("[SmartGrab] seasons length:", data.seasons?.length);
     this.smartGrabData = data;
     this.smartGrabModalOpen = true;
-    console.log("[SmartGrab] Modal open state:", this.smartGrabModalOpen, "Data set:", !!this.smartGrabData);
   }
 
   closeSmartGrab() {

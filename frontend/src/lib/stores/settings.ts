@@ -129,7 +129,6 @@ function createSettingsStore() {
         };
       });
 
-      console.log('[SettingsStore] Fetched settings');
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to fetch settings';
       console.error('[SettingsStore] Fetch error:', errorMsg);
@@ -170,7 +169,6 @@ function createSettingsStore() {
         update(state => ({ ...state, saveStatus: 'idle' }));
       }, 2000);
 
-      console.log('[SettingsStore] Settings saved');
       return true;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to save settings';
@@ -208,7 +206,6 @@ function createSettingsStore() {
         accounts: data.accounts || [],
       }));
 
-      console.log('[SettingsStore] Fetched accounts');
     } catch (err) {
       console.error('[SettingsStore] Fetch accounts error:', err);
     }
@@ -233,7 +230,6 @@ function createSettingsStore() {
       // Refresh accounts list
       await fetchAccounts();
       
-      console.log('[SettingsStore] Account added');
       return true;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to add account';
@@ -259,7 +255,6 @@ function createSettingsStore() {
       // Refresh accounts list
       await fetchAccounts();
       
-      console.log('[SettingsStore] Account removed');
       return true;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to remove account';
@@ -284,7 +279,6 @@ function createSettingsStore() {
       // Refresh accounts list
       await fetchAccounts();
       
-      console.log('[SettingsStore] Account refreshed');
       return true;
     } catch (err) {
       console.error('[SettingsStore] Refresh account error:', err);
@@ -333,7 +327,6 @@ function createSettingsStore() {
         integrations: { ...state.integrations, ...newIntegrations },
       }));
 
-      console.log('[SettingsStore] Integrations saved');
       return true;
     } catch (err) {
       console.error('[SettingsStore] Save integrations error:', err);

@@ -23,11 +23,9 @@ function createSmartGrabStore() {
   return {
     subscribe,
     open: (data: SmartGrabData) => {
-      console.log("[SmartGrabStore] Opening with data:", data);
       set({ isOpen: true, data });
     },
     close: () => {
-      console.log("[SmartGrabStore] Closing");
       set({ isOpen: false, data: null });
     },
   };

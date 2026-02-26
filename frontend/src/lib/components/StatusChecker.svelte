@@ -129,7 +129,6 @@
   // Portal action to move element to document.body
   function portal(node: HTMLElement) {
     const originalParent = node.parentElement;
-    console.log("[StatusChecker] Portal action: Moving tooltip to body");
     document.body.appendChild(node);
 
     return {

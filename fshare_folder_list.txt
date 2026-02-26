@@ -1,0 +1,6 @@
+# Flasharr Folder Sources
+# One Fshare folder URL per line. Lines starting with # are comments.
+# The token parameter is optional (for private/shared folders).
+
+https://www.fshare.vn/folder/F8INH63OUZ6L817?token=1772074221
+https://www.fshare.vn/folder/XEVZ47FBZSR4?token=1772074278

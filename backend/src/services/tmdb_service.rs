@@ -7,6 +7,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::warn;
 
 use crate::constants::TMDB_API_KEY;
@@ -80,10 +81,17 @@ impl TmdbService {
         Self { client }
     }
 
-    /// Create with a new HTTP client
+    /// Create with a new HTTP client (configured for performance)
     pub fn new_with_default_client() -> Self {
         Self {
-            client: Arc::new(Client::new()),
+            client: Arc::new(
+                Client::builder()
+                    .timeout(Duration::from_secs(8))
+                    .pool_max_idle_per_host(10)
+                    .pool_idle_timeout(Duration::from_secs(90))
+                    .build()
+                    .unwrap_or_else(|_| Client::new())
+            ),
         }
     }
 
@@ -183,25 +191,53 @@ impl TmdbService {
         self.get(&format!("/tv/{}/season/{}", tmdb_id, season)).await
     }
 
-    /// Get full TV enrichment (details + alternative titles + translations)
+    /// Get full TV enrichment in ONE API call using append_to_response.
+    /// Previously made 3 sequential/parallel calls; now a single request.
     pub async fn get_tv_enrichment(&self, tmdb_id: i64) -> MediaEnrichment {
         let mut enrichment = MediaEnrichment::default();
 
-        // Fetch details
-        if let Some(data) = self.get_tv_details(tmdb_id).await {
+        // Single API call: details + alternative_titles + translations
+        let data = self.get_with_params(
+            &format!("/tv/{}", tmdb_id),
+            &[("append_to_response", "alternative_titles,translations")],
+        ).await;
+
+        if let Some(data) = data {
+            // Parse details
             enrichment.official_name = data["name"].as_str().map(|s| s.to_string());
             enrichment.original_name = data["original_name"].as_str().map(|s| s.to_string());
             enrichment.original_language = data["original_language"].as_str().map(|s| s.to_string());
             enrichment.poster_path = data["poster_path"].as_str().map(|s| s.to_string());
-        }
 
-        // Fetch alternative titles and translations concurrently
-        let (alt_titles, translations) = tokio::join!(
-            self.get_tv_alternative_titles(tmdb_id),
-            self.get_tv_translations(tmdb_id)
-        );
-        enrichment.alternative_titles = alt_titles;
-        enrichment.translations = translations;
+            // Parse alternative titles from appended response
+            if let Some(results) = data["alternative_titles"]["results"].as_array() {
+                enrichment.alternative_titles = results.iter()
+                    .filter_map(|t| {
+                        let title = t["title"].as_str().or(t["name"].as_str())?;
+                        let iso = t["iso_3166_1"].as_str().unwrap_or("");
+                        Some(AlternativeTitle {
+                            title: title.to_string(),
+                            iso_3166_1: iso.to_string(),
+                        })
+                    })
+                    .collect();
+            }
+
+            // Parse translations from appended response
+            if let Some(translations) = data["translations"]["translations"].as_array() {
+                enrichment.translations = translations.iter()
+                    .filter_map(|t| {
+                        let iso = t["iso_3166_1"].as_str().unwrap_or("");
+                        let name = t["data"]["name"].as_str()
+                            .filter(|n| !n.is_empty())?;
+                        Some(Translation {
+                            name: name.to_string(),
+                            iso_3166_1: iso.to_string(),
+                        })
+                    })
+                    .collect();
+            }
+        }
 
         enrichment
     }
@@ -264,25 +300,43 @@ impl TmdbService {
         })
     }
 
-    /// Get full movie enrichment (details + alternative titles + collection)
+    /// Get full movie enrichment in ONE API call using append_to_response.
+    /// Previously made 3 sequential calls; now 1 call (+1 for collection if needed).
     pub async fn get_movie_enrichment(&self, tmdb_id: i64) -> MediaEnrichment {
         let mut enrichment = MediaEnrichment::default();
 
-        // Fetch details with collection
-        if let Some(data) = self.get_movie_details(tmdb_id).await {
+        // Single API call: details + alternative_titles + belongs_to_collection
+        let data = self.get_with_params(
+            &format!("/movie/{}", tmdb_id),
+            &[("append_to_response", "alternative_titles")],
+        ).await;
+
+        if let Some(data) = data {
+            // Parse details
             enrichment.official_name = data["title"].as_str().map(|s| s.to_string());
             enrichment.original_name = data["original_title"].as_str().map(|s| s.to_string());
             enrichment.original_language = data["original_language"].as_str().map(|s| s.to_string());
             enrichment.poster_path = data["poster_path"].as_str().map(|s| s.to_string());
 
-            // Check for collection
+            // Parse alternative titles from appended response
+            if let Some(titles) = data["alternative_titles"]["titles"].as_array() {
+                enrichment.alternative_titles = titles.iter()
+                    .filter_map(|t| {
+                        let title = t["title"].as_str()?;
+                        let iso = t["iso_3166_1"].as_str().unwrap_or("");
+                        Some(AlternativeTitle {
+                            title: title.to_string(),
+                            iso_3166_1: iso.to_string(),
+                        })
+                    })
+                    .collect();
+            }
+
+            // Check for collection (only extra call if movie belongs to one)
             if let Some(coll_id) = data["belongs_to_collection"]["id"].as_i64() {
                 enrichment.collection = self.get_collection(coll_id).await;
             }
         }
-
-        // Fetch alternative titles
-        enrichment.alternative_titles = self.get_movie_alternative_titles(tmdb_id).await;
 
         enrichment
     }

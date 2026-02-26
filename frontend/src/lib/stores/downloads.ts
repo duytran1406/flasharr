@@ -323,7 +323,6 @@ function createDownloadStore() {
         loading: false,
       }));
 
-      console.log('[DownloadStore] Fetched page', data.page, 'of', data.total_pages, '(', data.downloads.length, 'items, total:', data.total, statusFilter ? `, filter: ${statusFilter}` : '', ')');
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to fetch downloads';
       console.error('[DownloadStore] Fetch error:', errorMsg);
@@ -411,7 +410,6 @@ function createDownloadStore() {
       });
 
 
-      console.log('[DownloadStore] Fetched batches page', data.page, ':', data.batches.length, 'batches +', data.standalone.length, 'standalone (total:', data.total, ')');
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to fetch batches';
       console.error('[DownloadStore] Fetch batches error:', errorMsg);
@@ -435,7 +433,6 @@ function createDownloadStore() {
       return state;
     });
     if (cached) {
-      console.log('[DownloadStore] Using cached items for batch', batchId);
       return cached;
     }
 
@@ -457,7 +454,6 @@ function createDownloadStore() {
         };
       });
 
-      console.log('[DownloadStore] Fetched', items.length, 'items for batch', batchId);
       return items;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to fetch batch items';
@@ -535,7 +531,6 @@ function createDownloadStore() {
         throw new Error(data.error || data.message || `HTTP ${response.status}`);
       }
 
-      console.log('[DownloadStore] Added download:', data.task_id);
       toasts.success(`Download added: ${data.filename}`);
       
       return { success: true, data };
@@ -561,7 +556,6 @@ function createDownloadStore() {
         throw new Error(data.error || `HTTP ${response.status}`);
       }
 
-      console.log('[DownloadStore] Paused download:', id);
       toasts.info('Download paused');
       return { success: true };
     } catch (err) {
@@ -586,7 +580,6 @@ function createDownloadStore() {
         throw new Error(data.error || `HTTP ${response.status}`);
       }
 
-      console.log('[DownloadStore] Resumed download:', id);
       toasts.success('Download resumed');
       return { success: true };
     } catch (err) {
@@ -647,12 +640,10 @@ function createDownloadStore() {
         return { ...state, downloads: newDownloads, batchItems: newBatchItems };
       });
 
-      console.log('[DownloadStore] Deleted download:', id);
       toasts.info('Download deleted');
 
       // If it was a batch item, refetch batch summaries to update counts/progress
       if (batchId) {
-        console.log('[DownloadStore] Batch item deleted, refetching batches...');
         fetchBatches().catch(err => console.error('Failed to refetch batches after delete:', err));
       }
 
@@ -694,7 +685,6 @@ function createDownloadStore() {
         throw new Error(data.error || `HTTP ${response.status}`);
       }
 
-      console.log('[DownloadStore] Retrying download:', id);
       toasts.success('Download retry initiated');
       return { success: true };
     } catch (err) {
@@ -720,7 +710,6 @@ function createDownloadStore() {
         throw new Error(data.error || `HTTP ${response.status}`);
       }
 
-      console.log('[DownloadStore] Paused all downloads:', data.affected);
       toasts.info(`Paused ${data.affected} download${data.affected !== 1 ? 's' : ''}`);
       return { success: true, data };
     } catch (err) {
@@ -746,7 +735,6 @@ function createDownloadStore() {
         throw new Error(data.error || `HTTP ${response.status}`);
       }
 
-      console.log('[DownloadStore] Resumed all downloads:', data.affected);
       toasts.success(`Resumed ${data.affected} download${data.affected !== 1 ? 's' : ''}`);
       return { success: true, data };
     } catch (err) {
@@ -776,7 +764,6 @@ function createDownloadStore() {
         throw new Error(data.error || `HTTP ${response.status}`);
       }
 
-      console.log('[DownloadStore] Paused batch:', batchId, 'affected:', data.affected);
       toasts.info(`Paused ${data.affected} download${data.affected !== 1 ? 's' : ''} in batch`);
       
       // Refetch batches to update batch row status
@@ -805,7 +792,6 @@ function createDownloadStore() {
         throw new Error(data.error || `HTTP ${response.status}`);
       }
 
-      console.log('[DownloadStore] Resumed batch:', batchId, 'affected:', data.affected);
       toasts.success(`Resumed ${data.affected} download${data.affected !== 1 ? 's' : ''} in batch`);
       
       // Refetch batches to update batch row status
@@ -834,7 +820,6 @@ function createDownloadStore() {
         throw new Error(data.error || `HTTP ${response.status}`);
       }
 
-      console.log('[DownloadStore] Deleted batch:', batchId, 'affected:', data.affected);
       toasts.info(`Deleted ${data.affected} download${data.affected !== 1 ? 's' : ''} in batch`);
       
       // Refetch batches to get fresh data from server and update UI
@@ -957,7 +942,6 @@ function createDownloadStore() {
     // into the existing Map rather than replace it, otherwise REST-loaded tasks
     // vanish the moment the WebSocket fires — causing the Active Queue blink.
     wsClient.on('SYNC_ALL', (message) => {
-      console.log('[DownloadStore] SYNC_ALL received:', message.tasks?.length || 0, 'active tasks');
       
       if (message.tasks && Array.isArray(message.tasks)) {
         update(state => {
@@ -975,7 +959,6 @@ function createDownloadStore() {
 
     // Handle TASK_ADDED - new task added
     wsClient.on('TASK_ADDED', (message) => {
-      console.log('[DownloadStore] TASK_ADDED:', message.task?.id);
       
       if (message.task) {
         update(state => {
@@ -986,7 +969,6 @@ function createDownloadStore() {
 
         // If task has batch_id, refetch batches to update grouping
         if (message.task.batch_id) {
-          console.log('[DownloadStore] Task added to batch, refetching batches...');
           fetchBatches().catch(err => console.error('Failed to refetch batches:', err));
         }
       }
@@ -1050,7 +1032,6 @@ function createDownloadStore() {
 
       // Full server resync only for terminal state changes
       if (batchId && (newState === 'COMPLETED' || newState === 'FAILED')) {
-        console.log('[DownloadStore] Task state changed to', newState, 'refetching batches...');
         fetchBatches().catch(err => console.error('Failed to refetch batches:', err));
       }
     });
@@ -1122,7 +1103,6 @@ function createDownloadStore() {
 
     // Handle TASK_REMOVED - task deleted
     wsClient.on('TASK_REMOVED', (message) => {
-      console.log('[DownloadStore] TASK_REMOVED:', message.task_id);
       
       if (message.task_id) {
         // Check if this was part of a batch before removing
@@ -1153,7 +1133,6 @@ function createDownloadStore() {
 
         // If it was a batch item or if we need to check for empty batches, refetch
         if (wasBatchItem) {
-          console.log('[DownloadStore] Batch item removed, refetching batches...');
           fetchBatches().catch(err => console.error('Failed to refetch batches:', err));
         }
 
@@ -1173,7 +1152,6 @@ function createDownloadStore() {
       }
     });
 
-    console.log('[DownloadStore] WebSocket handlers initialized');
   }
 
   return {

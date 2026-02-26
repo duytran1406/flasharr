@@ -16,3 +16,4 @@ pub mod indexer;
 pub mod setup;
 pub mod health;
 pub mod media;
+pub mod folder_source;

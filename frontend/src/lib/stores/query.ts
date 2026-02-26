@@ -13,11 +13,9 @@ class QueryStore {
         const cached = this.cache.get(key);
 
         if (cached && (now - cached.timestamp < this.staleTime)) {
-            console.log(`[QueryStore] Cache hit for ${key}`);
             return cached.data;
         }
 
-        console.log(`[QueryStore] Fetching ${key}`);
         const data = await fetcher();
         this.cache.set(key, { data, timestamp: now });
         return data;

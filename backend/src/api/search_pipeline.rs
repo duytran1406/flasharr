@@ -3,6 +3,7 @@
 //! Contains reusable search components extracted from smart_search.rs.
 //! Provides building blocks for TV and Movie search handlers.
 
+use moka::future::Cache;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -41,7 +42,35 @@ pub struct RawFshareResult {
 pub struct SearchPipeline;
 
 impl SearchPipeline {
-    /// Execute search via timfshare.com API
+    /// Execute search via timfshare.com API with moka cache layer.
+    /// Cache key is the normalized query string. Hits skip the network entirely.
+    pub async fn execute_fshare_search_cached(
+        client: &Client,
+        query: &str,
+        limit: usize,
+        cache: &Cache<String, Vec<RawFshareResult>>,
+    ) -> Vec<RawFshareResult> {
+        let cache_key = query.trim().to_lowercase();
+
+        // Check cache first
+        if let Some(cached) = cache.get(&cache_key).await {
+            info!("TimFshare CACHE HIT: '{}' ({} results)", query, cached.len());
+            // Apply limit on cached results
+            return cached.into_iter().take(limit).collect();
+        }
+
+        // Cache miss — fetch from network
+        let results = Self::execute_fshare_search(client, query, limit).await;
+
+        // Store in cache (full results, limit applied on read)
+        if !results.is_empty() {
+            cache.insert(cache_key, results.clone()).await;
+        }
+
+        results
+    }
+
+    /// Execute search via timfshare.com API (uncached, for snowball/targeted queries)
     pub async fn execute_fshare_search(client: &Client, query: &str, limit: usize) -> Vec<RawFshareResult> {
         let url = format!("https://timfshare.com/api/v1/string-query-search?query={}", urlencoding::encode(query));
         let mut results = Vec::new();
@@ -101,4 +130,3 @@ impl SearchPipeline {
             .collect()
     }
 }
-

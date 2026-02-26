@@ -109,27 +109,6 @@
   --z-mobile-modal: 1100;
 }
 
-/* Light Theme (Arctic) */
-body.theme-arctic {
-  --color-primary: #ff3d00;
-  /* Deep Orange */
-  --color-secondary: #2979ff;
-  /* Blue A400 */
-
-  --bg-app: #f8fafc;
-  --bg-glass: rgba(255, 255, 255, 0.7);
-  --bg-glass-heavy: rgba(255, 255, 255, 0.9);
-
-  --border-glass: rgba(0, 0, 0, 0.05);
-  --border-glass-active: rgba(255, 61, 0, 0.2);
-
-  --text-primary: #1e293b;
-  --text-secondary: #64748b;
-  --text-muted: #94a3b8;
-
-  --shadow-glass: 0 4px 30px rgba(0, 0, 0, 0.05);
-  --glow-primary: 0 0 20px rgba(255, 61, 0, 0.15);
-}
 
 /* =========================================
      Reset & Base

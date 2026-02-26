@@ -1,141 +1,125 @@
+<a id="readme-top"></a>
+
+<!-- PROJECT SHIELDS -->
 <div align="center">
 
-# ⚡ Flasharr
-
-### Multi-Host Download Manager with \*arr Integration
-
-[![Docker Pulls](https://img.shields.io/docker/pulls/duytran1406/flasharr?style=for-the-badge&logo=docker)](https://hub.docker.com/r/duytran1406/flasharr)
-[![GitHub Release](https://img.shields.io/github/v/release/duytran1406/flasharr?style=for-the-badge&logo=github)](https://github.com/duytran1406/flasharr/releases)
-[![License](https://img.shields.io/github/license/duytran1406/flasharr?style=for-the-badge)](LICENSE)
-[![GitHub Stars](https://img.shields.io/github/stars/duytran1406/flasharr?style=for-the-badge&logo=github)](https://github.com/duytran1406/flasharr/stargazers)
-
-**Blazing-fast download manager built with Rust + SvelteKit**  
-Seamlessly integrates with Sonarr & Radarr for automated media management
-
-[Quick Start](#-quick-start) • [Features](#-features) • [Documentation](#-documentation) • [Screenshots](#-screenshots)
+<a href="https://github.com/duytran1406/flasharr/graphs/contributors"><img src="https://img.shields.io/github/contributors/duytran1406/flasharr.svg?style=for-the-badge" alt="Contributors"></a>
+<a href="https://github.com/duytran1406/flasharr/network/members"><img src="https://img.shields.io/github/forks/duytran1406/flasharr.svg?style=for-the-badge" alt="Forks"></a>
+<a href="https://github.com/duytran1406/flasharr/stargazers"><img src="https://img.shields.io/github/stars/duytran1406/flasharr.svg?style=for-the-badge" alt="Stargazers"></a>
+<a href="https://github.com/duytran1406/flasharr/issues"><img src="https://img.shields.io/github/issues/duytran1406/flasharr.svg?style=for-the-badge" alt="Issues"></a>
+<a href="https://github.com/duytran1406/flasharr/blob/main/LICENSE"><img src="https://img.shields.io/github/license/duytran1406/flasharr.svg?style=for-the-badge" alt="MIT License"></a>
 
 </div>
 
----
-
-## 🎬 Demo
-
-<!-- TODO: Add animated GIF of intro animation -->
-<!-- ![Flasharr Demo](docs/images/demo.gif) -->
-
+<!-- PROJECT LOGO -->
+<br />
 <div align="center">
-  <img src="docs/images/dashboard.png" alt="Dashboard" width="45%">
-  <img src="docs/images/downloads.png" alt="Downloads" width="45%">
+  <a href="https://github.com/duytran1406/flasharr">
+    <img src="docs/images/logo.png" alt="Flasharr Logo" width="120" height="120">
+  </a>
+
+  <h1>Flasharr</h1>
+
+  <p>
+    <strong>Blazing-fast download manager with Sonarr & Radarr integration</strong>
+    <br />
+    Built with Rust + SvelteKit · TMDB metadata built-in · Docker ready
+    <br />
+    <br />
+    <a href="docs/INSTALLATION_GUIDE.md"><strong>📖 Installation Guide »</strong></a>
+    <br />
+    <br />
+    <a href="docs/api-reference.md">API Reference</a>
+    ·
+    <a href="https://github.com/duytran1406/flasharr/issues/new?labels=bug&template=bug-report.md">Report Bug</a>
+    ·
+    <a href="https://github.com/duytran1406/flasharr/issues/new?labels=enhancement&template=feature-request.md">Request Feature</a>
+  </p>
 </div>
 
-</div>
+<!-- TABLE OF CONTENTS -->
+<details>
+  <summary><strong>Table of Contents</strong></summary>
+  <ol>
+    <li><a href="#about-the-project">About The Project</a></li>
+    <li><a href="#built-with">Built With</a></li>
+    <li><a href="#getting-started">Getting Started</a></li>
+    <li><a href="#usage">Usage</a></li>
+    <li><a href="#arr-integration">*arr Integration</a></li>
+    <li><a href="#docker-tags">Docker Tags</a></li>
+    <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="#contributing">Contributing</a></li>
+    <li><a href="#license">License</a></li>
+    <li><a href="#acknowledgments">Acknowledgments</a></li>
+    <li><a href="#-buy-me-a-coffee">Buy Me a Coffee</a></li>
+  </ol>
+</details>
 
 ---
 
-## 🎉 Recent Improvements (v2.1)
+<!-- ABOUT THE PROJECT -->
 
-### Performance & Stability Enhancements
+## About The Project
 
-| Metric            | Before   | After   | Improvement            |
-| ----------------- | -------- | ------- | ---------------------- |
-| **Startup Time**  | 2-3 sec  | < 100ms | **30x faster** ⚡      |
-| **Memory (24h)**  | 12 GB    | 100 MB  | **99% reduction** 🎯   |
-| **Query Speed**   | 100ms    | 5ms     | **20x faster** 🚀      |
-| **DB Throughput** | 1x       | 5x      | **5x faster** 📊       |
-| **Account Bans**  | Possible | Zero    | **100% prevention** 🛡️ |
+<!-- Add screenshots here when available -->
+<!-- ![Flasharr Screenshot](docs/images/screenshot.png) -->
 
-### New Features ✨
+Flasharr is a high-performance download manager designed for the home media enthusiast. It downloads files from Fshare.vn at full VIP speeds and integrates seamlessly with the \*arr ecosystem (Sonarr, Radarr) for fully automated media management.
 
-- ✅ **Session Persistence**: Sessions survive restarts (30x faster startup)
-- ✅ **Circuit Breaker**: Prevents Fshare account bans with automatic recovery
-- ✅ **Memory Management**: Auto-eviction keeps memory stable at ~100 MB
-- ✅ **Database Optimization**: Connection pooling + indexes for 5-20x faster queries
-- ✅ **Accessibility**: WCAG 2.1 compliant with keyboard navigation
-- ✅ **Bundle Optimization**: Code splitting for faster initial load
+**Why Flasharr?**
 
-### Under the Hood 🔧
+- ⚡ **300 MB/s** download speeds with a Rust-powered backend
+- 🪶 **~30 MB** idle memory — runs on anything from a Raspberry Pi to a NAS
+- 🎬 **Sonarr & Radarr** compatible — acts as both a Newznab indexer and SABnzbd download client
+- 🔍 **TMDB metadata built-in** — no API key configuration needed
+- 📡 **Real-time WebSocket** updates — watch your downloads progress live
+- 🐳 **Docker-first** — one command to get running
+- 💎 **Modern UI** — dark-themed SvelteKit interface with responsive design
 
-- 🔐 **Anti-Ban Protection**: Rate limiting + exponential backoff
-- 💾 **Connection Pooling**: 5 concurrent database connections
-- 🗂️ **Smart Indexes**: Optimized for common query patterns
-- ♿ **Accessibility**: Proper ARIA roles and keyboard handlers
-- 📦 **Code Splitting**: Vendor chunks for better caching
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
----
+<!-- BUILT WITH -->
 
-## ✨ Features
+## Built With
 
-<table>
-<tr>
-<td width="50%">
+[![Rust][Rust-badge]][Rust-url]
+[![SvelteKit][Svelte-badge]][Svelte-url]
+[![SQLite][SQLite-badge]][SQLite-url]
+[![Docker][Docker-badge]][Docker-url]
+[![TypeScript][TypeScript-badge]][TypeScript-url]
 
-### 🚀 **Performance**
-
-- ⚡ **300 MB/s** download speeds
-- 🪶 **~30 MB** RAM usage (idle)
-- 🔥 **Rust-powered** backend
-- 📦 **Multi-arch** Docker images
-
-</td>
-<td width="50%">
-
-### 🎯 **Integration**
-
-- 🎬 **Sonarr & Radarr** compatible
-- 🔍 **TMDB** metadata enrichment
-- 📡 **Newznab API** indexer
-- 🔄 **Real-time** WebSocket updates
-
-</td>
-</tr>
-<tr>
-<td width="50%">
-
-### 🎨 **User Experience**
-
-- 💎 **Modern** SvelteKit UI
-- 📱 **Responsive** design
-- 🌙 **Dark mode** ready
-- ⚙️ **Easy** configuration
-
-</td>
-<td width="50%">
-
-### 🛡️ **Reliability**
-
-- 🔄 **Auto-retry** on failures
-- 💾 **SQLite** database
-- 🐳 **Docker** deployment
-- 📊 **Health** monitoring
-
-</td>
-</tr>
-</table>
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ---
 
-## 🚀 Quick Start
+<!-- GETTING STARTED -->
 
-### One-Line Installation
+## Getting Started
+
+### Prerequisites
+
+- **Docker** and **Docker Compose** — [Get Docker](https://docs.docker.com/get-docker/)
+- **Fshare VIP account** — [fshare.vn](https://www.fshare.vn/)
+- **Sonarr/Radarr** _(optional)_ — for automated media management
+
+### Quick Install
+
+**One-line install:**
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/duytran1406/flasharr/main/install.sh | bash
 ```
 
-### Docker Compose (Recommended)
+**Docker Compose:**
 
 ```bash
-# Download docker-compose.yml
+mkdir -p ~/flasharr && cd ~/flasharr
 curl -O https://raw.githubusercontent.com/duytran1406/flasharr/main/docker-compose.production.yml
 mv docker-compose.production.yml docker-compose.yml
-
-# Start Flasharr
 docker compose up -d
-
-# Access at http://localhost:8484
 ```
 
-### Docker Run
+**Docker Run:**
 
 ```bash
 docker run -d \
@@ -146,108 +130,34 @@ docker run -d \
   ghcr.io/duytran1406/flasharr:latest
 ```
 
----
+Open `http://localhost:8484` and complete the setup wizard.
 
-## 📦 Installation Methods
+> 📖 **New to Docker?** See the [**Complete Installation Guide**](docs/INSTALLATION_GUIDE.md) for step-by-step instructions with screenshots.
 
-<details>
-<summary><b>🐳 Docker Compose (Recommended)</b></summary>
-
-Create `docker-compose.yml`:
-
-```yaml
-version: "3.8"
-
-services:
-  flasharr:
-    image: ghcr.io/duytran1406/flasharr:latest
-    container_name: flasharr
-    restart: unless-stopped
-    ports:
-      - "8484:8484"
-    volumes:
-      - ./appData:/appData
-      # Optional: Mount your media library
-      # - /path/to/downloads:/appData/downloads
-    environment:
-      - FLASHARR_APPDATA_DIR=/appData
-      - RUST_LOG=flasharr=info,tower_http=info
-      - TZ=Asia/Bangkok
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8484/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-```
-
-Start:
-
-```bash
-docker compose up -d
-```
-
-</details>
-
-<details>
-<summary><b>🔄 Auto-Update with Watchtower</b></summary>
-
-Add Watchtower to your `docker-compose.yml`:
-
-```yaml
-services:
-  flasharr:
-    # ... your flasharr config
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-
-  watchtower:
-    image: containrrr/watchtower
-    container_name: watchtower
-    restart: unless-stopped
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    environment:
-      - WATCHTOWER_CLEANUP=true
-      - WATCHTOWER_POLL_INTERVAL=86400 # Check daily
-      - WATCHTOWER_LABEL_ENABLE=true
-```
-
-</details>
-
-<details>
-<summary><b>🏗️ Build from Source</b></summary>
-
-```bash
-# Clone repository
-git clone https://github.com/duytran1406/flasharr.git
-cd flasharr
-
-# Build with Docker
-docker compose up -d --build
-```
-
-</details>
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ---
 
-## ⚙️ Configuration
+<!-- USAGE -->
+
+## Usage
 
 ### First-Time Setup
 
-1. **Access Web UI**: Navigate to `http://localhost:8484`
-2. **Complete Setup Wizard**:
+1. Open `http://localhost:8484`
+2. Complete the **Setup Wizard**:
    - Enter Fshare credentials (VIP account required)
-   - Add TMDB API key ([Get free key](https://www.themoviedb.org/settings/api))
-   - Configure download paths
+   - Configure download path and concurrency
+   - Optionally connect Sonarr, Radarr, Jellyfin
+3. Get your **API key** from Settings → Services
 
 ### Environment Variables
 
-| Variable               | Description    | Default         |
-| ---------------------- | -------------- | --------------- |
-| `FLASHARR_APPDATA_DIR` | Data directory | `/appData`      |
-| `RUST_LOG`             | Log level      | `flasharr=info` |
-| `TZ`                   | Timezone       | `UTC`           |
+| Variable               | Default         | Description    |
+| ---------------------- | --------------- | -------------- |
+| `FLASHARR_APPDATA_DIR` | `/appData`      | Data directory |
+| `RUST_LOG`             | `flasharr=info` | Log level      |
+| `TZ`                   | `UTC`           | Timezone       |
 
 ### Volume Mounts
 
@@ -256,333 +166,216 @@ docker compose up -d --build
 | `./appData`          | `/appData`           | Database & config |
 | `/path/to/downloads` | `/appData/downloads` | Downloaded files  |
 
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
 ---
 
-## 🔗 \*arr Integration
+<!-- ARR INTEGRATION -->
 
-Flasharr integrates with Sonarr/Radarr in **two ways**:
+## \*arr Integration
 
-1. **As a Newznab Indexer** - For searching and discovering media
-2. **As a SABnzbd Download Client** - For automated downloading
+Flasharr integrates with Sonarr and Radarr as both a **Newznab Indexer** (search) and a **SABnzbd Download Client** (automated downloads).
 
-### 🔍 Setup as Indexer (Search)
+| Setting             | Sonarr                             | Radarr                             |
+| ------------------- | ---------------------------------- | ---------------------------------- |
+| **Indexer URL**     | `http://flasharr:8484/api/newznab` | `http://flasharr:8484/api/newznab` |
+| **Categories**      | `5000,5030,5040`                   | `2000,2040,2045`                   |
+| **Download Client** | SABnzbd                            | SABnzbd                            |
+| **Host**            | `flasharr`                         | `flasharr`                         |
+| **Port**            | `8484`                             | `8484`                             |
+| **URL Base**        | `/sabnzbd`                         | `/sabnzbd`                         |
+| **Category**        | `tv`                               | `movies`                           |
 
-This allows Sonarr/Radarr to search for media through Flasharr's Newznab-compatible API.
+> 📖 **Need the full walkthrough?** See the [Installation Guide → Steps 7 & 8](docs/INSTALLATION_GUIDE.md#-step-7--add-flasharr-to-sonarr-tv-shows)
 
-**In Sonarr/Radarr:**
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-1. Navigate to **Settings** → **Indexers** → **Add Indexer** → **Newznab**
-2. Configure:
-   ```
-   Name:        Flasharr Indexer
-   URL:         http://flasharr:8484/api/indexer
-   API Key:     <your-flasharr-api-key>
-   Categories:  (leave default or customize)
-   ```
-3. Click **Test** to verify connection
-4. Click **Save**
+---
 
-> **Note**: Get your API key from Flasharr Settings → Services → Newznab section
+<!-- DOCKER TAGS -->
 
-### 📥 Setup as Download Client
+## Docker Tags
 
-Flasharr **simulates the SABnzbd API** to act as a download client. This allows Sonarr/Radarr to automatically send downloads to Flasharr.
+| Tag       | Description                  | Updates           |
+| --------- | ---------------------------- | ----------------- |
+| `stable`  | Production recommended       | On releases       |
+| `latest`  | Latest build from main       | On push to main   |
+| `nightly` | Daily development build      | Daily at 2 AM UTC |
+| `v3.0.0`  | Specific version (immutable) | Never             |
+| `preprod` | Pre-production testing       | Manual            |
 
-**In Sonarr/Radarr:**
-
-1. Navigate to **Settings** → **Download Clients** → **Add Download Client** → **SABnzbd**
-2. Configure:
-   ```
-   Name:        Flasharr
-   Enable:      ✓
-   Host:        flasharr
-   Port:        8484
-   API Key:     <your-flasharr-api-key>
-   URL Base:    /sabnzbd
-   Use SSL:     ☐ (unless using HTTPS)
-   Category:    (optional: tv, movies, etc.)
-   ```
-3. Click **Test** to verify connection
-4. Click **Save**
-
-> **Important**: Flasharr implements SABnzbd's API endpoints (`/sabnzbd/api`) to maintain compatibility with \*arr applications.
-
-### 🐳 Docker Network Configuration
-
-If running in Docker, ensure all containers are on the **same network**:
-
-```yaml
-version: "3.8"
-
-services:
-  flasharr:
-    image: ghcr.io/duytran1406/flasharr:latest
-    container_name: flasharr
-    ports:
-      - "8484:8484"
-    networks:
-      - media
-
-  sonarr:
-    image: linuxserver/sonarr:latest
-    container_name: sonarr
-    ports:
-      - "8989:8989"
-    networks:
-      - media
-
-  radarr:
-    image: linuxserver/radarr:latest
-    container_name: radarr
-    ports:
-      - "7878:7878"
-    networks:
-      - media
-
-networks:
-  media:
-    driver: bridge
-```
-
-### ✅ Verification
-
-Test the integration:
+### Updating
 
 ```bash
-# Test from Sonarr/Radarr container
-docker exec sonarr ping flasharr
-docker exec radarr ping flasharr
-
-# Check Flasharr logs
-docker logs flasharr | grep -i sabnzbd
+docker compose pull && docker compose up -d
 ```
 
-### 🔧 Troubleshooting
-
-<details>
-<summary><b>Connection refused</b></summary>
-
-- Verify containers are on the same Docker network
-- Check if Flasharr is accessible: `curl http://flasharr:8484/health`
-- Ensure port 8484 is not blocked by firewall
-
-</details>
-
-<details>
-<summary><b>API key invalid</b></summary>
-
-- Copy the exact API key from Flasharr Settings → Services → Newznab
-- Ensure no extra spaces or characters
-- Regenerate the API key if needed
-
-</details>
-
-<details>
-<summary><b>Downloads not starting</b></summary>
-
-- Check Flasharr logs: `docker logs flasharr`
-- Verify Fshare credentials are configured in Flasharr
-- Ensure the download URL is valid
-
-</details>
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ---
 
-## 📊 Performance
+<!-- PERFORMANCE -->
 
-| Metric              | Value          |
-| ------------------- | -------------- |
-| **Memory (Idle)**   | ~30 MB         |
-| **Memory (Active)** | ~100 MB        |
-| **CPU (Idle)**      | < 0.5%         |
-| **Download Speed**  | Up to 300 MB/s |
-| **Startup Time**    | ~0.2s          |
+## Performance
 
----
+| Metric          | Value          |
+| --------------- | -------------- |
+| Memory (Idle)   | ~30 MB         |
+| Memory (Active) | ~100 MB        |
+| CPU (Idle)      | < 0.5%         |
+| Download Speed  | Up to 300 MB/s |
+| Startup Time    | ~0.2s          |
 
-## 🐳 Docker Tags
-
-| Tag       | Description              | Update Frequency  |
-| --------- | ------------------------ | ----------------- |
-| `latest`  | Latest stable release    | On new releases   |
-| `stable`  | Production recommended   | On new releases   |
-| `nightly` | Latest development build | Daily at 2 AM UTC |
-| `v2.0.0`  | Specific version         | Never             |
-| `v2.0`    | Auto-patch updates       | On patch releases |
-| `v2`      | Auto-minor updates       | On minor releases |
-
-**Recommended for production**: `stable` or specific version tags
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ---
 
-## 📚 Documentation
+<!-- ROADMAP -->
 
-- 📖 [Installation Guide](docs/INSTALLATION.md)
-- ⚙️ [Configuration](docs/CONFIGURATION.md)
-- 🔧 [Troubleshooting](docs/TROUBLESHOOTING.md)
-- 🔌 [API Documentation](docs/API.md)
-- 🏷️ [Docker Tags Guide](docs/DOCKER_TAGS.md)
+## Roadmap
+
+- [x] Multi-host download engine (Fshare)
+- [x] Sonarr & Radarr integration (Newznab + SABnzbd)
+- [x] TMDB metadata enrichment
+- [x] Real-time WebSocket progress
+- [x] Batch downloads (Smart Grab)
+- [x] Auto-retry with exponential backoff
+- [ ] Jellyfin library sync
+- [ ] Multi-language search support
+- [ ] Additional host providers
+- [ ] Mobile-friendly PWA
+
+See the [open issues](https://github.com/duytran1406/flasharr/issues) for a full list of proposed features and known issues.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ---
 
-## 🆘 Troubleshooting
+<!-- DOCUMENTATION -->
 
-### Common Issues
+## Documentation
+
+| Guide                                               | Description                  |
+| --------------------------------------------------- | ---------------------------- |
+| 📖 [Installation Guide](docs/INSTALLATION_GUIDE.md) | Complete setup for beginners |
+| 🔧 [API Reference](docs/api-reference.md)           | REST API endpoints           |
+| 📡 [WebSocket Protocol](docs/websocket-protocol.md) | Real-time update protocol    |
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+---
+
+<!-- TROUBLESHOOTING -->
+
+## Troubleshooting
 
 <details>
 <summary><b>Container won't start</b></summary>
 
 ```bash
-# Check logs
 docker logs flasharr
-
-# Verify ports aren't in use
-netstat -tulpn | grep 8484
-
-# Check volume permissions
-ls -la ./appData
+lsof -i :8484        # Check if port is in use
+ls -la ./appData     # Check permissions
 ```
-
-</details>
-
-<details>
-<summary><b>Fshare login fails</b></summary>
-
-- Verify VIP account is active
-- Check credentials in settings
-- Ensure IP isn't blocked by Fshare
-- Try manual login at fshare.vn
 
 </details>
 
 <details>
 <summary><b>Sonarr/Radarr can't connect</b></summary>
 
-```bash
-# Verify containers are on same network
-docker network inspect bridge
-
-# Test connectivity
-docker exec sonarr ping flasharr
-
-# Check API key matches
-```
+- Ensure containers are on the same Docker network
+- Use the machine's IP instead of `flasharr` if in separate compose files
+- Check API key matches: Flasharr Settings → Services
 
 </details>
 
-### View Logs
+<details>
+<summary><b>Downloads not starting</b></summary>
 
-```bash
-# Live logs
-docker logs -f flasharr
+- Verify Fshare VIP subscription is active
+- Check credentials in Settings → Fshare
+- View logs: `docker logs flasharr | grep -i error`
 
-# Last 100 lines
-docker logs --tail 100 flasharr
+</details>
 
-# Save logs to file
-docker logs flasharr > flasharr.log 2>&1
-```
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ---
 
-## 🔄 Updating
+<!-- CONTRIBUTING -->
 
-### Docker Compose
+## Contributing
 
-```bash
-docker compose pull
-docker compose up -d
-```
+Contributions are what make the open-source community amazing. Any contributions you make are **greatly appreciated**.
 
-### Docker Run
-
-```bash
-docker pull ghcr.io/duytran1406/flasharr:latest
-docker stop flasharr
-docker rm flasharr
-# Run with same command as before
-```
-
----
-
-## 🛠️ Development
-
-### Prerequisites
-
-- Rust 1.75+
-- Node.js 20+
-- Docker (optional)
-
-### Local Development
-
-```bash
-# Clone repository
-git clone https://github.com/duytran1406/flasharr.git
-cd flasharr
-
-# Start backend
-cd backend
-cargo run
-
-# Start frontend (new terminal)
-cd frontend
-npm install
-npm run dev
-```
-
-### Build
-
-```bash
-# Backend
-cd backend
-cargo build --release
-
-# Frontend
-cd frontend
-npm run build
-```
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/amazing-feature`)
+3. Commit your Changes (`git commit -m 'feat: add amazing feature'`)
+4. Push to the Branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
----
+> **Note:** This project uses [Conventional Commits](https://www.conventionalcommits.org/) for automatic versioning. Prefix your commits with `feat:`, `fix:`, `docs:`, etc.
 
-## 📜 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ---
 
-## 🙏 Acknowledgments
+<!-- LICENSE -->
 
-- [Sonarr](https://sonarr.tv/) & [Radarr](https://radarr.video/) - The amazing \*arr ecosystem
-- [TMDB](https://www.themoviedb.org/) - Media metadata API
-- [Fshare](https://www.fshare.vn/) - Vietnamese file hosting service
+## License
+
+Distributed under the MIT License. See [LICENSE](LICENSE) for more information.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+---
+
+<!-- ACKNOWLEDGMENTS -->
+
+## Acknowledgments
+
+- [Sonarr](https://sonarr.tv/) & [Radarr](https://radarr.video/) — The amazing \*arr ecosystem
+- [TMDB](https://www.themoviedb.org/) — Media metadata API
+- [Fshare](https://www.fshare.vn/) — Vietnamese file hosting service
+- [Best-README-Template](https://github.com/othneildrew/Best-README-Template) — README structure inspiration
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 ---
 
-## 📞 Support
+<!-- BUY ME A COFFEE -->
 
-- **Issues**: [GitHub Issues](https://github.com/duytran1406/flasharr/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/duytran1406/flasharr/discussions)
+## ☕ Buy Me a Coffee
 
----
+If you find Flasharr useful, consider buying me a coffee! Scan the QR code below:
 
 <div align="center">
-
-**⭐ Star this repo if you find it useful!**
-
-Made with ❤️ for the home media enthusiast community
-
-[⬆ Back to Top](#-flasharr)
-
+  <img src="docs/images/buy-me-a-coffee.png" alt="Buy me a Coffee QR Code" width="250">
+  <br />
+  <sub>Thank you for your support! 🙏</sub>
 </div>
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+<!-- MARKDOWN LINKS & IMAGES -->
+
+[contributors-shield]: https://img.shields.io/github/contributors/duytran1406/flasharr.svg?style=for-the-badge
+[contributors-url]: https://github.com/duytran1406/flasharr/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/duytran1406/flasharr.svg?style=for-the-badge
+[forks-url]: https://github.com/duytran1406/flasharr/network/members
+[stars-shield]: https://img.shields.io/github/stars/duytran1406/flasharr.svg?style=for-the-badge
+[stars-url]: https://github.com/duytran1406/flasharr/stargazers
+[issues-shield]: https://img.shields.io/github/issues/duytran1406/flasharr.svg?style=for-the-badge
+[issues-url]: https://github.com/duytran1406/flasharr/issues
+[license-shield]: https://img.shields.io/github/license/duytran1406/flasharr.svg?style=for-the-badge
+[license-url]: https://github.com/duytran1406/flasharr/blob/main/LICENSE
+[Rust-badge]: https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white
+[Rust-url]: https://www.rust-lang.org/
+[Svelte-badge]: https://img.shields.io/badge/SvelteKit-FF3E00?style=for-the-badge&logo=svelte&logoColor=white
+[Svelte-url]: https://kit.svelte.dev/
+[SQLite-badge]: https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white
+[SQLite-url]: https://www.sqlite.org/
+[Docker-badge]: https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white
+[Docker-url]: https://www.docker.com/
+[TypeScript-badge]: https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white
+[TypeScript-url]: https://www.typescriptlang.org/

@@ -11,6 +11,7 @@ use crate::utils::title_matcher::{
 };
 use crate::utils::unified_scorer::{calculate_match_score, is_valid_match};
 use crate::utils::smart_tokenizer::smart_parse;
+use crate::db::CachedFolderItem;
 use tracing::info;
 use regex::Regex;
 use std::sync::Arc;
@@ -18,6 +19,7 @@ use crate::AppState;
 use crate::TmdbEnrichmentCache;
 use crate::services::tmdb_service::MediaEnrichment;
 use reqwest::Client;
+use moka::future::Cache;
 use serde_json::Value;
 use std::sync::OnceLock;
 
@@ -45,6 +47,26 @@ pub struct SmartSearchResponse {
     pub groups: Option<Vec<QualityGroup>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seasons: Option<Vec<SeasonGroup>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder_matches: Option<Vec<FolderMatch>>,
+}
+
+/// A folder/file match from the local folder cache
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FolderMatch {
+    pub name: String,
+    pub title: String,
+    pub fshare_url: String,
+    pub linkcode: String,
+    pub is_directory: bool,
+    pub size: u64,
+    pub quality: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tmdb_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poster_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -88,10 +110,8 @@ pub async fn handle_movie_search(
     state: Arc<AppState>,
     req: SmartSearchRequest,
 ) -> axum::response::Response {
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .unwrap_or_else(|_| Client::new());
+    // Use shared HTTP client for connection pooling + TLS reuse
+    let client = (*state.http_client).clone();
 
     let title = req.title.clone();
     let year_str = match req.year {
@@ -202,13 +222,21 @@ pub async fn handle_movie_search(
     info!("Movie search queries (parallel): {:?}", all_queries);
 
     let client_arc = Arc::new(client.clone());
+    let fshare_cache = state.fshare_search_cache.clone();
     let fshare_futures: Vec<_> = all_queries.iter().map(|q| {
         let c = Arc::clone(&client_arc);
         let q = q.clone();
-        async move { execute_fshare_search(&c, &q, 60).await }
+        let cache = fshare_cache.clone();
+        async move { execute_fshare_search_cached(&c, &q, 60, &cache).await }
     }).collect();
 
-    let all_search_batches = futures_util::future::join_all(fshare_futures).await;
+    // Run Fshare API + folder cache search in parallel
+    let (all_search_batches, folder_matches) = tokio::join!(
+        futures_util::future::join_all(fshare_futures),
+        search_folder_cache(&state, &all_queries)
+    );
+
+    info!("Folder cache returned {} matches", folder_matches.len());
 
     // Flatten + deduplicate by pure fcode
     let mut results_pool: Vec<RawFshareResult> = Vec::new();
@@ -244,27 +272,7 @@ pub async fn handle_movie_search(
             false, // is_tv_series = false for movies
         );
         
-        let mut best_score = primary_score;
-        
-        // Map collection items with unified scorer
-        for (ct, cy, cid, cp) in &collections {
-            let collection_year = cy.parse::<u32>().ok();
-            let collection_score = calculate_match_score(
-                ct,
-                &r.name,
-                parsed.year,
-                collection_year,
-                &[], // No aliases for collection items
-                false,
-            );
-            
-            // Collection item wins if it scores higher
-            if collection_score > best_score {
-                best_score = collection_score;
-                final_id = Some(*cid);
-                final_poster = cp.clone();
-            }
-        }
+        let best_score = primary_score;
 
         // FILTER: Use unified scorer's validation
         if !is_valid_match(best_score, false) {
@@ -344,6 +352,7 @@ pub async fn handle_movie_search(
         r#type: "movie".to_string(),
         groups: Some(groups),
         seasons: None,
+        folder_matches: if folder_matches.is_empty() { None } else { Some(folder_matches) },
     };
     
     state.search_cache.insert(cache_key, response.clone()).await;
@@ -356,11 +365,8 @@ pub async fn handle_tv_search(
     state: Arc<AppState>,
     req: SmartSearchRequest,
 ) -> axum::response::Response {
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-        .build()
-        .unwrap_or_else(|_| Client::new());
+    // Use shared HTTP client for connection pooling + TLS reuse
+    let client = (*state.http_client).clone();
 
     let title = req.title.clone();
     let season = req.season;
@@ -498,14 +504,21 @@ pub async fn handle_tv_search(
     // ── 3. PARALLEL FSHARE SEARCHES ─────────────────────────────────────────
     let phase2_start = std::time::Instant::now();
     let client_arc = Arc::new(client.clone());
+    let fshare_cache = state.fshare_search_cache.clone();
     let fshare_futures: Vec<_> = all_queries.iter().map(|q| {
         let c = Arc::clone(&client_arc);
         let q = q.clone();
-        async move { execute_fshare_search(&c, &q, 100).await }
+        let cache = fshare_cache.clone();
+        async move { execute_fshare_search_cached(&c, &q, 100, &cache).await }
     }).collect();
 
-    let all_search_batches = futures_util::future::join_all(fshare_futures).await;
-    info!("📊 [PERF] Phase 2 (parallel Fshare searches) took: {:?}", phase2_start.elapsed());
+    // Run Fshare API + folder cache search in parallel
+    let (all_search_batches, folder_matches) = tokio::join!(
+        futures_util::future::join_all(fshare_futures),
+        search_folder_cache(&state, &all_queries)
+    );
+    info!("📊 [PERF] Phase 2 (parallel Fshare + folder cache) took: {:?}", phase2_start.elapsed());
+    info!("Folder cache returned {} matches for TV", folder_matches.len());
 
     // Flatten + deduplicate by pure fcode
     let mut results_pool: Vec<RawFshareResult> = Vec::new();
@@ -1102,8 +1115,9 @@ pub async fn handle_tv_search(
         query: query_season,
         total_found: seasons.iter().map(|s| s.episodes_grouped.iter().map(|e| e.files.len()).sum::<usize>()).sum(),
         r#type: if episode.is_some() { "episode".to_string() } else { "tv".to_string() },
-        groups: None, // TV uses seasons structure
+        groups: None,
         seasons: Some(seasons),
+        folder_matches: if folder_matches.is_empty() { None } else { Some(folder_matches) },
     };
     
     info!("📊 [PERF] Phase 4 (Parse & Evaluate) took: {:?}", phase4_start.elapsed());
@@ -1116,9 +1130,56 @@ pub async fn handle_tv_search(
     Json(response).into_response()
 }
 
-/// Delegate Fshare search to SearchPipeline module
+/// Delegate Fshare search to SearchPipeline module (uncached — for snowball/targeted)
 async fn execute_fshare_search(client: &Client, query: &str, limit: usize) -> Vec<RawFshareResult> {
     SearchPipeline::execute_fshare_search(client, query, limit).await
+}
+
+/// Delegate Fshare search with caching — for primary search queries
+async fn execute_fshare_search_cached(
+    client: &Client,
+    query: &str,
+    limit: usize,
+    cache: &Cache<String, Vec<RawFshareResult>>,
+) -> Vec<RawFshareResult> {
+    SearchPipeline::execute_fshare_search_cached(client, query, limit, cache).await
+}
+
+/// Search the local folder cache with multiple queries, dedup by linkcode
+async fn search_folder_cache(state: &Arc<AppState>, queries: &[String]) -> Vec<FolderMatch> {
+    let mut seen = std::collections::HashSet::new();
+    let mut matches = Vec::new();
+
+    for q in queries {
+        if let Ok(results) = state.folder_cache_service.search(q, 20).await {
+            for item in results {
+                if seen.insert(item.linkcode.clone()) {
+                    matches.push(FolderMatch {
+                        name: item.name,
+                        title: item.title,
+                        fshare_url: item.fshare_url,
+                        linkcode: item.linkcode,
+                        is_directory: item.is_directory,
+                        size: item.size,
+                        quality: item.quality,
+                        tmdb_id: item.tmdb_id,
+                        poster_path: item.poster_path,
+                        year: item.year,
+                    });
+                }
+            }
+        }
+    }
+
+    // Prioritize: directories first (collection folders), then by size desc
+    matches.sort_by(|a, b| {
+        b.is_directory.cmp(&a.is_directory)
+            .then(b.size.cmp(&a.size))
+    });
+
+    // Cap at 30 results
+    matches.truncate(30);
+    matches
 }
 
 // =============================================================================
