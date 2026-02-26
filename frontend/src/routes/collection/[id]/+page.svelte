@@ -13,11 +13,7 @@
   import { ui } from "$lib/stores/ui.svelte";
   import { animeFade, animeFly } from "$lib/animations";
   import Button from "$lib/components/ui/Button.svelte";
-  import {
-    fetchAllMovies,
-    findMovieInList,
-    type RadarrMovie,
-  } from "$lib/stores/arr";
+  import { fetchAllMovies, type RadarrMovie } from "$lib/stores/arr";
 
   const collectionId = $derived(page.params.id as string);
 
@@ -29,9 +25,8 @@
   let allMovies = $state<RadarrMovie[]>([]);
   let addingIds = $state<Set<number>>(new Set());
 
-  function getLibraryMovie(tmdbId: number): RadarrMovie | null {
-    return findMovieInList(allMovies, tmdbId);
-  }
+  // Derived reactive Set — Svelte tracks this properly so UI updates instantly
+  let libraryTmdbIds = $derived(new Set(allMovies.map((m) => m.tmdbId)));
 
   async function loadData() {
     loading = true;
@@ -60,7 +55,7 @@
   let stats = $derived.by(() => {
     if (!collection?.parts) return null;
     const parts = collection.parts;
-    const ownedCount = parts.filter((p) => getLibraryMovie(p.id)).length;
+    const ownedCount = parts.filter((p) => libraryTmdbIds.has(p.id)).length;
     return {
       total_parts: parts.length,
       owned: ownedCount,
@@ -203,11 +198,9 @@
               {/each}
             {:else if collection?.parts}
               {#each [...collection.parts].sort((a, b) => new Date(a.release_date || 0).getTime() - new Date(b.release_date || 0).getTime()) as movie}
-                {@const libMovie = getLibraryMovie(movie.id)}
-                {@const inLibrary = libMovie !== null}
                 <div
                   class="col-card"
-                  class:owned={inLibrary}
+                  class:owned={libraryTmdbIds.has(movie.id)}
                   in:animeFly={{ y: 20, delay: 100 }}
                   role="button"
                   tabindex="0"
@@ -227,7 +220,7 @@
 
                     <!-- Library Status Badge (Top Left) -->
                     <div class="status-tags">
-                      {#if inLibrary}
+                      {#if libraryTmdbIds.has(movie.id)}
                         <span class="status-badge owned-badge">
                           <span class="material-icons">check_circle</span>
                           OWNED
@@ -262,7 +255,7 @@
                               {movie.vote_average.toFixed(1)}
                             </span>
                           {/if}
-                          {#if inLibrary}
+                          {#if libraryTmdbIds.has(movie.id)}
                             <span class="meta-lib-status meta-owned"
                               >IN LIBRARY</span
                             >
@@ -284,7 +277,7 @@
                               handleSmartSearch(movie);
                             }}>Search</Button
                           >
-                          {#if !inLibrary}
+                          {#if !libraryTmdbIds.has(movie.id)}
                             <Button
                               size="sm"
                               variant="ghost"
