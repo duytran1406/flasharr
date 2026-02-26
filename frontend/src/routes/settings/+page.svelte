@@ -12,6 +12,7 @@
     indexerSettings,
     sonarrSettings,
     radarrSettings,
+    folderSourceUrl,
   } from "$lib/stores/system";
   import { toasts } from "$lib/stores/toasts";
   import { IdentityCard, Button } from "$lib/components";
@@ -50,6 +51,8 @@
   let concurrency = $state(3);
   let threads = $state(4);
   let downloadPath = $state("");
+  let folderSourceGistUrl = $state("");
+  let folderCacheRefreshing = $state(false);
 
   /** Custom drag handler for the concurrency hex slider */
   function onSliderPointerDown(e: PointerEvent) {
@@ -99,6 +102,7 @@
         systemStore.fetchSonarrSettings(),
         systemStore.fetchRadarrSettings(),
         systemStore.fetchLogs(),
+        systemStore.fetchFolderSourceConfig(),
       ]);
 
       // Initialize local form state from stores (one-time, non-reactive read)
@@ -106,6 +110,9 @@
       concurrency = dlSettings.max_concurrent;
       threads = dlSettings.segments_per_download;
       downloadPath = dlSettings.directory;
+
+      const fsUrl = get(folderSourceUrl);
+      folderSourceGistUrl = fsUrl;
 
       const idxSettings = get(indexerSettings);
       indexerApiKey = idxSettings.api_key;
@@ -156,10 +163,64 @@
       segments_per_download: parseInt(threads.toString()),
     });
 
+    // Also save folder source URL
+    if (folderSourceGistUrl.trim()) {
+      await systemStore.saveFolderSourceConfig(folderSourceGistUrl.trim());
+    } else {
+      // Clear the saved URL if input is empty
+      await systemStore.saveFolderSourceConfig("");
+    }
+
     if (result.success) {
       toasts.success(result.message || "Engine configuration saved");
     } else {
       toasts.error(result.message || "Failed to save configuration");
+    }
+  }
+
+  async function refreshFolderCache() {
+    if (folderCacheRefreshing) return;
+
+    // Validate the URL before triggering sync
+    const url = folderSourceGistUrl.trim();
+    if (!url) {
+      toasts.error("Folder source URL is empty — enter a URL first");
+      return;
+    }
+
+    // Validate URL format
+    try {
+      const parsed = new URL(url);
+      if (!parsed.protocol.startsWith("http")) {
+        toasts.error("Folder source must be an HTTP/HTTPS URL");
+        return;
+      }
+    } catch {
+      toasts.error("Invalid URL format — please check the folder source link");
+      return;
+    }
+
+    // Validate file extension
+    if (!url.endsWith(".json")) {
+      toasts.error("Folder source must point to a .json file");
+      return;
+    }
+
+    folderCacheRefreshing = true;
+    try {
+      // Save the URL first
+      await systemStore.saveFolderSourceConfig(url);
+      // Trigger backend sync
+      const resp = await fetch("/api/folder-source/sync", { method: "POST" });
+      if (resp.ok) {
+        toasts.success("Folder cache sync started — refreshing in background");
+      } else {
+        toasts.error("Failed to trigger folder cache sync");
+      }
+    } catch (err) {
+      toasts.error("Network error — could not reach server");
+    } finally {
+      folderCacheRefreshing = false;
     }
   }
 
@@ -392,8 +453,40 @@
               </div>
             </div>
 
+            <!-- Folder Source URL section -->
+            <div class="dl-section dl-section--sep">
+              <div class="dl-path-field">
+                <div class="dl-path-label">
+                  <span class="material-icons">link</span>
+                  <span>FOLDER SOURCE</span>
+                </div>
+                <div class="dl-folder-source-row">
+                  <input
+                    type="text"
+                    id="b-folder-source"
+                    bind:value={folderSourceGistUrl}
+                    placeholder="https://gist.githubusercontent.com/.../fshare_sources.json"
+                    class="dl-path-input"
+                  />
+                  <button
+                    class="dl-refresh-btn"
+                    class:spinning={folderCacheRefreshing}
+                    onclick={refreshFolderCache}
+                    disabled={folderCacheRefreshing}
+                    title="Refresh folder cache"
+                  >
+                    <span class="material-icons"
+                      >{folderCacheRefreshing
+                        ? "hourglass_empty"
+                        : "sync"}</span
+                    >
+                  </button>
+                </div>
+              </div>
+            </div>
+
             <!-- Concurrency section -->
-            <div class="dl-section dl-section--conc">
+            <div class="dl-section dl-section--conc dl-section--sep">
               <div class="dl-conc-hud">
                 <div class="dl-conc-header">
                   <span class="dl-conc-label">CONCURRENCY</span>
@@ -422,7 +515,7 @@
                         class="dl-dot"
                         class:lit={i < concurrency}
                         class:hidden={i === concurrency - 1}
-                        style="left: calc({i / 9} * (100% - 44px) + 18px);"
+                        style="left: calc({i / 9} * (100% - 40px) + 16px);"
                       ></div>
                     {/each}
                   </div>
@@ -1556,8 +1649,10 @@
   .dl-section {
     padding: 0.85rem 0.85rem;
   }
-  .dl-section--conc {
+  .dl-section--sep {
     border-top: 1px solid rgba(255, 255, 255, 0.05);
+  }
+  .dl-section--conc {
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -1605,6 +1700,58 @@
   .dl-path-input:focus {
     border-color: rgba(0, 243, 255, 0.4);
     box-shadow: 0 0 10px rgba(0, 243, 255, 0.1);
+  }
+
+  /* Folder source row: input + refresh btn */
+  .dl-folder-source-row {
+    display: flex;
+    gap: 0.4rem;
+    align-items: stretch;
+  }
+  .dl-folder-source-row .dl-path-input {
+    flex: 1;
+    min-width: 0;
+  }
+  .dl-refresh-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    min-width: 36px;
+    background: rgba(0, 243, 255, 0.06);
+    border: 1px solid rgba(0, 243, 255, 0.15);
+    border-radius: 8px;
+    color: rgba(0, 243, 255, 0.7);
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .dl-refresh-btn .material-icons {
+    font-size: 1.1rem;
+    transition: transform 0.3s ease;
+  }
+  .dl-refresh-btn:hover:not(:disabled) {
+    background: rgba(0, 243, 255, 0.12);
+    border-color: rgba(0, 243, 255, 0.35);
+    color: #00f3ff;
+    box-shadow: 0 0 12px rgba(0, 243, 255, 0.15);
+  }
+  .dl-refresh-btn:active:not(:disabled) {
+    transform: scale(0.92);
+  }
+  .dl-refresh-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .dl-refresh-btn.spinning .material-icons {
+    animation: spin-icon 1s linear infinite;
+  }
+  @keyframes spin-icon {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .dl-conc-hud {
@@ -1708,9 +1855,9 @@
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
-    left: calc(var(--pct, 0) * (100% - 44px));
-    width: 44px;
-    height: 44px;
+    left: calc(var(--pct, 0) * (100% - 40px));
+    width: 40px;
+    height: 40px;
     border-radius: 50%;
     background: radial-gradient(
       circle at 38% 32%,
