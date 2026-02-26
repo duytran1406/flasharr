@@ -14,7 +14,7 @@
   import MediaCard from "$lib/components/MediaCard.svelte";
 
   // State
-  let activeTab: "series" | "movies" = $state("series");
+  let activeTab: "series" | "movies" | "collections" = $state("series");
   let viewMode: "grid" | "list" = $state("grid");
   let searchQuery = $state("");
   let sortBy = $state("title");
@@ -64,24 +64,29 @@
     } finally {
       loading = false;
     }
+  });
 
-    // Infinite scroll sentinel
+  // Infinite scroll sentinel — must be top-level $effect, NOT inside onMount
+  // (Svelte 5 throws effect_orphan if $effect is called inside a callback)
+  $effect(() => {
+    const el = sentinel;
+    if (!el) return;
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting) {
           const total =
             activeTab === "series"
               ? filteredSeries().length
-              : filteredMovies().length;
+              : activeTab === "movies"
+                ? filteredMovies().length
+                : 0; // collections tab doesn't paginate
           if (displayCount < total) displayCount += ITEMS_STEP;
         }
       },
       { rootMargin: "200px" },
     );
-    $effect(() => {
-      if (sentinel) observer.observe(sentinel);
-      return () => observer.disconnect();
-    });
+    observer.observe(el);
+    return () => observer.disconnect();
   });
 
   // Helpers to read stats from nested statistics
@@ -200,13 +205,40 @@
     if (status === "upcoming") return "#fbbf24";
     return "#64748b";
   }
-  // Progressively-visible items (infinite scroll)
+  // Collections: group movies by collection.tmdbId (derived, no extra fetch)
+  interface LibraryCollection {
+    tmdbId: number;
+    title: string;
+    movies: RadarrMovie[];
+  }
+  let collections = $derived(() => {
+    const map = new Map<number, LibraryCollection>();
+    for (const m of movies) {
+      if (!m.collection?.tmdbId) continue;
+      const ex = map.get(m.collection.tmdbId);
+      if (ex) {
+        ex.movies.push(m);
+      } else {
+        map.set(m.collection.tmdbId, {
+          tmdbId: m.collection.tmdbId,
+          title: m.collection.title,
+          movies: [m],
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      a.title.localeCompare(b.title),
+    );
+  });
+
+  // Progressively-visible items (infinite scroll) — only for series/movies tabs
   let visibleItems = $derived(() => {
     const list = activeTab === "series" ? filteredSeries() : filteredMovies();
     return list.slice(0, displayCount);
   });
 
   let hasMoreItems = $derived(() => {
+    if (activeTab === "collections") return false;
     const list = activeTab === "series" ? filteredSeries() : filteredMovies();
     return displayCount < list.length;
   });
@@ -255,57 +287,72 @@
           {#if !loading}<span class="tab-count">{movies.length}</span>{/if}
         </button>
       {/if}
+      {#if hasRadarr && !loading && collections().length > 0}
+        <button
+          class="tab"
+          class:active={activeTab === "collections"}
+          onclick={() => {
+            activeTab = "collections";
+          }}
+        >
+          <span class="material-icons">collections_bookmark</span>
+          <span>Collections</span>
+          <span class="tab-count">{collections().length}</span>
+        </button>
+      {/if}
     </div>
 
-    <div class="toolbar">
-      <div class="search-box">
-        <span class="material-icons">search</span>
-        <input
-          type="text"
-          bind:value={searchQuery}
-          placeholder="Search library..."
-        />
+    {#if activeTab !== "collections"}
+      <div class="toolbar">
+        <div class="search-box">
+          <span class="material-icons">search</span>
+          <input
+            type="text"
+            bind:value={searchQuery}
+            placeholder="Search library..."
+          />
+        </div>
+
+        <select class="sort-select" bind:value={sortBy}>
+          <option value="title">Name</option>
+          <option value="year">Year</option>
+          <option value="size">Size</option>
+          {#if activeTab === "series"}<option value="missing">Missing</option
+            >{/if}
+        </select>
+
+        <select class="sort-select" bind:value={filterStatus}>
+          <option value="all">All</option>
+          {#if activeTab === "series"}
+            <option value="continuing">Continuing</option>
+            <option value="ended">Ended</option>
+            <option value="missing">Has Missing</option>
+            <option value="complete">Complete</option>
+          {:else}
+            <option value="downloaded">Downloaded</option>
+            <option value="missing">Missing File</option>
+            <option value="monitored">Monitored</option>
+          {/if}
+        </select>
+
+        <div class="view-toggle">
+          <button
+            class:active={viewMode === "grid"}
+            onclick={() => (viewMode = "grid")}
+            title="Grid view"
+          >
+            <span class="material-icons">grid_view</span>
+          </button>
+          <button
+            class:active={viewMode === "list"}
+            onclick={() => (viewMode = "list")}
+            title="List view"
+          >
+            <span class="material-icons">view_list</span>
+          </button>
+        </div>
       </div>
-
-      <select class="sort-select" bind:value={sortBy}>
-        <option value="title">Name</option>
-        <option value="year">Year</option>
-        <option value="size">Size</option>
-        {#if activeTab === "series"}<option value="missing">Missing</option
-          >{/if}
-      </select>
-
-      <select class="sort-select" bind:value={filterStatus}>
-        <option value="all">All</option>
-        {#if activeTab === "series"}
-          <option value="continuing">Continuing</option>
-          <option value="ended">Ended</option>
-          <option value="missing">Has Missing</option>
-          <option value="complete">Complete</option>
-        {:else}
-          <option value="downloaded">Downloaded</option>
-          <option value="missing">Missing File</option>
-          <option value="monitored">Monitored</option>
-        {/if}
-      </select>
-
-      <div class="view-toggle">
-        <button
-          class:active={viewMode === "grid"}
-          onclick={() => (viewMode = "grid")}
-          title="Grid view"
-        >
-          <span class="material-icons">grid_view</span>
-        </button>
-        <button
-          class:active={viewMode === "list"}
-          onclick={() => (viewMode = "list")}
-          title="List view"
-        >
-          <span class="material-icons">view_list</span>
-        </button>
-      </div>
-    </div>
+    {/if}
   </div>
 
   <!-- Stats Strip -->
@@ -372,22 +419,67 @@
     </div>
   {:else}
     <div class="content-wrapper">
-      <div class="media-grid" class:list-view={viewMode === "list"}>
-        {#each visibleItems() as item (item.id)}
-          <MediaCard
-            {item}
-            type={activeTab === "series" ? "series" : "movie"}
-            {viewMode}
-          />
-        {:else}
-          <div class="empty-state">
-            <span class="material-icons">search_off</span>
-            <p>No items found</p>
-          </div>
-        {/each}
-      </div>
+      {#if activeTab === "collections"}
+        <!-- Collections Grid -->
+        <div class="col-lib-grid">
+          {#each collections() as col (col.tmdbId)}
+            <div class="col-lib-card">
+              <div class="col-lib-mosaic">
+                {#each col.movies.slice(0, 4) as m}
+                  <div class="col-lib-tile">
+                    {#if getMoviePoster(m)}
+                      <img
+                        src={getMoviePoster(m)}
+                        alt={m.title}
+                        loading="lazy"
+                      />
+                    {:else}
+                      <div class="col-lib-tile-blank">
+                        <span class="material-icons">movie</span>
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+                {#if col.movies.length < 4}
+                  {#each Array(4 - col.movies.length) as _}
+                    <div class="col-lib-tile col-lib-tile-blank">
+                      <span class="material-icons">add</span>
+                    </div>
+                  {/each}
+                {/if}
+              </div>
+              <div class="col-lib-info">
+                <span class="col-lib-title">{col.title}</span>
+                <span class="col-lib-count">{col.movies.length} in library</span
+                >
+              </div>
+            </div>
+          {:else}
+            <div class="empty-state">
+              <span class="material-icons">collections_bookmark</span>
+              <p>No collections found</p>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <!-- Series / Movies Grid -->
+        <div class="media-grid" class:list-view={viewMode === "list"}>
+          {#each visibleItems() as item (item.id)}
+            <MediaCard
+              {item}
+              type={activeTab === "series" ? "series" : "movie"}
+              {viewMode}
+            />
+          {:else}
+            <div class="empty-state">
+              <span class="material-icons">search_off</span>
+              <p>No items found</p>
+            </div>
+          {/each}
+        </div>
+      {/if}
 
-      <!-- Infinite scroll sentinel -->
+      <!-- Infinite scroll sentinel (only for series/movies) -->
       {#if hasMoreItems()}
         <div class="scroll-sentinel" bind:this={sentinel}>
           <div class="pulse-ring"></div>
@@ -687,5 +779,90 @@
       gap: 0.75rem;
       padding: 1rem;
     }
+  }
+  /* Collections grid in Library */
+  .col-lib-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 1.25rem;
+    padding: 1.5rem;
+  }
+
+  .col-lib-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    cursor: pointer;
+    transition: transform 0.2s;
+  }
+
+  .col-lib-card:hover {
+    transform: translateY(-3px);
+  }
+
+  .col-lib-mosaic {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    aspect-ratio: 1;
+    border-radius: 6px;
+    overflow: hidden;
+    gap: 2px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .col-lib-tile {
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .col-lib-tile img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .col-lib-tile-blank {
+    color: rgba(255, 255, 255, 0.1);
+  }
+
+  .col-lib-tile-blank .material-icons {
+    font-size: 1.5rem;
+  }
+
+  .col-lib-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0 2px;
+  }
+
+  .col-lib-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.85);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .col-lib-count {
+    font-size: 0.6rem;
+    font-weight: 600;
+    color: var(--color-primary);
+    font-family: var(--font-mono, monospace);
+    letter-spacing: 0.05em;
+    opacity: 0.7;
+  }
+
+  .scroll-sentinel {
+    display: flex;
+    justify-content: center;
+    padding: 2rem;
   }
 </style>
