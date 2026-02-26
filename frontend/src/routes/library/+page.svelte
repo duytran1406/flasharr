@@ -423,7 +423,7 @@
         <!-- Collections Grid -->
         <div class="col-lib-grid">
           {#each collections() as col (col.tmdbId)}
-            <div class="col-lib-card">
+            <a class="col-lib-card" href="/collection/{col.tmdbId}">
               <div class="col-lib-mosaic">
                 {#each col.movies.slice(0, 4) as m}
                   <div class="col-lib-tile">
@@ -453,7 +453,7 @@
                 <span class="col-lib-count">{col.movies.length} in library</span
                 >
               </div>
-            </div>
+            </a>
           {:else}
             <div class="empty-state">
               <span class="material-icons">collections_bookmark</span>
@@ -794,6 +794,8 @@
     gap: 0.5rem;
     cursor: pointer;
     transition: transform 0.2s;
+    text-decoration: none;
+    color: inherit;
   }
 
   .col-lib-card:hover {

@@ -1,15 +1,22 @@
 <script lang="ts">
   import { page } from "$app/state";
+  import { goto } from "$app/navigation";
   import {
     getCollectionDetails,
     getPosterUrl,
     getBackdropUrl,
+    getYear,
     type TMDBCollection,
     type TMDBMovie,
   } from "$lib/services/tmdb";
   import { toasts } from "$lib/stores/toasts";
-  import { MediaCard } from "$lib/components";
+  import { ui } from "$lib/stores/ui.svelte";
   import { animeFade, animeFly } from "$lib/animations";
+  import {
+    fetchAllMovies,
+    findMovieInList,
+    type RadarrMovie,
+  } from "$lib/stores/arr";
 
   const collectionId = $derived(page.params.id as string);
 
@@ -17,11 +24,24 @@
   let loading = $state(true);
   let backdropLoaded = $state(false);
 
+  // Library data
+  let allMovies = $state<RadarrMovie[]>([]);
+  let addingIds = $state<Set<number>>(new Set());
+
+  // Lookup helper: check if a TMDB movie is in Radarr library
+  function getLibraryMovie(tmdbId: number): RadarrMovie | null {
+    return findMovieInList(allMovies, tmdbId);
+  }
+
   async function loadData() {
     loading = true;
     try {
-      const details = await getCollectionDetails(collectionId);
+      const [details, movies] = await Promise.all([
+        getCollectionDetails(collectionId),
+        fetchAllMovies(),
+      ]);
       collection = details;
+      allMovies = movies;
     } catch (error) {
       console.error("Failed to load collection data:", error);
       toasts.error("Failed to load collection intelligence brief");
@@ -41,13 +61,58 @@
   let stats = $derived.by(() => {
     if (!collection?.parts) return null;
     const parts = collection.parts;
+    const ownedCount = parts.filter((p) => getLibraryMovie(p.id)).length;
     return {
       total_parts: parts.length,
+      owned: ownedCount,
       avg_score:
         parts.reduce((acc, p) => acc + p.vote_average, 0) / parts.length,
       total_votes: parts.reduce((acc, p) => acc + p.vote_count, 0),
     };
   });
+
+  function handleSmartSearch(movie: TMDBMovie) {
+    ui.openSmartSearch({
+      tmdbId: String(movie.id),
+      type: "movie",
+      title: movie.title,
+      year: getYear(movie.release_date) || undefined,
+    });
+  }
+
+  async function handleAddToLibrary(movie: TMDBMovie) {
+    if (addingIds.has(movie.id)) return;
+    addingIds = new Set([...addingIds, movie.id]);
+    try {
+      const resp = await fetch("/api/arr/movies/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tmdb_id: movie.id }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        toasts.success(`"${movie.title}" added to Radarr library`);
+        // Optimistically add to allMovies
+        allMovies = [
+          ...allMovies,
+          {
+            id: data.arr_id,
+            title: movie.title,
+            tmdbId: movie.id,
+          } as any,
+        ];
+      } else if (resp.status === 409) {
+        toasts.info(`"${movie.title}" is already in your Radarr library`);
+      } else {
+        const text = await resp.text();
+        toasts.error(`Failed to add: ${text}`);
+      }
+    } catch {
+      toasts.error("Network error — could not reach server");
+    } finally {
+      addingIds = new Set([...addingIds].filter((id) => id !== movie.id));
+    }
+  }
 </script>
 
 <div class="collection-view">
@@ -75,7 +140,7 @@
       <div class="hero-overlay"></div>
 
       <div class="hero-content">
-        <div class="intelligence-tag">STRATEGIC_COLLECTION_INTEL</div>
+        <div class="intelligence-tag">COLLECTION_INTEL</div>
         <h1 class="collection-title">
           {#if loading}
             <div class="skeleton-title"></div>
@@ -87,11 +152,17 @@
         {#if stats}
           <div class="hero-stats" in:animeFade>
             <div class="hero-stat">
-              <span class="stat-label">ASSETS_UNDER_COMMAND</span>
+              <span class="stat-label">TOTAL_ITEMS</span>
               <span class="stat-value">{stats.total_parts}</span>
             </div>
             <div class="hero-stat">
-              <span class="stat-label">CUMULATIVE_SCORE</span>
+              <span class="stat-label">IN_LIBRARY</span>
+              <span class="stat-value owned"
+                >{stats.owned}/{stats.total_parts}</span
+              >
+            </div>
+            <div class="hero-stat">
+              <span class="stat-label">AVG_SCORE</span>
               <span class="stat-value">{stats.avg_score.toFixed(1)}</span>
             </div>
           </div>
@@ -113,12 +184,12 @@
           {:else}
             <p class="overview-text">
               {collection?.overview ||
-                "No intelligence report found for this collection fragment. Subject data remains fragmented."}
+                "No intelligence report found for this collection fragment."}
             </p>
           {/if}
         </section>
 
-        <!-- Parts Grid -->
+        <!-- Parts Grid with Library Status -->
         <section class="parts-section">
           <div class="section-header">
             <h3 class="section-label">Asset Sequence</h3>
@@ -134,19 +205,78 @@
               {/each}
             {:else if collection?.parts}
               {#each [...collection.parts].sort((a, b) => new Date(a.release_date || 0).getTime() - new Date(b.release_date || 0).getTime()) as movie}
+                {@const libMovie = getLibraryMovie(movie.id)}
+                {@const inLibrary = libMovie !== null}
                 <div
-                  class="asset-card-wrapper"
+                  class="asset-card"
+                  class:owned={inLibrary}
                   in:animeFly={{ y: 20, delay: 100 }}
                 >
-                  <MediaCard
-                    id={movie.id}
-                    title={movie.title}
-                    posterPath={movie.poster_path}
-                    voteAverage={movie.vote_average}
-                    releaseDate={movie.release_date}
-                    overview={movie.overview}
-                    mediaType="movie"
-                  />
+                  <!-- Poster -->
+                  <a href="/movie/{movie.id}" class="asset-poster">
+                    <img
+                      src={movie.poster_path
+                        ? getPosterUrl(movie.poster_path, "w342")
+                        : "/images/placeholder-poster.svg"}
+                      alt={movie.title}
+                      loading="lazy"
+                    />
+                    {#if inLibrary}
+                      <div class="owned-badge">
+                        <span class="material-icons">check_circle</span>
+                        OWNED
+                      </div>
+                    {:else}
+                      <div class="missing-badge">
+                        <span class="material-icons">cloud_off</span>
+                        MISSING
+                      </div>
+                    {/if}
+                  </a>
+
+                  <!-- Info -->
+                  <div class="asset-info">
+                    <a href="/movie/{movie.id}" class="asset-title"
+                      >{movie.title}</a
+                    >
+                    <div class="asset-meta">
+                      {#if movie.release_date}
+                        <span>{getYear(movie.release_date)}</span>
+                      {/if}
+                      {#if movie.vote_average > 0}
+                        <span class="asset-score">
+                          <span class="material-icons">star</span>
+                          {movie.vote_average.toFixed(1)}
+                        </span>
+                      {/if}
+                    </div>
+                  </div>
+
+                  <!-- Actions -->
+                  <div class="asset-actions">
+                    <button
+                      class="action-btn search-btn"
+                      title="Smart Search"
+                      onclick={() => handleSmartSearch(movie)}
+                    >
+                      <span class="material-icons">manage_search</span>
+                    </button>
+
+                    {#if !inLibrary}
+                      <button
+                        class="action-btn add-btn"
+                        title="Add to Radarr"
+                        disabled={addingIds.has(movie.id)}
+                        onclick={() => handleAddToLibrary(movie)}
+                      >
+                        {#if addingIds.has(movie.id)}
+                          <span class="material-icons spinning">sync</span>
+                        {:else}
+                          <span class="material-icons">library_add</span>
+                        {/if}
+                      </button>
+                    {/if}
+                  </div>
                 </div>
               {/each}
             {/if}
@@ -167,6 +297,20 @@
               <span class="tel-value terminal-green">COMMANDER</span>
             </div>
             {#if stats}
+              <div class="telemetry-row">
+                <span class="tel-label">LIBRARY_STATUS</span>
+                <span
+                  class="tel-value"
+                  class:terminal-green={stats.owned === stats.total_parts}
+                  class:terminal-amber={stats.owned > 0 &&
+                    stats.owned < stats.total_parts}
+                  class:terminal-red={stats.owned === 0}
+                >
+                  {stats.owned === stats.total_parts
+                    ? "COMPLETE"
+                    : `${stats.owned}/${stats.total_parts}`}
+                </span>
+              </div>
               <div class="telemetry-row">
                 <span class="tel-label">TOTAL_VOTES</span>
                 <span class="tel-value"
@@ -308,6 +452,11 @@
     font-family: var(--font-heading, "Outfit", sans-serif);
   }
 
+  .stat-value.owned {
+    color: #00ff80;
+    text-shadow: 0 0 12px rgba(0, 255, 128, 0.3);
+  }
+
   /* Grid Layout */
   .collection-grid-container {
     display: grid;
@@ -411,8 +560,189 @@
 
   .assets-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 2rem;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1.5rem;
+  }
+
+  /* Asset Card — each movie in collection */
+  .asset-card {
+    display: flex;
+    flex-direction: column;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 6px;
+    overflow: hidden;
+    transition:
+      transform 0.2s,
+      border-color 0.3s,
+      box-shadow 0.3s;
+  }
+
+  .asset-card:hover {
+    transform: translateY(-4px);
+    box-shadow:
+      0 12px 40px rgba(0, 0, 0, 0.4),
+      0 0 0 1px rgba(0, 243, 255, 0.15);
+  }
+
+  .asset-card.owned {
+    border-color: rgba(0, 255, 128, 0.2);
+  }
+
+  .asset-card.owned:hover {
+    box-shadow:
+      0 12px 40px rgba(0, 0, 0, 0.4),
+      0 0 0 1px rgba(0, 255, 128, 0.3);
+  }
+
+  /* Poster */
+  .asset-poster {
+    position: relative;
+    aspect-ratio: 2/3;
+    overflow: hidden;
+    display: block;
+  }
+
+  .asset-poster img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .owned-badge,
+  .missing-badge {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.5rem;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    padding: 3px 8px;
+    border-radius: 3px;
+    backdrop-filter: blur(8px);
+  }
+
+  .owned-badge {
+    background: rgba(0, 255, 128, 0.15);
+    border: 1px solid rgba(0, 255, 128, 0.4);
+    color: #00ff80;
+  }
+
+  .owned-badge .material-icons {
+    font-size: 0.75rem;
+  }
+
+  .missing-badge {
+    background: rgba(255, 100, 100, 0.15);
+    border: 1px solid rgba(255, 100, 100, 0.3);
+    color: #ff8080;
+  }
+
+  .missing-badge .material-icons {
+    font-size: 0.75rem;
+  }
+
+  /* Info */
+  .asset-info {
+    padding: 0.75rem;
+    flex: 1;
+  }
+
+  .asset-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #fff;
+    text-decoration: none;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 4px;
+  }
+
+  .asset-title:hover {
+    color: var(--color-primary, #00f3ff);
+  }
+
+  .asset-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.65rem;
+    color: #64748b;
+    font-family: var(--font-mono, monospace);
+  }
+
+  .asset-score {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    color: #fbbf24;
+  }
+
+  .asset-score .material-icons {
+    font-size: 0.7rem;
+  }
+
+  /* Action buttons */
+  .asset-actions {
+    display: flex;
+    gap: 4px;
+    padding: 0 0.75rem 0.75rem;
+  }
+
+  .action-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 0.4rem;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.03);
+    color: #94a3b8;
+    font-family: var(--font-mono, monospace);
+    font-size: 0.6rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .action-btn .material-icons {
+    font-size: 1rem;
+  }
+
+  .search-btn:hover {
+    border-color: rgba(0, 243, 255, 0.4);
+    background: rgba(0, 243, 255, 0.08);
+    color: var(--color-primary, #00f3ff);
+  }
+
+  .add-btn:hover {
+    border-color: rgba(0, 255, 128, 0.4);
+    background: rgba(0, 255, 128, 0.08);
+    color: #00ff80;
+  }
+
+  .add-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .spinning {
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   /* Sidebar */
@@ -453,6 +783,16 @@
   .terminal-green {
     color: #00ff80;
     text-shadow: 0 0 10px rgba(0, 255, 128, 0.3);
+  }
+
+  .terminal-amber {
+    color: #fbbf24;
+    text-shadow: 0 0 10px rgba(251, 191, 36, 0.3);
+  }
+
+  .terminal-red {
+    color: #ff6464;
+    text-shadow: 0 0 10px rgba(255, 100, 100, 0.3);
   }
 
   .tactical-btn {
@@ -509,6 +849,13 @@
     animation: shimmer 2s infinite linear;
   }
 
+  .asset-skeleton-card {
+    aspect-ratio: 2/3;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 6px;
+    animation: shimmer 2s infinite linear;
+  }
+
   @keyframes shimmer {
     0% {
       opacity: 0.5;
@@ -550,7 +897,7 @@
     }
 
     .assets-grid {
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
       gap: 1rem;
     }
   }
