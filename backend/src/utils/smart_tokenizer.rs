@@ -156,7 +156,7 @@ impl SmartParsedMedia {
         else if self.hdr { score += 30; }
 
         if self.viet_dub { score += 100; }
-        else if self.viet_sub { score += 10; }
+        else if self.viet_sub { score += 80; }
 
         if self.video_codec.as_deref() == Some("x265") || self.video_codec.as_deref() == Some("hevc") {
             score += 10;
