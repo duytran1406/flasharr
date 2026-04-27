@@ -1863,7 +1863,13 @@ impl DownloadOrchestrator {
         let target_dir = match media_type {
             MediaType::TvSeries | MediaType::TvEpisode => {
                 // TV: {series_path}/Season XX/
-                let season = task.tmdb_season.unwrap_or(1);
+                let season = match task.tmdb_season {
+                    Some(s) => s,
+                    None => {
+                        tracing::warn!("TV task {} has no season number — skipping arr move to prevent Season 1 mislabeling", task.id);
+                        return None;
+                    }
+                };
                 std::path::PathBuf::from(&arr_folder).join(format!("Season {}", season))
             }
             MediaType::Movie => {

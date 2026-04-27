@@ -432,8 +432,6 @@ pub async fn fetch_tmdb_title(tmdb_id: &str, media_type: &str) -> Option<String>
 
     let cache_key = format!("{}:{}", media_type, tmdb_id);
 
-    // Return cached value if present (including a cached None, to avoid re-requesting
-    // IDs that TMDB doesn't know about).
     if let Some(cached) = TITLE_CACHE.get(&cache_key).await {
         tracing::debug!("TMDB title cache HIT: {} → {:?}", cache_key, cached);
         return cached;
@@ -473,7 +471,11 @@ pub async fn fetch_tmdb_title(tmdb_id: &str, media_type: &str) -> Option<String>
         }
     }.await;
 
-    TITLE_CACHE.insert(cache_key, result.clone()).await;
+    // Only cache successful results — caching None would poison the cache for 24h
+    // after any transient TMDB API failure (429, timeout, etc.)
+    if result.is_some() {
+        TITLE_CACHE.insert(cache_key, result.clone()).await;
+    }
     result
 }
 
@@ -536,7 +538,10 @@ pub async fn fetch_tmdb_title_and_year(
     }.await
     .unwrap_or((None, None));
 
-    PAIR_CACHE.insert(cache_key, pair.clone()).await;
+    // Only cache when we got a title — avoid poisoning the cache on transient API failures
+    if pair.0.is_some() {
+        PAIR_CACHE.insert(cache_key, pair.clone()).await;
+    }
     let year = pair.1.as_deref().and_then(|y| y.parse::<i32>().ok());
     (pair.0, year)
 }

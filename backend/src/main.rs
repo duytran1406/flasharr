@@ -224,6 +224,9 @@ async fn main() {
         config.radarr.clone()
     };
     
+    // Capture staging dir before download_config is moved into the orchestrator
+    let staging_dir = download_config.download_dir.clone();
+
     // Create download orchestrator with new architecture
     let download_orchestrator = Arc::new(downloader::DownloadOrchestrator::new(
         download_config,
@@ -303,7 +306,8 @@ async fn main() {
     });
     let library_sync_service = Arc::new(services::LibrarySyncService::new(
         Arc::clone(&db),
-        ar_client
+        ar_client,
+        staging_dir,
     ));
 
     let state = Arc::new(AppState { 

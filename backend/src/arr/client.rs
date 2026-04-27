@@ -954,20 +954,6 @@ impl ArrClient {
         // Use TMDB API to get TVDB ID
         use crate::constants::TMDB_API_KEY;
         
-        let url = format!(
-            "https://api.themoviedb.org/3/tv/{}?api_key={}",
-            tmdb_id, TMDB_API_KEY
-        );
-
-        let response = self.http_client.get(&url).send().await?;
-        
-        if !response.status().is_success() {
-            anyhow::bail!("Failed to lookup TMDB ID: HTTP {}", response.status());
-        }
-
-        let _data: serde_json::Value = response.json().await?;
-        
-        // Extract external_ids
         let external_ids_url = format!(
             "https://api.themoviedb.org/3/tv/{}/external_ids?api_key={}",
             tmdb_id, TMDB_API_KEY
