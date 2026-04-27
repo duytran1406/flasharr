@@ -1,5 +1,5 @@
 use axum::{
-    routing::get,
+    routing::{get, post},
     Router,
     Json,
 };
@@ -345,11 +345,12 @@ async fn main() {
         .nest("/api/discovery", api::discovery::router())
         .nest("/api/arr", api::arr::router())
         .nest("/api/media", api::media::router())
-        .nest("/api/folder-source", api::folder_source::router());
+        .nest("/api/folder-source", api::folder_source::router())
+        .route("/sabnzbd", get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post))
+        .route("/sabnzbd/", get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post));
 
-    // External integration routes — require API key (called by Sonarr/Radarr/SABnzbd/Jellyflix)
+    // External integration routes — require API key (called by Jellyflix/other integrations)
     let external_routes = Router::new()
-        .nest("/sabnzbd", api::sabnzbd::router())
         .nest("/api/indexer", api::indexer::router())
         .nest("/newznab/api", api::indexer::router())  // Standard Newznab path
         .nest("/api/auth", api::auth::router())        // Key verification for Jellyflix

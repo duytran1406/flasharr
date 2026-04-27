@@ -22,6 +22,12 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/", post(handle_post))
         .route("/api", get(handle_get))
         .route("/api", post(handle_post))
+        .fallback(handle_fallback)
+}
+
+async fn handle_fallback(State(state): State<Arc<AppState>>, Query(params): Query<SabParams>) -> axum::response::Response {
+    tracing::info!("SABnzbd API fallback handler - mode: {}", params.mode.as_deref().unwrap_or("queue"));
+    handle_get(State(state), Query(params)).await
 }
 
 // ============================================================================
@@ -29,7 +35,7 @@ pub fn router() -> Router<Arc<AppState>> {
 // ============================================================================
 
 #[derive(Deserialize)]
-struct SabParams {
+pub struct SabParams {
     mode: Option<String>,
     #[allow(dead_code)]
     output: Option<String>,
@@ -70,7 +76,7 @@ struct SabHistorySlot {
 // ============================================================================
 
 /// Handle GET requests (query params)
-async fn handle_get(
+pub async fn handle_get(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SabParams>,
 ) -> axum::response::Response {
@@ -109,7 +115,7 @@ async fn handle_get(
 }
 
 /// Handle POST requests (form data or multipart)
-async fn handle_post(
+pub async fn handle_post(
     State(state): State<Arc<AppState>>,
     Query(params): Query<SabParams>,
     mut multipart: Option<axum::extract::Multipart>,
