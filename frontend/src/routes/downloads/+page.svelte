@@ -4085,7 +4085,7 @@
   }
 
   /* Mobile Styles */
-  @media (max-width: 1024px) {
+  @media (max-width: 767px) {
     .section-box {
       display: none;
     }

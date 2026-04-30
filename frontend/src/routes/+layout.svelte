@@ -26,6 +26,7 @@
     AccountWarningModal,
     Button,
   } from "$lib/components";
+  import MobileNav from "$lib/components/MobileNav.svelte";
   import { theme } from "$lib/stores/theme";
   import { ui } from "$lib/stores/ui.svelte";
   import { setupStore } from "$lib/stores/setup.svelte";
@@ -355,8 +356,38 @@
 
     <!-- Main Content Area -->
     <main class="main-viewport">
-      <!-- Global Header (Glass) -->
-      <header class="glass-header">
+      <!-- Mobile-only slim header (hidden on desktop) -->
+      <header class="mobile-header">
+        <div class="mobile-header-left">
+          <img
+            src="/images/flasharr_logo.png"
+            class="mobile-logo"
+            width="32"
+            height="32"
+            alt="Flasharr"
+          />
+          <span class="mobile-brand-name">FLASHARR</span>
+        </div>
+        <div class="mobile-header-right">
+          <!-- Speed pill (compact) -->
+          <div class="mobile-stat-pill" title="Current Speed">
+            <span class="material-icons">speed</span>
+            <span class="mobile-stat-value">{globalSpeed}</span>
+          </div>
+          <!-- Add download shortcut -->
+          <button
+            class="mobile-icon-btn"
+            onclick={() => ui.openAddDownload()}
+            aria-label="Add Download"
+            title="Add Download"
+          >
+            <span class="material-icons">add_circle</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Global Header (Glass) — desktop only -->
+      <header class="glass-header desktop-header">
         <div class="header-left">
           <div
             id="header-dynamic-content"
@@ -422,21 +453,9 @@
   ></button>
 {/if}
 
-<!-- Bottom Navigation (Mobile Only) -->
+<!-- Mobile Bottom Navigation (replaces old bottom-nav) -->
 {#if !currentRoute.startsWith("/setup")}
-  <nav class="bottom-nav">
-    {#each navItems as item}
-      <a
-        href={item.href}
-        class="bottom-nav-item"
-        class:active={isActive(item.href)}
-        data-route={item.route}
-      >
-        <span class="material-icons">{item.icon}</span>
-        <span>{item.label}</span>
-      </a>
-    {/each}
-  </nav>
+  <MobileNav />
 {/if}
 
 <!-- Account VIP Warning Modal -->
@@ -470,66 +489,111 @@
     align-items: center;
   }
 
-  .bottom-nav {
+  /* ── Mobile Header (< 768px only) ─────────────────────────── */
+  .mobile-header {
     display: none;
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: calc(60px + env(safe-area-inset-bottom, 0px));
-    padding-bottom: env(safe-area-inset-bottom, 0px);
-    background: rgba(6, 8, 14, 0.92);
-    backdrop-filter: blur(24px);
-    -webkit-backdrop-filter: blur(24px);
-    border-top: 1px solid rgba(255, 255, 255, 0.05);
-    z-index: 100;
-  }
-
-  .bottom-nav-item {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
+    height: var(--mobile-header-height, 56px);
     align-items: center;
-    justify-content: center;
-    gap: 4px;
-    color: rgba(255, 255, 255, 0.4);
-    text-decoration: none;
-    position: relative;
-    padding: 0 10px;
-    transition: color 0.2s;
+    justify-content: space-between;
+    padding: 0 1rem;
+    flex-shrink: 0;
+    background: rgba(6, 8, 14, 0.93);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    z-index: var(--z-mobile-header, 800);
+    position: sticky;
+    top: 0;
   }
 
-  .bottom-nav-item .nav-icon {
-    font-size: 24px;
-    margin-bottom: 2px;
+  .mobile-header-left {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
   }
 
-  .bottom-nav-item .nav-label {
-    font-size: 10px;
-    font-weight: 500;
+  .mobile-logo {
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
+    filter: drop-shadow(0 0 6px rgba(0, 243, 255, 0.5));
+  }
+
+  .mobile-brand-name {
+    font-family: var(--font-heading, "Outfit", sans-serif);
+    font-size: 0.78rem;
+    font-weight: 900;
+    letter-spacing: 0.22em;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    background: linear-gradient(135deg, #ffffff 0%, var(--color-primary, #00f3ff) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
   }
 
-  .bottom-nav-item.active {
+  .mobile-header-right {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .mobile-stat-pill {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.6rem;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 4px;
+  }
+
+  .mobile-stat-pill .material-icons {
+    font-size: 0.9rem;
+    opacity: 0.55;
     color: var(--color-primary, #00f3ff);
   }
 
-  .bottom-nav-item.active::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 25%;
-    right: 25%;
-    height: 2px;
-    background: var(--color-primary, #00f3ff);
-    box-shadow: 0 0 8px var(--color-primary, #00f3ff);
-    border-radius: 0 0 2px 2px;
+  .mobile-stat-value {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--color-primary, #00f3ff);
   }
 
-  @media (max-width: 1024px) {
-    .bottom-nav {
+  .mobile-icon-btn {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 243, 255, 0.08);
+    border: 1px solid rgba(0, 243, 255, 0.2);
+    border-radius: 6px;
+    color: var(--color-primary, #00f3ff);
+    cursor: pointer;
+    transition: background 0.15s, box-shadow 0.15s;
+  }
+
+  .mobile-icon-btn:hover {
+    background: rgba(0, 243, 255, 0.15);
+    box-shadow: 0 0 10px rgba(0, 243, 255, 0.25);
+  }
+
+  .mobile-icon-btn .material-icons {
+    font-size: 1.2rem;
+  }
+
+  /* ── Desktop header: hidden on mobile ─────────────────────── */
+  .desktop-header {
+    display: flex;
+  }
+
+  @media (max-width: 767px) {
+    .mobile-header {
       display: flex;
+    }
+    .desktop-header {
+      display: none !important;
     }
     .header-right .stat-pill {
       display: none;
@@ -537,6 +601,10 @@
     /* Hide desktop sidebar on mobile */
     .glass-sidebar {
       display: none !important;
+    }
+    /* Push content above the fixed bottom nav */
+    :global(.view-container) {
+      padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px)) !important;
     }
   }
 
@@ -564,7 +632,7 @@
     display: block;
   }
 
-  @media (min-width: 1025px) {
+  @media (min-width: 768px) {
     .mobile-drawer-overlay {
       display: none !important;
     }

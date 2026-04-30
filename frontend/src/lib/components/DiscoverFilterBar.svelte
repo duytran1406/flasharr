@@ -868,20 +868,55 @@
   }
 
   /* ── Responsive ─────────────────────────────────────────────────────── */
-  @media (max-width: 768px) {
+  @media (max-width: 767px) {
+    /* Single-row horizontal scrollable chip bar */
     .filter-bar {
-      padding: 0.65rem 0.75rem;
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      padding: 0.5rem 0.75rem;
       gap: 0.5rem;
+      scrollbar-width: none; /* Firefox */
     }
+    .filter-bar::-webkit-scrollbar {
+      display: none; /* Chrome/Safari */
+    }
+    /* Prevent groups from shrinking — preserve their natural width */
+    .filter-group {
+      flex-shrink: 0;
+    }
+    /* Compact toggle buttons */
+    .toggle-btn {
+      padding: 0.38rem 0.65rem;
+      font-size: 0.72rem;
+    }
+    /* Compact sort select */
     .sort-select {
       font-size: 0.75rem;
+      padding: 0.38rem 1.6rem 0.38rem 0.6rem;
     }
+    /* Make search narrower on mobile */
     .search-group {
-      min-width: 120px;
+      min-width: 100px;
+      max-width: 160px;
     }
+    /* Year inputs */
     .year-input {
-      width: 60px;
+      width: 58px;
       font-size: 0.78rem;
+      padding: 0.38rem 0.45rem;
+    }
+    /* Genre badge row: also scrollable */
+    .genre-badges {
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: 0.5rem;
+      scrollbar-width: none;
+    }
+    .genre-badges::-webkit-scrollbar {
+      display: none;
     }
   }
 </style>
