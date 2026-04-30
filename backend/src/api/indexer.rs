@@ -620,9 +620,18 @@ fn synthesize_title(
         parts.push(format!("S{:02}E{:02}", s, e));
     }
 
-    // 4. Quality metadata
-    if let Some(res) = &file.quality_attrs.resolution {
-        if !res.is_empty() { parts.push(res.clone()); }
+    // 4. Quality metadata — fall back to size-inferred resolution so Radarr/Sonarr
+    // never defaults to SDTV for files whose filename lacks a resolution keyword.
+    let res_str = file.quality_attrs.resolution.as_deref()
+        .filter(|r| !r.is_empty())
+        .or_else(|| match file.size {
+            s if s >= 10_000_000_000 => Some("2160p"),
+            s if s >= 2_000_000_000  => Some("1080p"),
+            s if s >= 300_000_000   => Some("720p"),
+            _ => None,
+        });
+    if let Some(res) = res_str {
+        parts.push(res.to_string());
     }
     if let Some(src) = &file.quality_attrs.source {
         if !src.is_empty() { parts.push(src.clone()); }

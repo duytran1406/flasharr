@@ -2051,13 +2051,50 @@ impl DownloadOrchestrator {
             return Some(updated);
         }
 
+        // Source file may be gone — arr imported it autonomously (via SABnzbd history + rename)
+        // before we could move it, or it was lost. Either way, no copy loop: just trigger a
+        // rescan and clear the retry queue. Arr renames on import so we cannot rely on exact
+        // filename presence at target_path.
+        let source_exists = tokio::fs::metadata(source).await.is_ok();
+        if !source_exists {
+            if tokio::fs::metadata(&target_path).await.is_ok() {
+                tracing::info!(
+                    "Source {:?} gone, target {:?} exists — triggering rescan",
+                    source, target_path
+                );
+            } else {
+                tracing::info!(
+                    "Source {:?} gone from downloads (arr imported/renamed or lost) — triggering rescan to clear",
+                    source
+                );
+            }
+            let rescan_result = match media_type {
+                MediaType::TvSeries | MediaType::TvEpisode => {
+                    client.trigger_series_rescan_with_path(arr_id, None).await
+                }
+                MediaType::Movie => {
+                    client.trigger_movie_refresh_with_path(arr_id, None).await
+                }
+            };
+            if let Err(e) = rescan_result {
+                tracing::warn!("Arr rescan trigger failed (non-fatal): {}", e);
+            }
+            let mut updated = task.clone();
+            updated.arr_announced = true;
+            match media_type {
+                MediaType::TvSeries | MediaType::TvEpisode => updated.arr_series_id = Some(arr_id as i64),
+                MediaType::Movie => updated.arr_movie_id = Some(arr_id as i64),
+            }
+            return Some(updated);
+        }
+
         // If a symlink or file already exists at target, remove it first (re-grab scenario)
         if target_path.exists() || tokio::fs::symlink_metadata(&target_path).await.is_ok() {
             tracing::info!("Removing existing file/symlink at {:?}", target_path);
             let _ = tokio::fs::remove_file(&target_path).await;
         }
 
-        // Move file: target_path -> source (file moves from downloads to library)
+        // Move file: source -> target_path (file moves from downloads to library)
         tracing::info!(
             "Moving completed file to arr path: {:?} -> {:?}",
             source, target_path

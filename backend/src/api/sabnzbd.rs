@@ -179,63 +179,78 @@ async fn handle_add_file(
             
             // Extract TMDB metadata if present
             let tmdb_id = extract_nzb_metadata(&content, "tmdb_id");
+            let media_type_from_nzb = extract_nzb_metadata(&content, "media_type");
             let season = extract_nzb_metadata(&content, "season")
                 .and_then(|s| s.parse::<u32>().ok());
             let episode = extract_nzb_metadata(&content, "episode")
                 .and_then(|e| e.parse::<u32>().ok());
-            
+
             // Extract category from NZB metadata (fallback to query param)
             let nzb_category = extract_nzb_metadata(&content, "category")
                 .unwrap_or(category.clone());
-            
+
             tracing::info!(
-                "SABnzbd: Extracted from NZB - URL: {}, category: {}, TMDB: {:?}, S{:?}E{:?}",
-                fshare_url, nzb_category, tmdb_id, season, episode
+                "SABnzbd: Extracted from NZB - URL: {}, category: {}, TMDB: {:?}, media_type: {:?}, S{:?}E{:?}",
+                fshare_url, nzb_category, tmdb_id, media_type_from_nzb, season, episode
             );
-            
+
             // Build TMDB metadata if available
-            let tmdb_meta = if let (Some(id), Some(s), Some(e)) = (tmdb_id.clone(), season, episode) {
-                // Parse tmdb_id as i64
+            let tmdb_meta = if let Some(ref id) = tmdb_id {
                 let tmdb_id_i64 = id.parse::<i64>().ok();
-                
-            // Fetch series title AND release year from TMDB for proper folder/filename organization
-                let (title, year) = if let Some(tmdb_id_val) = &tmdb_id {
-                    crate::api::indexer::fetch_tmdb_title_and_year(tmdb_id_val, "tv").await
+
+                // Prefer explicit media_type from NZB; fall back to inferring from season/episode
+                let actual_media_type = media_type_from_nzb.as_deref().unwrap_or(
+                    if season.is_some() && episode.is_some() { "tv" } else { "movie" }
+                );
+
+                let (title, year) = crate::api::indexer::fetch_tmdb_title_and_year(id, actual_media_type).await;
+
+                tracing::info!("SABnzbd: Fetched TMDB title: {:?}, year: {:?}, media_type: {}", title, year, actual_media_type);
+
+                if actual_media_type == "movie" {
+                    Some(crate::downloader::TmdbDownloadMetadata {
+                        tmdb_id: tmdb_id_i64,
+                        media_type: Some("movie".to_string()),
+                        title,
+                        year,
+                        collection_name: None,
+                        season: None,
+                        episode: None,
+                    })
+                } else if let (Some(s), Some(e)) = (season, episode) {
+                    Some(crate::downloader::TmdbDownloadMetadata {
+                        tmdb_id: tmdb_id_i64,
+                        media_type: Some("tv".to_string()),
+                        title,
+                        year,
+                        collection_name: None,
+                        season: Some(s as i32),
+                        episode: Some(e as i32),
+                    })
                 } else {
-                    (None, None)
-                };
-                
-                tracing::info!("SABnzbd: Fetched TMDB title: {:?}, year: {:?}", title, year);
-                
-                Some(crate::downloader::TmdbDownloadMetadata {
-                    tmdb_id: tmdb_id_i64,
-                    media_type: Some("tv".to_string()),
-                    title, // Use fetched title for proper folder structure
-                    year,  // Use fetched year for consistent filename format
-                    collection_name: None,
-                    season: Some(s as i32),
-                    episode: Some(e as i32),
-                })
+                    None
+                }
             } else {
                 None
             };
             
-            // Auto-batch: TV episodes should always be in a batch (same logic as downloads API)
+            // Auto-batch: TV episodes consolidate by TMDB ID then title — same logic as downloads API
             let (batch_id, batch_name) = if let Some(ref meta) = tmdb_meta {
-                if meta.media_type.as_deref() == Some("tv") && meta.season.is_some() {
-                    let auto_batch_name = format!(
-                        "{} S{:02}",
-                        meta.title.as_deref().unwrap_or("Unknown Show"),
-                        meta.season.unwrap()
-                    );
-                    
-                    let existing_batch_id = state.db
-                        .get_batch_id_by_name_async(&auto_batch_name)
-                        .await
-                        .ok()
-                        .flatten();
-                    
-                    let auto_batch_id = if let Some(existing_id) = existing_batch_id {
+                if meta.media_type.as_deref() == Some("tv") {
+                    let auto_batch_name = meta.title.as_deref().unwrap_or("Unknown Show").to_string();
+
+                    let existing_id = if let Some(tid) = meta.tmdb_id {
+                        state.db
+                            .get_batch_id_by_tmdb_id_async(tid)
+                            .await
+                            .ok()
+                            .flatten()
+                            .or(state.db.get_batch_id_by_name_async(&auto_batch_name).await.ok().flatten())
+                    } else {
+                        state.db.get_batch_id_by_name_async(&auto_batch_name).await.ok().flatten()
+                    };
+
+                    let auto_batch_id = if let Some(existing_id) = existing_id {
                         tracing::info!("SABnzbd: Reusing existing batch: {} ({})", auto_batch_name, existing_id);
                         existing_id
                     } else {
@@ -243,7 +258,7 @@ async fn handle_add_file(
                         tracing::info!("SABnzbd: Creating new batch: {} ({})", auto_batch_name, new_id);
                         new_id
                     };
-                    
+
                     (Some(auto_batch_id), Some(auto_batch_name))
                 } else {
                     (None, None)
@@ -338,11 +353,12 @@ async fn handle_queue(state: Arc<AppState>) -> Result<Json<serde_json::Value>, S
             
             let speed = t.speed as f64;
             let eta = if speed > 0.0 {
-                format!("{}s", (left as f64 / speed) as u64)
+                let secs = (left as f64 / speed) as u64;
+                format!("{}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
             } else {
-                "Unknown".to_string()
+                "0:00:00".to_string()
             };
-            
+
             SabQueueSlot {
                 nzo_id: t.id.to_string(),
                 filename: t.filename.clone(),
@@ -388,11 +404,12 @@ async fn handle_fullstatus(state: Arc<AppState>) -> Result<Json<serde_json::Valu
             
             let speed = t.speed as f64;
             let eta = if speed > 0.0 {
-                format!("{}s", (left as f64 / speed) as u64)
+                let secs = (left as f64 / speed) as u64;
+                format!("{}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
             } else {
-                "Unknown".to_string()
+                "0:00:00".to_string()
             };
-            
+
             SabQueueSlot {
                 nzo_id: t.id.to_string(),
                 filename: t.filename.clone(),
@@ -424,20 +441,23 @@ async fn handle_fullstatus(state: Arc<AppState>) -> Result<Json<serde_json::Valu
 /// Uses TMDB title for the `name` field so *arr can match to series/movies in its library.
 /// Only returns items where the file actually exists on disk.
 async fn handle_history(state: Arc<AppState>) -> Result<Json<serde_json::Value>, StatusCode> {
-    let tasks = state.download_orchestrator.task_manager().get_tasks().await;
-    
+    // Read directly from DB — in-memory tasks are evicted after 5 min (too short for Radarr polls)
+    let tasks = state.db
+        .get_tasks_by_states_async(vec![
+            "COMPLETED".to_string(),
+            "FAILED".to_string(),
+            "CANCELLED".to_string(),
+        ])
+        .await
+        .unwrap_or_default();
+
     let slots: Vec<SabHistorySlot> = tasks.iter()
-        .filter(|t| matches!(t.state, 
-            DownloadState::Completed | 
-            DownloadState::Failed |
-            DownloadState::Cancelled
-        ))
         .filter_map(|t| {
             let status = match t.state {
                 DownloadState::Completed => "Completed",
                 DownloadState::Failed => "Failed",
                 DownloadState::Cancelled => "Failed",
-                _ => "Unknown",
+                _ => return None,
             };
             
             // Skip items with no destination — they'd produce an empty path
@@ -493,25 +513,33 @@ async fn handle_history(state: Arc<AppState>) -> Result<Json<serde_json::Value>,
                 sonarr_path.clone()
             };
             
-            // Build a name that Sonarr/Radarr can reliably parse for series/movie matching.
-            // Use scene-release-like format: "Series.Name.S01E07.WEB-DL.Flasharr"
-            // This strips special chars, replaces spaces with dots, matching scene naming
-            // conventions that Sonarr's parser is optimized for.
+            // Build a scene-release-style name Sonarr/Radarr can parse for matching.
+            // Format: "Movie.Title.Year.WEB-DL" (movies) or "Series.Title.S01E07.WEB-DL" (TV)
+            // - Replace `&` with `and` before stripping non-alphanumeric chars
+            // - No "Flasharr" suffix — it confuses Radarr's title parser (mistaken for group tag)
             let name = if let Some(ref tmdb_title) = t.tmdb_title {
-                // Normalize title: strip special chars, replace spaces with dots
-                let clean_title: String = tmdb_title.chars()
-                    .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+                // Normalize `&` → `and` first, then strip remaining special chars
+                let normalized = tmdb_title.replace('&', "and");
+                let clean_title: String = normalized.chars()
+                    .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '-')
                     .collect::<String>()
                     .split_whitespace()
                     .collect::<Vec<&str>>()
                     .join(".");
-                
+
                 if let (Some(season), Some(episode)) = (t.tmdb_season, t.tmdb_episode) {
-                    // TV: "Series.Name.S01E07.WEB-DL.Flasharr"
-                    format!("{}.S{:02}E{:02}.WEB-DL.Flasharr", clean_title, season, episode)
+                    // TV: "Series.Title.S01E07.WEB-DL"
+                    format!("{}.S{:02}E{:02}.WEB-DL", clean_title, season, episode)
                 } else {
-                    // Movie: "Movie.Name.WEB-DL.Flasharr"
-                    format!("{}.WEB-DL.Flasharr", clean_title)
+                    // Movie: "Movie.Title.Year.WEB-DL" — year required for Radarr title matching
+                    let year = t.tmdb_id
+                        .and_then(|id| state.db.get_media_item(id).ok().flatten())
+                        .and_then(|item| item.year);
+                    if let Some(y) = year {
+                        format!("{}.{}.WEB-DL", clean_title, y)
+                    } else {
+                        format!("{}.WEB-DL", clean_title)
+                    }
                 }
             } else {
                 // No TMDB metadata: use filename without extension
@@ -558,8 +586,6 @@ async fn handle_get_config() -> Result<Json<serde_json::Value>, StatusCode> {
             "version": "3.5.0",
             "paused": false,
             "pause_int": "0",
-            "download_dir": "/data/downloads/incomplete",
-            "complete_dir": "/data/downloads",
             "nzb_backup_dir": "/appData/nzb_backup",
             "script_dir": "/appData/scripts",
             "categories": [
@@ -583,6 +609,8 @@ async fn handle_get_config() -> Result<Json<serde_json::Value>, StatusCode> {
                 }
             ],
             "misc": {
+                "complete_dir": "/data/flasharr-download",
+                "download_dir": "/data/flasharr-download/incomplete",
                 "queue_complete": "",
                 "refresh_rate": 2,
                 "bandwidth_limit": ""

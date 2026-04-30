@@ -17,16 +17,23 @@ pub struct Db {
 
 impl Db {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let manager = SqliteConnectionManager::file(path);
+        let manager = SqliteConnectionManager::file(path)
+            .with_init(|conn| {
+                conn.execute_batch(
+                    "PRAGMA journal_mode=WAL;
+                     PRAGMA busy_timeout=5000;
+                     PRAGMA synchronous=NORMAL;"
+                )
+            });
         let pool = Pool::builder()
-            .max_size(5) // 5 concurrent connections
+            .max_size(5)
             .build(manager)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        
+
         let db = Self { pool };
         db.init()?;
-        
-        tracing::info!("Database connection pool initialized (max_size: 5)");
+
+        tracing::info!("Database connection pool initialized (max_size: 5, WAL mode)");
         Ok(db)
     }
 
