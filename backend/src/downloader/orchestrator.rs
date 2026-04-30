@@ -2094,15 +2094,17 @@ impl DownloadOrchestrator {
             let _ = tokio::fs::remove_file(&target_path).await;
         }
 
-        // Move file: source -> target_path (file moves from downloads to library)
+        // Create symlink at library path pointing to the downloaded file.
+        // File stays in /data/downloads; Sonarr/Radarr discover it via the symlink + RescanSeries/RescanMovie.
+        // The reconciliation pass in library_sync_service converts the symlink to a real file in the background.
         tracing::info!(
-            "Moving completed file to arr path: {:?} -> {:?}",
-            source, target_path
+            "Creating library symlink: {:?} -> {:?}",
+            target_path, source
         );
 
-        let move_result = match tokio::fs::rename(&source, &target_path).await {
+        let move_result = match tokio::fs::symlink(&source, &target_path).await {
             Ok(()) => {
-                tracing::info!("Successfully moved {:?} -> {:?}", source, target_path);
+                tracing::info!("Symlink created: {:?} -> {:?}", target_path, source);
                 let mut updated = task.clone();
                 updated.destination = target_path.to_string_lossy().to_string();
                 updated.arr_announced = true;
@@ -2112,44 +2114,9 @@ impl DownloadOrchestrator {
                 }
                 Some(updated)
             }
-            Err(rename_err) => {
-                // If rename fails (e.g. cross-device move or transient permission error after
-                // download completes), retry copy up to 3 times with a 2s delay between each.
-                // Use spawn_blocking+std::fs::copy to avoid copy_file_range failures on LXC/Docker overlays.
-                tracing::warn!("Failed to rename {:?} -> {:?}: {}. Trying copy+remove fallback.", source, target_path, rename_err);
-                let src_buf = source.to_path_buf();
-                let dst_buf = target_path.clone();
-                let mut copy_ok = false;
-                for attempt in 1..=3u32 {
-                    let src2 = src_buf.clone();
-                    let dst2 = dst_buf.clone();
-                    match tokio::task::spawn_blocking(move || std::fs::copy(&src2, &dst2)).await {
-                        Ok(Ok(_)) => { copy_ok = true; break; }
-                        Ok(Err(e)) => {
-                            tracing::warn!("Copy attempt {}/3 {:?}: {}", attempt, src_buf, e);
-                            if attempt < 3 { tokio::time::sleep(std::time::Duration::from_secs(2)).await; }
-                        }
-                        Err(e) => {
-                            tracing::warn!("Copy spawn failed attempt {}/3: {}", attempt, e);
-                            if attempt < 3 { tokio::time::sleep(std::time::Duration::from_secs(2)).await; }
-                        }
-                    }
-                }
-                if copy_ok {
-                    let _ = tokio::fs::remove_file(&source).await;
-                    tracing::info!("Successfully copied and removed {:?} -> {:?}", source, target_path);
-                    let mut updated = task.clone();
-                    updated.destination = target_path.to_string_lossy().to_string();
-                    updated.arr_announced = true;
-                    match media_type {
-                        MediaType::TvSeries | MediaType::TvEpisode => updated.arr_series_id = Some(arr_id as i64),
-                        MediaType::Movie => updated.arr_movie_id = Some(arr_id as i64),
-                    }
-                    Some(updated)
-                } else {
-                    tracing::error!("Failed to move or copy {:?} -> {:?} after 3 attempts", source, target_path);
-                    None
-                }
+            Err(e) => {
+                tracing::error!("Failed to create symlink {:?} -> {:?}: {}", target_path, source, e);
+                None
             }
         };
         
