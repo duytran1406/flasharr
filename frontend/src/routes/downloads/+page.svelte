@@ -1611,17 +1611,34 @@
           class="mobile-batch-header"
           onclick={() => toggleMobileBatch(group.batchId)}
         >
-          <span class="material-icons expand-icon">
-            {isBatchExpanded ? "expand_less" : "expand_more"}
-          </span>
-          <span class="batch-name">{group.batchName}</span>
-          <span class="batch-count">({group.totalItems} files)</span>
-          <span
-            class="status-badge-v2"
-            style="background: {batchStatus.color}15; color: {batchStatus.color}; border-color: {batchStatus.color}30;"
-          >
-            {group.completedCount}/{group.totalItems}
-          </span>
+          <div class="batch-header-top">
+            <span class="material-icons expand-icon">
+              {isBatchExpanded ? "expand_less" : "expand_more"}
+            </span>
+            <span class="batch-name">{group.batchName}</span>
+            <span
+              class="status-badge-v2"
+              style="background: {batchStatus.color}15; color: {batchStatus.color}; border-color: {batchStatus.color}30; flex-shrink: 0;"
+            >
+              {group.completedCount}/{group.totalItems}
+            </span>
+          </div>
+          <div class="batch-progress-mobile">
+            <div class="batch-progress-bar-mobile">
+              <div
+                class="batch-progress-fill-mobile"
+                style="width: {group.progress}%; background: {batchStatus.color};"
+              ></div>
+            </div>
+            <div class="batch-meta-mobile">
+              <span class="batch-pct-mobile">{Math.round(group.progress)}%</span>
+              {#if group.activeCount > 0}
+                <span class="batch-speed-mobile" style="color: {batchStatus.color};">{formatSpeed(group.speed)}</span>
+              {:else}
+                <span class="batch-count-mobile">{group.totalItems} files</span>
+              {/if}
+            </div>
+          </div>
         </div>
         {#if isBatchExpanded}
           <div class="mobile-batch-children">
@@ -1873,6 +1890,30 @@
               Start
             </button>
           {/if}
+          {#if download.state === "COMPLETED" || download.state === "FAILED" || download.state === "PAUSED" || download.state === "CANCELLED"}
+            <button
+              class="mobile-action-btn"
+              style="color: var(--color-secondary, #00f3ff)"
+              onclick={(e) => {
+                e.stopPropagation();
+                handleAction("redownload", download.id);
+              }}
+            >
+              <span class="material-icons">cloud_download</span>
+              Re-download
+            </button>
+          {/if}
+          <button
+            class="mobile-action-btn"
+            onclick={(e) => {
+              e.stopPropagation();
+              navigator.clipboard.writeText(download.url || download.original_url);
+              toasts.success("Link copied!");
+            }}
+          >
+            <span class="material-icons">link</span>
+            Copy Link
+          </button>
           <button
             class="mobile-action-btn action-details"
             onclick={(e) => {
@@ -4154,6 +4195,182 @@
       background: rgba(255, 82, 82, 0.1);
       border-radius: 4px;
     }
+
+    /* Status filter chips strip */
+    .mobile-status-chips {
+      display: flex;
+      gap: 0.5rem;
+      overflow-x: auto;
+      overflow-y: hidden;
+      flex-wrap: nowrap;
+      padding-bottom: 0.25rem;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    .mobile-status-chips::-webkit-scrollbar { display: none; }
+
+    .mobile-status-chip {
+      flex-shrink: 0;
+      padding: 0.35rem 0.85rem;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 20px;
+      color: var(--text-muted);
+      font-size: 0.7rem;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s;
+      min-height: 32px;
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+    .mobile-status-chip.active {
+      background: rgba(0, 243, 255, 0.15);
+      border-color: rgba(0, 243, 255, 0.4);
+      color: var(--color-primary, #00f3ff);
+    }
+    .mobile-status-chip .chip-count {
+      opacity: 0.65;
+      font-size: 0.65rem;
+    }
+
+    /* Batch card */
+    .mobile-batch-card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .mobile-batch-header {
+      padding: 0.85rem 1rem;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      min-height: 56px;
+      justify-content: center;
+      transition: background 0.15s;
+      user-select: none;
+    }
+    .mobile-batch-header:active { background: rgba(255, 255, 255, 0.04); }
+
+    .batch-header-top {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .batch-header-top .expand-icon {
+      font-size: 1.1rem;
+      opacity: 0.6;
+      flex-shrink: 0;
+      color: var(--color-primary, #00f3ff);
+    }
+    .batch-header-top .batch-name {
+      flex: 1;
+      font-size: 0.8rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    /* Batch inline progress */
+    .batch-progress-mobile {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+      padding-left: 1.6rem;
+    }
+    .batch-progress-bar-mobile {
+      height: 3px;
+      background: rgba(255, 255, 255, 0.07);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    .batch-progress-fill-mobile {
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.4s ease;
+    }
+    .batch-meta-mobile {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .batch-pct-mobile {
+      font-size: 0.65rem;
+      font-family: var(--font-mono, monospace);
+      color: var(--text-muted);
+      font-weight: 700;
+    }
+    .batch-speed-mobile {
+      font-size: 0.65rem;
+      font-family: var(--font-mono, monospace);
+      font-weight: 700;
+    }
+    .batch-count-mobile {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+    }
+
+    .mobile-batch-children {
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+    .mobile-batch-children .download-card-mobile {
+      border-radius: 0;
+      border: none;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      padding: 0.75rem 1rem;
+    }
+    .mobile-batch-children .download-card-mobile:last-child {
+      border-bottom: none;
+    }
+
+    /* Tap-to-expand action bar */
+    .mobile-card-actions {
+      display: none;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      padding-top: 0.75rem;
+      margin-top: 0.5rem;
+      border-top: 1px solid rgba(255, 255, 255, 0.07);
+    }
+    .download-card-mobile.expanded .mobile-card-actions {
+      display: flex;
+    }
+
+    .mobile-action-btn {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.4rem 0.75rem;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      color: var(--text-secondary);
+      font-size: 0.68rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      min-height: 32px;
+      white-space: nowrap;
+    }
+    .mobile-action-btn:active { background: rgba(255, 255, 255, 0.12); }
+    .mobile-action-btn .material-icons { font-size: 14px; }
+
+    .mobile-action-btn.action-pause { color: #ff9800; border-color: rgba(255, 152, 0, 0.25); background: rgba(255, 152, 0, 0.08); }
+    .mobile-action-btn.action-resume { color: #00ffa3; border-color: rgba(0, 255, 163, 0.25); background: rgba(0, 255, 163, 0.08); }
+    .mobile-action-btn.action-retry { color: #2196f3; border-color: rgba(33, 150, 243, 0.25); background: rgba(33, 150, 243, 0.08); }
+    .mobile-action-btn.action-start { color: #00ffa3; border-color: rgba(0, 255, 163, 0.25); background: rgba(0, 255, 163, 0.08); }
+    .mobile-action-btn.action-details { color: var(--color-primary, #00f3ff); border-color: rgba(0, 243, 255, 0.2); }
+    .mobile-action-btn.action-delete { color: #ff5252; border-color: rgba(255, 82, 82, 0.2); background: rgba(255, 82, 82, 0.06); }
   }
 
   /* Skeleton Loaders */

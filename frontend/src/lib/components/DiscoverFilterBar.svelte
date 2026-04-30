@@ -74,6 +74,8 @@
     toYear: string;
     minRating: number;
     maxRating: number;
+    resolvedGenreIds?: number[];
+    hasFilter?: boolean;
     onMediaTypeChange: (t: "movie" | "tv") => void;
     onSortChange: (v: string) => void;
     onSearchInput: () => void;
@@ -92,6 +94,8 @@
     toYear = $bindable(),
     minRating = $bindable(),
     maxRating = $bindable(),
+    resolvedGenreIds = $bindable([] as number[]),
+    hasFilter = $bindable(false),
     onMediaTypeChange,
     onSortChange,
     onSearchInput,
@@ -123,25 +127,22 @@
   let ratingPanelOpen = $state(false);
   let ratingPanelRef = $state<HTMLDivElement | null>(null);
 
-  // Derived: is any filter active (excluding sort which is always set)
-  const hasFilter = $derived(
-    selectedGenres.length > 0 ||
-    fromYear !== "" ||
-    toYear !== "" ||
-    minRating > 0 ||
-    maxRating < 10 ||
-    searchQuery.trim() !== ""
-  );
+  // Sync computed values to bindable props so parent can read them
+  $effect(() => {
+    hasFilter =
+      selectedGenres.length > 0 ||
+      fromYear !== "" ||
+      toYear !== "" ||
+      minRating > 0 ||
+      maxRating < 10 ||
+      searchQuery.trim() !== "";
+  });
 
-  // Derived: resolved genre IDs for current media type
-  const resolvedGenreIds = $derived(
-    selectedGenres
+  $effect(() => {
+    resolvedGenreIds = selectedGenres
       .map((g) => (mediaType === "movie" ? g.movieId : g.tvId))
-      .filter((id): id is number => id !== null)
-  );
-
-  // Expose resolved IDs and hasFilter to parent via let binding (read-only)
-  export { resolvedGenreIds, hasFilter };
+      .filter((id): id is number => id !== null);
+  });
 
   // ── Outside-click handler ────────────────────────────────────────────────
   function onDocClick(e: MouseEvent) {
