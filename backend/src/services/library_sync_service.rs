@@ -5,24 +5,20 @@
 //! even for items added or downloaded outside of Flasharr.
 
 use std::sync::Arc;
-use std::path::PathBuf;
 use tokio::time::{Duration, interval};
 use tracing::{info, error, warn};
 use crate::arr::ArrClient;
 use crate::db::Db;
 use crate::db::media::{MediaItem, MediaEpisode};
-use std::path::Path;
-use crate::downloader::{MediaType, task::DownloadState};
 
 pub struct LibrarySyncService {
     db: Arc<Db>,
     arr_client: Arc<ArrClient>,
-    staging_dir: PathBuf,
 }
 
 impl LibrarySyncService {
-    pub fn new(db: Arc<Db>, arr_client: Arc<ArrClient>, staging_dir: PathBuf) -> Self {
-        Self { db, arr_client, staging_dir }
+    pub fn new(db: Arc<Db>, arr_client: Arc<ArrClient>) -> Self {
+        Self { db, arr_client }
     }
 
     /// Run the sync loop periodically
@@ -39,11 +35,6 @@ impl LibrarySyncService {
                 error!("Library sync failed: {}", e);
             } else {
                 info!("Library sync completed metadata update");
-                if let Err(e) = self.reconcile_downloads().await {
-                    error!("Library normalization failed: {}", e);
-                } else {
-                    info!("Library normalization completed");
-                }
             }
         }
     }
@@ -194,143 +185,4 @@ impl LibrarySyncService {
         Ok(())
     }
 
-    /// Reconciles the downloads table with the filesystem and Arr paths.
-    /// Performs bi-directional check and moves files to their permanent homes.
-    pub async fn reconcile_downloads(&self) -> anyhow::Result<()> {
-        info!("[RECONCILE] Starting bi-directional library reconciliation");
-
-        // Resolve media roots from arr once before iterating (avoids repeated API calls)
-        let tv_root = if self.arr_client.has_sonarr() {
-            self.arr_client.get_sonarr_root_folders().await
-                .ok()
-                .and_then(|f| f.first().map(|r| PathBuf::from(&r.path)))
-                .unwrap_or_else(|| self.staging_dir.parent().unwrap_or(&self.staging_dir).join("media/tv"))
-        } else {
-            self.staging_dir.parent().unwrap_or(&self.staging_dir).join("media/tv")
-        };
-        let movie_root = if self.arr_client.has_radarr() {
-            self.arr_client.get_radarr_root_folders().await
-                .ok()
-                .and_then(|f| f.first().map(|r| PathBuf::from(&r.path)))
-                .unwrap_or_else(|| self.staging_dir.parent().unwrap_or(&self.staging_dir).join("media/movies"))
-        } else {
-            self.staging_dir.parent().unwrap_or(&self.staging_dir).join("media/movies")
-        };
-
-        // 1. Get all completed downloads
-        let downloads = self.db.get_all_tasks().map_err(|e| anyhow::anyhow!("DB error: {}", e))?;
-        let completed: Vec<_> = downloads.into_iter().filter(|d| d.state == DownloadState::Completed).collect();
-
-        info!("[RECONCILE] Auditing {} completed downloads", completed.len());
-
-        for mut download in completed {
-            let mut changed = false;
-
-            // 1. Normalize filename (strip leading slash)
-            if download.filename.starts_with('/') {
-                info!("[RECONCILE] Normalizing filename for {}: {} -> {}",
-                    download.id, download.filename, download.filename.trim_start_matches('/'));
-                download.filename = download.filename.trim_start_matches('/').to_string();
-                changed = true;
-            }
-
-            // 2. Fix corrupted destination paths (e.g. movies with "Season X" or missing subfolders)
-            // Re-detect media type to ensure we have the truth
-            let media_type = download.detect_media_type();
-            let expected_type_str = match media_type {
-                MediaType::Movie => "movie",
-                _ => "tv"
-            };
-
-            // If category is "movie" but path has "Season", or vice versa, it's corrupted
-            let has_season_folder = download.destination.contains("/Season ") || download.destination.contains("/season ");
-            let is_movie = expected_type_str == "movie";
-
-            if (is_movie && has_season_folder) || (!is_movie && !has_season_folder && download.tmdb_season.is_some()) {
-                warn!("[RECONCILE] Detected corrupted path for {} {}: {}",
-                    expected_type_str, download.id, download.destination);
-
-                let tmdb_meta = Some(crate::downloader::TmdbDownloadMetadata {
-                    tmdb_id: download.tmdb_id,
-                    media_type: Some(expected_type_str.to_string()),
-                    title: download.tmdb_title.clone(),
-                    year: None,
-                    collection_name: None,
-                    season: download.tmdb_season.map(|s| s as i32),
-                    episode: download.tmdb_episode.map(|e| e as i32),
-                });
-
-                let root_dir = if is_movie { movie_root.clone() } else { tv_root.clone() };
-                let new_dest = crate::downloader::PathBuilder::build_destination_path(
-                    &download.filename,
-                    expected_type_str,
-                    &tmdb_meta,
-                    &root_dir
-                );
-
-                if new_dest != download.destination {
-                    info!("[RECONCILE] Reconstructed path for {}: {} -> {}", download.id, download.destination, new_dest);
-                    download.destination = new_dest;
-                    changed = true;
-                }
-            }
-
-            // Save changes to DB if any
-            if changed {
-                if let Err(e) = self.db.save_task(&download) {
-                    error!("[RECONCILE] Failed to update task {} in DB: {}", download.id, e);
-                }
-            }
-
-            let destination = Path::new(&download.destination);
-
-            // 3. Physical file reconciliation
-            if destination.exists() {
-                if let Ok(metadata) = tokio::fs::symlink_metadata(destination).await {
-                    if metadata.file_type().is_symlink() {
-                        info!("[RECONCILE] Found symlink at {:?}. Converting to real file.", destination);
-                        if let Ok(source) = tokio::fs::read_link(destination).await {
-                            if source.exists() {
-                                let _ = tokio::fs::remove_file(destination).await;
-                                if let Err(e) = tokio::fs::rename(&source, destination).await {
-                                    warn!("[RECONCILE] Failed to convert symlink to move: {}. Falling back to copy.", e);
-                                    if tokio::fs::copy(&source, destination).await.is_ok() {
-                                        let _ = tokio::fs::remove_file(source).await;
-                                    }
-                                }
-                                info!("[RECONCILE] Successfully converted symlink to REAL file for {}", download.id);
-                            }
-                        }
-                    }
-                }
-                continue;
-            }
-
-            // If NOT at destination, check if it's still in the download staging folder
-            let staging_path = self.staging_dir.join(download.filename.trim_start_matches('/'));
-            if staging_path.exists() {
-                info!("[RECONCILE] Found orphaned file at {:?}. Moving to library path: {:?}", staging_path, destination);
-
-                if let Some(parent) = destination.parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
-                }
-
-                if let Err(e) = tokio::fs::rename(&staging_path, destination).await {
-                    warn!("[RECONCILE] Move failed: {}. Trying copy+remove.", e);
-                    if tokio::fs::copy(&staging_path, destination).await.is_ok() {
-                        let _ = tokio::fs::remove_file(&staging_path).await;
-                        info!("[RECONCILE] Successfully moved orphaned file (via copy) for {}", download.id);
-                    } else {
-                        error!("[RECONCILE] Failed to recover orphaned file for {}: {:?}", download.id, e);
-                    }
-                } else {
-                    info!("[RECONCILE] Successfully moved orphaned file to library for {}", download.id);
-                }
-            } else {
-                warn!("[RECONCILE] File missing at path {:?}. Manual repair might be needed for {}", staging_path, download.id);
-            }
-        }
-
-        Ok(())
-    }
 }
