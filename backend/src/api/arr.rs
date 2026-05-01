@@ -35,6 +35,9 @@ pub fn router() -> Router<Arc<AppState>> {
         // Library management
         .route("/series/add", post(add_series))
         .route("/movies/add", post(add_movie))
+        // Queue management
+        .route("/queue", get(queue_overview))
+        .route("/queue/sweep", post(queue_sweep))
 }
 
 // ============================================================================
@@ -108,6 +111,25 @@ struct ArrServiceStatus {
 struct HistoryResponse {
     sonarr: Option<serde_json::Value>,
     radarr: Option<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct QueueOverviewResponse {
+    sonarr_total: usize,
+    sonarr_stuck: usize,
+    radarr_total: usize,
+    radarr_stuck: usize,
+    sonarr_items: Vec<serde_json::Value>,
+    radarr_items: Vec<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct QueueSweepResponse {
+    sonarr_cleared: usize,
+    radarr_cleared: usize,
+    series_rescanned: usize,
+    movies_rescanned: usize,
+    errors: Vec<String>,
 }
 
 // ============================================================================
@@ -390,6 +412,228 @@ async fn history(
 // ============================================================================
 // Library Management Handlers
 // ============================================================================
+
+/// GET /api/arr/queue — Returns current activity queues from Sonarr and Radarr
+async fn queue_overview(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<QueueOverviewResponse>, StatusCode> {
+    let client = state.download_orchestrator.get_arr_client().await
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    let (sonarr_items, sonarr_total) = if client.has_sonarr() {
+        match client.get_sonarr_queue().await {
+            Ok(items) => {
+                let total = items.len();
+                (items, total)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to fetch Sonarr queue: {}", e);
+                (vec![], 0)
+            }
+        }
+    } else {
+        (vec![], 0)
+    };
+
+    let (radarr_items, radarr_total) = if client.has_radarr() {
+        match client.get_radarr_queue().await {
+            Ok(items) => {
+                let total = items.len();
+                (items, total)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to fetch Radarr queue: {}", e);
+                (vec![], 0)
+            }
+        }
+    } else {
+        (vec![], 0)
+    };
+
+    let sonarr_stuck = sonarr_items.iter().filter(|i| is_stuck_sonarr_item(i)).count();
+    let radarr_stuck = radarr_items.iter().filter(|i| is_stuck_radarr_item(i)).count();
+
+    Ok(Json(QueueOverviewResponse {
+        sonarr_total,
+        sonarr_stuck,
+        radarr_total,
+        radarr_stuck,
+        sonarr_items,
+        radarr_items,
+    }))
+}
+
+/// Returns true for Sonarr queue items that are permanently stuck and safe to remove:
+/// - `completed`: import is pending/blocked (file exists but arr can't auto-import it)
+/// - `downloadClientUnavailable` with no downloadId: phantom entry — Sonarr grabbed the release
+///   but never assigned it to a download client (no client was available at grab time)
+/// - `failed`: download or grab failed; Sonarr won't auto-retry these
+fn is_stuck_sonarr_item(item: &serde_json::Value) -> bool {
+    match item["status"].as_str().unwrap_or("") {
+        "completed" | "failed" => true,
+        "downloadClientUnavailable" => {
+            // Only phantom entries (never assigned): downloadId absent or empty
+            item["downloadId"].as_str().map(|s| s.is_empty()).unwrap_or(true)
+                && item["downloadClientId"].as_i64().is_none()
+        }
+        _ => false,
+    }
+}
+
+/// Returns true for Radarr queue items that are permanently stuck and safe to remove.
+/// Same categories as Sonarr — the API shape is identical.
+fn is_stuck_radarr_item(item: &serde_json::Value) -> bool {
+    is_stuck_sonarr_item(item)
+}
+
+/// POST /api/arr/queue/sweep — Clears all permanently stuck queue entries and triggers rescans.
+///
+/// Handles three categories:
+/// - `completed`: file exists in library but arr's DownloadedEpisodesScan loop can't import it.
+/// - `downloadClientUnavailable` (no downloadId): phantom entries that were never sent to a
+///   download client and will never resolve on their own.
+/// - `failed`: downloads that failed in the client or weren't grabbed; arr won't auto-retry.
+///
+/// Fix for each: remove the stale queue entry, then issue RescanSeries/RescanMovie so arr picks
+/// up any file that is already on disk.
+async fn queue_sweep(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<QueueSweepResponse>, StatusCode> {
+    let client = state.download_orchestrator.get_arr_client().await
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+
+    let mut errors = Vec::<String>::new();
+    let mut sonarr_cleared = 0usize;
+    let mut radarr_cleared = 0usize;
+    let mut series_rescanned = 0usize;
+    let mut movies_rescanned = 0usize;
+
+    // ---- Sonarr sweep ----
+    if client.has_sonarr() {
+        match client.get_sonarr_queue().await {
+            Ok(items) => {
+                let stuck: Vec<&serde_json::Value> = items.iter()
+                    .filter(|item| is_stuck_sonarr_item(item))
+                    .collect();
+
+                let ids: Vec<i64> = stuck.iter()
+                    .filter_map(|item| item["id"].as_i64())
+                    .collect();
+
+                // Collect unique series IDs to rescan after clearing
+                let mut series_ids = std::collections::HashSet::<i32>::new();
+                for item in &stuck {
+                    if let Some(sid) = item["seriesId"].as_i64() {
+                        series_ids.insert(sid as i32);
+                    }
+                }
+
+                if !ids.is_empty() {
+                    tracing::info!("[QUEUE-SWEEP] Bulk-deleting {} stuck Sonarr queue entries", ids.len());
+                    match client.bulk_delete_sonarr_queue(&ids, false).await {
+                        Ok(()) => {
+                            sonarr_cleared = ids.len();
+                        }
+                        Err(e) => {
+                            errors.push(format!("Sonarr bulk delete failed: {}", e));
+                        }
+                    }
+                }
+
+                // Trigger rescan for every affected series so Sonarr picks up files
+                for series_id in series_ids {
+                    match client.trigger_series_rescan_by_id(series_id).await {
+                        Ok(()) => {
+                            tracing::info!("[QUEUE-SWEEP] Triggered RescanSeries for seriesId={}", series_id);
+                            series_rescanned += 1;
+                        }
+                        Err(e) => {
+                            errors.push(format!("RescanSeries seriesId={} failed: {}", series_id, e));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                errors.push(format!("Failed to fetch Sonarr queue: {}", e));
+            }
+        }
+    }
+
+    // ---- Radarr sweep ----
+    if client.has_radarr() {
+        match client.get_radarr_queue().await {
+            Ok(items) => {
+                let stuck: Vec<&serde_json::Value> = items.iter()
+                    .filter(|item| is_stuck_radarr_item(item))
+                    .collect();
+
+                // Items with a known movieId can be bulk-deleted safely with blocklist=false.
+                // Items with no movieId ("unknown" items) trigger a NullReferenceException in
+                // Radarr's IgnoredDownloadService when blocklist=false — use blocklist=true as
+                // a workaround; the null downloadClientId prevents any actual blocklist entry.
+                let known_ids: Vec<i64> = stuck.iter()
+                    .filter(|item| item["movieId"].is_number())
+                    .filter_map(|item| item["id"].as_i64())
+                    .collect();
+                let unknown_ids: Vec<i64> = stuck.iter()
+                    .filter(|item| !item["movieId"].is_number())
+                    .filter_map(|item| item["id"].as_i64())
+                    .collect();
+
+                let mut movie_ids = std::collections::HashSet::<i32>::new();
+                for item in &stuck {
+                    if let Some(mid) = item["movieId"].as_i64() {
+                        movie_ids.insert(mid as i32);
+                    }
+                }
+
+                if !known_ids.is_empty() {
+                    tracing::info!("[QUEUE-SWEEP] Bulk-deleting {} known Radarr queue entries", known_ids.len());
+                    match client.bulk_delete_radarr_queue(&known_ids, false).await {
+                        Ok(()) => radarr_cleared += known_ids.len(),
+                        Err(e) => errors.push(format!("Radarr bulk delete (known) failed: {}", e)),
+                    }
+                }
+
+                // Unknown items: delete individually with blocklist=true to avoid the NullRef
+                for item_id in unknown_ids {
+                    match client.delete_radarr_queue_item(item_id, true).await {
+                        Ok(()) => radarr_cleared += 1,
+                        Err(e) => errors.push(format!("Radarr delete item {} failed: {}", item_id, e)),
+                    }
+                }
+
+                for movie_id in movie_ids {
+                    match client.trigger_movie_rescan_by_id(movie_id).await {
+                        Ok(()) => {
+                            tracing::info!("[QUEUE-SWEEP] Triggered RescanMovie for movieId={}", movie_id);
+                            movies_rescanned += 1;
+                        }
+                        Err(e) => {
+                            errors.push(format!("RescanMovie movieId={} failed: {}", movie_id, e));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                errors.push(format!("Failed to fetch Radarr queue: {}", e));
+            }
+        }
+    }
+
+    tracing::info!(
+        "[QUEUE-SWEEP] Done — sonarr_cleared={}, radarr_cleared={}, series_rescanned={}, movies_rescanned={}",
+        sonarr_cleared, radarr_cleared, series_rescanned, movies_rescanned
+    );
+
+    Ok(Json(QueueSweepResponse {
+        sonarr_cleared,
+        radarr_cleared,
+        series_rescanned,
+        movies_rescanned,
+        errors,
+    }))
+}
 
 /// POST /api/arr/series/add — Add TV show to Sonarr by TMDB ID.
 /// Auto-selects the first available root folder; quality profile defaults to 1 ("Any").

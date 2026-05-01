@@ -2088,6 +2088,82 @@ impl DownloadOrchestrator {
             return Some(updated);
         }
 
+        // Guard against duplicate-file creation: if arr already imported this episode/movie
+        // under its own naming scheme (e.g. "Monarch: Legacy of Monsters (2023) - S01E08.mkv"),
+        // the file exists in target_dir under a DIFFERENT name than target_path. Creating a
+        // second symlink here would cause reconcile_downloads to produce two real files in the
+        // same library folder. Detect this by scanning target_dir for any non-symlink media file
+        // that encodes the same episode or is any movie file (for movies, any file = already imported).
+        {
+            let already_imported = 'check: {
+                let mut read_dir = match tokio::fs::read_dir(&target_dir).await {
+                    Ok(rd) => rd,
+                    Err(_) => break 'check false,
+                };
+                let media_exts = ["mkv", "mp4", "avi", "m4v", "ts", "mov"];
+                // Build a match pattern from season+episode numbers so we can detect
+                // arr-renamed files like "… - S01E08 - …" even though target_path uses
+                // a different base name.
+                let ep_pattern = task.tmdb_season.zip(task.tmdb_episode)
+                    .map(|(s, e)| format!("S{:02}E{:02}", s, e).to_lowercase());
+
+                while let Ok(Some(entry)) = read_dir.next_entry().await {
+                    let ep = entry.path();
+                    let meta = match tokio::fs::symlink_metadata(&ep).await {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    };
+                    // Skip symlinks — those are our own previous placements
+                    if meta.file_type().is_symlink() { continue; }
+                    let ext = ep.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                    if !media_exts.contains(&ext.as_str()) { continue; }
+                    // For movies: any real media file in the movie folder = already imported
+                    if matches!(media_type, MediaType::Movie) {
+                        tracing::info!(
+                            "move_to_arr_path: {:?} already contains {:?} — arr imported; skipping symlink",
+                            target_dir, ep
+                        );
+                        break 'check true;
+                    }
+                    // For TV: match on SxxExx pattern in the existing filename
+                    if let Some(ref pat) = ep_pattern {
+                        let name = ep.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+                        if name.contains(pat.as_str()) {
+                            tracing::info!(
+                                "move_to_arr_path: {:?} already contains {:?} matching {} — arr imported; skipping symlink",
+                                target_dir, ep, pat
+                            );
+                            break 'check true;
+                        }
+                    }
+                }
+                false
+            };
+
+            if already_imported {
+                // Arr already has the file; just trigger a rescan to ensure its DB is current
+                // and mark this task as announced so the sweep stops retrying.
+                let rescan_result = match media_type {
+                    MediaType::TvSeries | MediaType::TvEpisode => {
+                        client.trigger_series_rescan_with_path(arr_id, None).await
+                    }
+                    MediaType::Movie => {
+                        client.trigger_movie_refresh_with_path(arr_id, None).await
+                    }
+                };
+                if let Err(e) = rescan_result {
+                    tracing::warn!("Arr rescan trigger failed (non-fatal): {}", e);
+                }
+                let mut updated = task.clone();
+                updated.arr_announced = true;
+                match media_type {
+                    MediaType::TvSeries | MediaType::TvEpisode => updated.arr_series_id = Some(arr_id as i64),
+                    MediaType::Movie => updated.arr_movie_id = Some(arr_id as i64),
+                }
+                return Some(updated);
+            }
+        }
+
         // If a symlink or file already exists at target, remove it first (re-grab scenario)
         if target_path.exists() || tokio::fs::symlink_metadata(&target_path).await.is_ok() {
             tracing::info!("Removing existing file/symlink at {:?}", target_path);

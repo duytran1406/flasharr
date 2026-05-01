@@ -124,8 +124,15 @@ impl LibrarySyncService {
             match self.arr_client.get_all_movies().await {
                 Ok(movie_list) => {
                     for radarr_movie in movie_list {
-                        let tmdb_id = radarr_movie.tmdb_id as i64;
-                        
+                        // Handle cases where Radarr API returns null for tmdb_id
+                        let tmdb_id = radarr_movie.tmdb_id.map(|id| id as i64).unwrap_or(0);
+
+                        // Skip movies without TMDB ID as they can't be properly tracked
+                        if tmdb_id == 0 {
+                            tracing::warn!("Radarr movie '{}' has no TMDB ID, skipping sync", radarr_movie.title);
+                            continue;
+                        }
+
                         let mut item = MediaItem::new(tmdb_id, "movie", &radarr_movie.title);
                         item.year = radarr_movie.year;
                         item.overview = radarr_movie.overview.clone();

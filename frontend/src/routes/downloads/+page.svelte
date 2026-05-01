@@ -81,6 +81,41 @@
   let expandedMobileCardId = $state<string | null>(null);
   let expandedMobileBatches = $state<Set<string>>(new Set());
 
+  // Mobile: long-press context menu
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  let longPressFired = false;
+
+  function startBatchLongPress(e: TouchEvent, batchId: string) {
+    longPressFired = false;
+    const touch = e.touches[0];
+    const x = touch.clientX;
+    const y = touch.clientY;
+    longPressTimer = setTimeout(() => {
+      longPressFired = true;
+      const fakeEvent = { clientX: x, clientY: y, preventDefault: () => {}, stopPropagation: () => {} } as MouseEvent;
+      showBatchContextMenu(fakeEvent, batchId);
+    }, 500);
+  }
+
+  function startCardLongPress(e: TouchEvent, downloadId: string) {
+    longPressFired = false;
+    const touch = e.touches[0];
+    const x = touch.clientX;
+    const y = touch.clientY;
+    longPressTimer = setTimeout(() => {
+      longPressFired = true;
+      const fakeEvent = { clientX: x, clientY: y, preventDefault: () => {}, stopPropagation: () => {} } as MouseEvent;
+      showContextMenu(fakeEvent, downloadId);
+    }, 500);
+  }
+
+  function cancelLongPress() {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+
   function toggleMobileCard(id: string) {
     expandedMobileCardId = expandedMobileCardId === id ? null : id;
   }
@@ -308,8 +343,8 @@
   let groupedDownloads = $derived.by(() => {
     // Convert BatchSummary to BatchGroup interface for compatibility
     const groups: BatchGroup[] = downloadStore.batchList.map((batch) => {
-      // Get batch items from cache if expanded
-      let batchItems = expandedBatches.has(batch.batch_id)
+      // Get batch items from cache if expanded (desktop OR mobile)
+      let batchItems = (expandedBatches.has(batch.batch_id) || expandedMobileBatches.has(batch.batch_id))
         ? downloadStore.batchItems.get(batch.batch_id) || []
         : [];
 
@@ -1609,7 +1644,10 @@
       <div class="mobile-batch-card">
         <div
           class="mobile-batch-header"
-          onclick={() => toggleMobileBatch(group.batchId)}
+          onclick={(e) => { if (longPressFired) { longPressFired = false; e.stopPropagation(); return; } toggleMobileBatch(group.batchId); }}
+          ontouchstart={(e) => startBatchLongPress(e, group.batchId)}
+          ontouchend={cancelLongPress}
+          ontouchmove={cancelLongPress}
         >
           <div class="batch-header-top">
             <span class="material-icons expand-icon">
@@ -1649,7 +1687,10 @@
               <div
                 class="download-card-mobile"
                 class:expanded={isExpanded}
-                onclick={() => toggleMobileCard(download.id)}
+                onclick={(e) => { if (longPressFired) { longPressFired = false; e.stopPropagation(); return; } toggleMobileCard(download.id); }}
+                ontouchstart={(e) => startCardLongPress(e, download.id)}
+                ontouchend={cancelLongPress}
+                ontouchmove={cancelLongPress}
               >
                 <div class="card-header-mobile">
                   <div class="card-name">
@@ -1795,7 +1836,10 @@
       <div
         class="download-card-mobile"
         class:expanded={isExpanded}
-        onclick={() => toggleMobileCard(download.id)}
+        onclick={(e) => { if (longPressFired) { longPressFired = false; e.stopPropagation(); return; } toggleMobileCard(download.id); }}
+        ontouchstart={(e) => startCardLongPress(e, download.id)}
+        ontouchend={cancelLongPress}
+        ontouchmove={cancelLongPress}
       >
         <div class="card-header-mobile">
           <div class="card-name">
@@ -4371,6 +4415,15 @@
     .mobile-action-btn.action-start { color: #00ffa3; border-color: rgba(0, 255, 163, 0.25); background: rgba(0, 255, 163, 0.08); }
     .mobile-action-btn.action-details { color: var(--color-primary, #00f3ff); border-color: rgba(0, 243, 255, 0.2); }
     .mobile-action-btn.action-delete { color: #ff5252; border-color: rgba(255, 82, 82, 0.2); background: rgba(255, 82, 82, 0.06); }
+
+    /* Context menu on mobile: center in viewport instead of at cursor */
+    :global(.context-menu) {
+      left: 50% !important;
+      top: 50% !important;
+      transform: translate(-50%, -50%) !important;
+      min-width: 260px;
+      max-width: calc(100vw - 2rem);
+    }
   }
 
   /* Skeleton Loaders */

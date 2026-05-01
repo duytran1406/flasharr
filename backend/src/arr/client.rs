@@ -121,7 +121,7 @@ pub struct RadarrMovie {
     pub id: i32,
     pub title: String,
     #[serde(rename = "tmdbId")]
-    pub tmdb_id: i32,
+    pub tmdb_id: Option<i32>,
     pub path: Option<String>,
     pub year: Option<i32>,
     pub overview: Option<String>,
@@ -451,11 +451,16 @@ impl ArrClient {
         }
 
         let all_movies: Vec<RadarrMovie> = response.json().await?;
-        
+
         // Find movie with matching TMDB ID
+        // Note: Some Radarr instances return null for tmdb_id in the API response,
+        // so this comparison may not always work. In that case, the artifact manager
+        // will create a new movie entry and store the ID.
         for movie in all_movies {
-            if movie.tmdb_id == tmdb_id as i32 {
-                return Ok(Some(movie.id));
+            if let Some(movie_tmdb_id) = movie.tmdb_id {
+                if movie_tmdb_id == tmdb_id as i32 {
+                    return Ok(Some(movie.id));
+                }
             }
         }
 
@@ -730,11 +735,13 @@ impl ArrClient {
         }
 
         let all_movies: Vec<RadarrMovie> = response.json().await?;
-        
+
         // Find movie with matching TMDB ID
         for movie in all_movies {
-            if movie.tmdb_id == tmdb_id as i32 {
-                return Ok(Some(movie));
+            if let Some(movie_tmdb_id) = movie.tmdb_id {
+                if movie_tmdb_id == tmdb_id as i32 {
+                    return Ok(Some(movie));
+                }
             }
         }
 
@@ -933,6 +940,179 @@ impl ArrClient {
         }
 
         Ok(response.json().await?)
+    }
+
+    // ============================================================================
+    // Queue Management
+    // ============================================================================
+
+    /// Get the full Sonarr activity queue (all pages, up to 500 items)
+    pub async fn get_sonarr_queue(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        let config = self.sonarr_config.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
+
+        let url = format!(
+            "{}/api/v3/queue?page=1&pageSize=500&includeUnknownSeriesItems=true",
+            config.url.trim_end_matches('/')
+        );
+        let response = self.http_client
+            .get(&url)
+            .header("X-Api-Key", &config.api_key)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Sonarr queue fetch failed: HTTP {}", response.status());
+        }
+
+        let data: serde_json::Value = response.json().await?;
+        let records = data["records"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        Ok(records)
+    }
+
+    /// Get the full Radarr activity queue (all pages, up to 500 items)
+    pub async fn get_radarr_queue(&self) -> anyhow::Result<Vec<serde_json::Value>> {
+        let config = self.radarr_config.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
+
+        let url = format!(
+            "{}/api/v3/queue?page=1&pageSize=500&includeUnknownMovieItems=true",
+            config.url.trim_end_matches('/')
+        );
+        let response = self.http_client
+            .get(&url)
+            .header("X-Api-Key", &config.api_key)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Radarr queue fetch failed: HTTP {}", response.status());
+        }
+
+        let data: serde_json::Value = response.json().await?;
+        let records = data["records"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        Ok(records)
+    }
+
+    /// Bulk-delete queue entries from Sonarr.
+    /// `removeFromClient=false` leaves the download client entry intact.
+    /// `blocklist=false` does not blacklist the release.
+    pub async fn bulk_delete_sonarr_queue(&self, ids: &[i64], blocklist: bool) -> anyhow::Result<()> {
+        let config = self.sonarr_config.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
+
+        let url = format!(
+            "{}/api/v3/queue/bulk?removeFromClient=false&blocklist={}",
+            config.url.trim_end_matches('/'),
+            blocklist
+        );
+        let body = serde_json::json!({ "ids": ids });
+        let response = self.http_client
+            .delete(&url)
+            .header("X-Api-Key", &config.api_key)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Sonarr bulk queue delete failed: HTTP {}", response.status());
+        }
+        Ok(())
+    }
+
+    /// Delete a single Radarr queue item by ID.
+    /// Use blocklist=true for items with no movieId to work around a Radarr NullRef bug in
+    /// IgnoredDownloadService when the download client info is absent.
+    pub async fn delete_radarr_queue_item(&self, id: i64, blocklist: bool) -> anyhow::Result<()> {
+        let config = self.radarr_config.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
+
+        let url = format!(
+            "{}/api/v3/queue/{}?removeFromClient=false&blocklist={}",
+            config.url.trim_end_matches('/'),
+            id,
+            blocklist
+        );
+        let response = self.http_client
+            .delete(&url)
+            .header("X-Api-Key", &config.api_key)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Radarr delete queue item {} failed: HTTP {}", id, response.status());
+        }
+        Ok(())
+    }
+
+    /// Bulk-delete queue entries from Radarr.
+    pub async fn bulk_delete_radarr_queue(&self, ids: &[i64], blocklist: bool) -> anyhow::Result<()> {
+        let config = self.radarr_config.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
+
+        let url = format!(
+            "{}/api/v3/queue/bulk?removeFromClient=false&blocklist={}",
+            config.url.trim_end_matches('/'),
+            blocklist
+        );
+        let body = serde_json::json!({ "ids": ids });
+        let response = self.http_client
+            .delete(&url)
+            .header("X-Api-Key", &config.api_key)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Radarr bulk queue delete failed: HTTP {}", response.status());
+        }
+        Ok(())
+    }
+
+    /// Trigger RescanSeries for a specific Sonarr series to pick up files already in the library path.
+    pub async fn trigger_series_rescan_by_id(&self, series_id: i32) -> anyhow::Result<()> {
+        let config = self.sonarr_config.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
+
+        let url = format!("{}/api/v3/command", config.url.trim_end_matches('/'));
+        let body = serde_json::json!({ "name": "RescanSeries", "seriesId": series_id });
+        let response = self.http_client
+            .post(&url)
+            .header("X-Api-Key", &config.api_key)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("RescanSeries command failed: HTTP {}", response.status());
+        }
+        Ok(())
+    }
+
+    /// Trigger RescanMovie for a specific Radarr movie.
+    pub async fn trigger_movie_rescan_by_id(&self, movie_id: i32) -> anyhow::Result<()> {
+        let config = self.radarr_config.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
+
+        let url = format!("{}/api/v3/command", config.url.trim_end_matches('/'));
+        let body = serde_json::json!({ "name": "RescanMovie", "movieId": movie_id });
+        let response = self.http_client
+            .post(&url)
+            .header("X-Api-Key", &config.api_key)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("RescanMovie command failed: HTTP {}", response.status());
+        }
+        Ok(())
     }
 
     /// Check if Sonarr is configured
