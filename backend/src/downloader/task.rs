@@ -36,6 +36,8 @@ pub enum DownloadState {
     Extracting,
     /// Skipped by user or logic
     Skipped,
+    /// File moved to arr library path; polling arr history for import confirmation
+    Importing,
 }
 
 impl Default for DownloadState {
@@ -58,9 +60,9 @@ impl DownloadState {
     
     /// Check if cancel action is available
     pub fn can_cancel(&self) -> bool {
-        matches!(self, 
-            Self::Queued | Self::Starting | Self::Downloading | 
-            Self::Waiting | Self::Paused | Self::Extracting
+        matches!(self,
+            Self::Queued | Self::Starting | Self::Downloading |
+            Self::Waiting | Self::Paused | Self::Extracting | Self::Importing
         )
     }
     

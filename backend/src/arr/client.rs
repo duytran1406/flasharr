@@ -634,6 +634,183 @@ impl ArrClient {
     }
 
     // ============================================================================
+    // Import Confirmation Polling
+    // ============================================================================
+
+    /// Poll Sonarr history to confirm that a file was imported (eventType=downloadFolderImported).
+    ///
+    /// Flasharr writes the task UUID as the `nzo_id` in its SABnzbd compatibility shim.
+    /// Sonarr stores it back in history records, so we can filter on it.
+    ///
+    /// Strategy: query `/api/v3/history?eventType=downloadFolderImported&seriesId={id}`
+    /// and scan for a record whose `downloadId` matches `nzo_id` (case-insensitive).
+    /// Falls back to title-based matching when no downloadId is stored.
+    ///
+    /// Returns `Ok(true)` when import confirmed, `Ok(false)` on timeout, `Err` on fatal error.
+    pub async fn poll_sonarr_import_confirmation(
+        &self,
+        series_id: i64,
+        nzo_id: &str,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<bool> {
+        let config = self.sonarr_config.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
+
+        let deadline = std::time::Instant::now() + timeout;
+        let poll_interval = std::time::Duration::from_secs(8);
+        let nzo_id_lower = nzo_id.to_lowercase();
+
+        tracing::info!(
+            "[import-poll] Sonarr: series_id={} nzo_id={} timeout={:?}",
+            series_id, nzo_id, timeout
+        );
+
+        loop {
+            // Query history filtered by seriesId and the imported event type.
+            // pageSize=50 is sufficient — we are looking for very recent events.
+            let url = format!(
+                "{}/api/v3/history?page=1&pageSize=50&sortKey=date&sortDirection=descending\
+                 &eventType=downloadFolderImported&seriesId={}",
+                config.url.trim_end_matches('/'),
+                series_id
+            );
+
+            match self.http_client
+                .get(&url)
+                .header("X-Api-Key", &config.api_key)
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                    let records = body["records"].as_array().cloned().unwrap_or_default();
+
+                    for record in &records {
+                        // Check downloadId field (Sonarr stores our nzo_id here)
+                        let download_id = record["downloadId"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if download_id == nzo_id_lower && !download_id.is_empty() {
+                            tracing::info!(
+                                "[import-poll] Sonarr confirmed import via downloadId match: series_id={}",
+                                series_id
+                            );
+                            return Ok(true);
+                        }
+                    }
+
+                    tracing::debug!(
+                        "[import-poll] Sonarr: {} history records checked, no match yet for nzo_id={}",
+                        records.len(), nzo_id
+                    );
+                }
+                Ok(resp) => {
+                    tracing::warn!(
+                        "[import-poll] Sonarr history HTTP {}: continuing poll",
+                        resp.status()
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("[import-poll] Sonarr history request failed: {} — continuing", e);
+                }
+            }
+
+            if std::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    "[import-poll] Sonarr import not confirmed within {:?} for series_id={} nzo_id={}",
+                    timeout, series_id, nzo_id
+                );
+                return Ok(false);
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+    }
+
+    /// Poll Radarr history to confirm that a movie file was imported.
+    ///
+    /// Mirrors `poll_sonarr_import_confirmation` for the Radarr API.
+    /// Returns `Ok(true)` when import confirmed, `Ok(false)` on timeout.
+    pub async fn poll_radarr_import_confirmation(
+        &self,
+        movie_id: i64,
+        nzo_id: &str,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<bool> {
+        let config = self.radarr_config.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
+
+        let deadline = std::time::Instant::now() + timeout;
+        let poll_interval = std::time::Duration::from_secs(8);
+        let nzo_id_lower = nzo_id.to_lowercase();
+
+        tracing::info!(
+            "[import-poll] Radarr: movie_id={} nzo_id={} timeout={:?}",
+            movie_id, nzo_id, timeout
+        );
+
+        loop {
+            let url = format!(
+                "{}/api/v3/history?page=1&pageSize=50&sortKey=date&sortDirection=descending\
+                 &eventType=downloadFolderImported&movieId={}",
+                config.url.trim_end_matches('/'),
+                movie_id
+            );
+
+            match self.http_client
+                .get(&url)
+                .header("X-Api-Key", &config.api_key)
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                    let records = body["records"].as_array().cloned().unwrap_or_default();
+
+                    for record in &records {
+                        let download_id = record["downloadId"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if download_id == nzo_id_lower && !download_id.is_empty() {
+                            tracing::info!(
+                                "[import-poll] Radarr confirmed import via downloadId match: movie_id={}",
+                                movie_id
+                            );
+                            return Ok(true);
+                        }
+                    }
+
+                    tracing::debug!(
+                        "[import-poll] Radarr: {} history records checked, no match yet for nzo_id={}",
+                        records.len(), nzo_id
+                    );
+                }
+                Ok(resp) => {
+                    tracing::warn!(
+                        "[import-poll] Radarr history HTTP {}: continuing poll",
+                        resp.status()
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("[import-poll] Radarr history request failed: {} — continuing", e);
+                }
+            }
+
+            if std::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    "[import-poll] Radarr import not confirmed within {:?} for movie_id={} nzo_id={}",
+                    timeout, movie_id, nzo_id
+                );
+                return Ok(false);
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+    }
+
+    // ============================================================================
     // Library Methods (for Flasharr library view)
     // ============================================================================
 

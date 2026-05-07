@@ -22,6 +22,25 @@ use crate::hosts::registry::HostRegistry;
 use crate::db::Db;
 use crate::utils::parser::FilenameParser;
 
+/// Outcome of an `move_to_arr_path` call, carrying enough information for the
+/// worker to enter the `Importing` state and drive closed-loop polling.
+enum ArrMoveOutcome {
+    /// File placed (or already present) in arr library path. arr_id identifies
+    /// the Sonarr series or Radarr movie to poll. `task` has destination updated
+    /// but `arr_announced` is intentionally left `false` until polling confirms.
+    Placed {
+        task: DownloadTask,
+        arr_id: i64,
+        media_type: crate::downloader::MediaType,
+    },
+    /// arr is not configured or task has no TMDB metadata — skip import polling
+    /// and mark completed without arr confirmation.
+    Skipped { task: DownloadTask },
+    /// A fatal error occurred (e.g. filesystem, arr API hard failure) and the
+    /// task could not be placed. Caller should record the error.
+    Failed { reason: String },
+}
+
 /// Download orchestrator - coordinates all download operations
 pub struct DownloadOrchestrator {
     /// Task manager (Single Source of Truth)
@@ -642,11 +661,12 @@ impl DownloadOrchestrator {
         
         match existing.state {
             // Active states - skip and return existing
-            DownloadState::Queued | 
-            DownloadState::Starting | 
-            DownloadState::Downloading | 
-            DownloadState::Paused | 
-            DownloadState::Completed => {
+            DownloadState::Queued |
+            DownloadState::Starting |
+            DownloadState::Downloading |
+            DownloadState::Paused |
+            DownloadState::Completed |
+            DownloadState::Importing => {
                 tracing::info!(
                     "Duplicate detected [code: {}]: Task {} already exists in state {:?}, skipping",
                     code, existing.id, existing.state
@@ -770,17 +790,43 @@ impl DownloadOrchestrator {
 
             // Try to move/symlink to arr path
             match Self::move_to_arr_path(task, &self.arr_client).await {
-                Some(updated_task) => {
-                    // Update in task manager and DB
-                    self.task_manager.update_task(updated_task.clone()).await;
-                    if let Some(db) = &self.db {
-                        let _ = db.save_task(&updated_task);
+                ArrMoveOutcome::Placed { task: placed_task, arr_id, media_type } => {
+                    // Backfill: drive closed-loop polling inline (10-min timeout)
+                    let nzo_id = placed_task.id.to_string();
+                    let arr_guard = self.arr_client.read().await;
+                    let confirmed = if let Some(ref client) = *arr_guard {
+                        let poll_result = match media_type {
+                            crate::downloader::MediaType::TvSeries | crate::downloader::MediaType::TvEpisode =>
+                                client.poll_sonarr_import_confirmation(arr_id, &nzo_id, std::time::Duration::from_secs(600)).await,
+                            crate::downloader::MediaType::Movie =>
+                                client.poll_radarr_import_confirmation(arr_id, &nzo_id, std::time::Duration::from_secs(600)).await,
+                        };
+                        poll_result.unwrap_or(false)
+                    } else {
+                        false
+                    };
+                    drop(arr_guard);
+
+                    let mut final_task = placed_task.clone();
+                    if confirmed {
+                        final_task.arr_announced = true;
+                        final_task.arr_announce_error = None;
+                    } else {
+                        final_task.arr_announce_error = Some("backfill: import poll timed out".into());
                     }
-                    results.push((task_id, filename, format!("linked to {}", updated_task.destination)));
+                    self.task_manager.update_task(final_task.clone()).await;
+                    if let Some(db) = &self.db {
+                        let _ = db.save_task(&final_task);
+                    }
+                    let status = if confirmed { format!("linked to {} (confirmed)", final_task.destination) }
+                                 else { format!("linked to {} (poll timed out)", final_task.destination) };
+                    results.push((task_id, filename, status));
                 }
-                None => {
-                    // move_to_arr_path returned None — could be already at target, not in arr, etc.
-                    results.push((task_id, filename, "skipped: arr lookup failed or already at target".into()));
+                ArrMoveOutcome::Skipped { .. } => {
+                    results.push((task_id, filename, "skipped: arr not configured or no tmdb_id".into()));
+                }
+                ArrMoveOutcome::Failed { reason } => {
+                    results.push((task_id, filename, format!("failed: {}", reason)));
                 }
             }
         }
@@ -1412,40 +1458,125 @@ impl DownloadOrchestrator {
         match result {
             Ok(actual_path) => {
                 tracing::info!("Worker {}: Download completed for {} at {:?}", worker_id, task_id, actual_path);
-                // Persist the actual path the engine used (engine may have remapped /downloads/
-                // to appData/downloads/ when /downloads was not writable). Without this update,
-                // the background sweep checks task.destination which doesn't exist and silently
-                // skips the task every 5 minutes, leaving arr_announced=false forever.
+                // Persist actual path (engine may remap /downloads/ to appData/downloads/)
                 task.destination = actual_path.to_string_lossy().to_string();
                 task_manager.update_task(task.clone()).await;
                 task_manager.mark_completed(task_id).await;
 
-                // Post-completion: Move file to Sonarr/Radarr's series/movie folder
-                // This allows Sonarr/Radarr's disk scan to detect and import the file
+                // Post-completion: symlink into arr library and drive closed-loop import polling.
                 if let Some(completed_task) = task_manager.get_task(task_id).await {
-                    let moved_task = Self::move_to_arr_path(
-                        &completed_task,
-                        arr_client,
-                    ).await;
+                    match Self::move_to_arr_path(&completed_task, arr_client).await {
+                        ArrMoveOutcome::Placed { task: placed_task, arr_id, media_type } => {
+                            // ── Enter Importing state ─────────────────────────────────────────
+                            let mut importing_task = placed_task.clone();
+                            importing_task.state = DownloadState::Importing;
+                            task_manager.update_task(importing_task.clone()).await;
+                            if let Some(db) = db {
+                                let _ = db.save_task(&importing_task);
+                            }
 
-                    // Update task with new destination if file was moved
-                    if let Some(updated_task) = moved_task {
-                        task_manager.update_task(updated_task.clone()).await;
-                        if let Some(db) = db {
-                            let _ = db.save_task(&updated_task);
+                            tracing::info!(
+                                "Worker {}: Task {} entering Importing state (arr_id={}, media_type={:?})",
+                                worker_id, task_id, arr_id, media_type
+                            );
+
+                            // Broadcast Importing state to WebSocket subscribers
+                            let _ = progress_tx.send(ProgressUpdate {
+                                event: TaskEvent::Updated,
+                                task_id: task_id.to_string(),
+                                downloaded_bytes: importing_task.downloaded,
+                                total_bytes: importing_task.size,
+                                speed_bytes_per_sec: 0.0,
+                                eta_seconds: 0.0,
+                                percentage: 100.0,
+                                state: "IMPORTING".to_string(),
+                            });
+
+                            // ── Poll arr history for downloadFolderImported event ────────────
+                            // nzo_id = task UUID (the SABnzbd shim uses this as the download ID)
+                            let nzo_id = task_id.to_string();
+                            let poll_timeout = std::time::Duration::from_secs(600); // 10 min
+
+                            let arr_guard = arr_client.read().await;
+                            let poll_result = if let Some(ref client) = *arr_guard {
+                                match media_type {
+                                    crate::downloader::MediaType::TvSeries |
+                                    crate::downloader::MediaType::TvEpisode =>
+                                        client.poll_sonarr_import_confirmation(arr_id, &nzo_id, poll_timeout).await,
+                                    crate::downloader::MediaType::Movie =>
+                                        client.poll_radarr_import_confirmation(arr_id, &nzo_id, poll_timeout).await,
+                                }
+                            } else {
+                                Ok(false)
+                            };
+                            drop(arr_guard);
+
+                            // ── Finalize: Completed or record timeout error ───────────────────
+                            let mut final_task = importing_task.clone();
+                            final_task.state = DownloadState::Completed;
+
+                            match poll_result {
+                                Ok(true) => {
+                                    tracing::info!(
+                                        "Worker {}: Task {} import confirmed by arr (nzo_id={})",
+                                        worker_id, task_id, nzo_id
+                                    );
+                                    final_task.arr_announced = true;
+                                    final_task.arr_announce_error = None;
+                                }
+                                Ok(false) => {
+                                    tracing::warn!(
+                                        "Worker {}: Task {} import poll timed out after {}s (nzo_id={})",
+                                        worker_id, task_id, poll_timeout.as_secs(), nzo_id
+                                    );
+                                    final_task.arr_announce_error = Some(format!(
+                                        "import poll timed out after {}s",
+                                        poll_timeout.as_secs()
+                                    ));
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Worker {}: Task {} import poll error: {} (nzo_id={})",
+                                        worker_id, task_id, e, nzo_id
+                                    );
+                                    final_task.arr_announce_error = Some(format!("import poll error: {}", e));
+                                }
+                            }
+
+                            task_manager.update_task(final_task.clone()).await;
+                            if let Some(db) = db {
+                                let _ = db.save_task(&final_task);
+                            }
                         }
-                    } else {
-                        tracing::error!(
-                            "Worker {}: move_to_arr_path returned None for {} (tmdb_id={:?}, dest={})",
-                            worker_id, task_id, completed_task.tmdb_id, completed_task.destination
-                        );
-                        if let Some(db) = db {
-                            let _ = db.save_task(&completed_task);
+
+                        ArrMoveOutcome::Skipped { task: skipped_task } => {
+                            // arr not configured or no TMDB metadata — mark completed directly
+                            tracing::info!(
+                                "Worker {}: Task {} skipped arr import (no arr config or tmdb_id)",
+                                worker_id, task_id
+                            );
+                            if let Some(db) = db {
+                                let _ = db.save_task(&skipped_task);
+                            }
+                        }
+
+                        ArrMoveOutcome::Failed { reason } => {
+                            // Filesystem or arr API hard failure — stay Completed, record error
+                            tracing::error!(
+                                "Worker {}: Task {} move_to_arr_path failed: {}",
+                                worker_id, task_id, reason
+                            );
+                            let mut failed_task = completed_task.clone();
+                            failed_task.arr_announce_error = Some(reason);
+                            task_manager.update_task(failed_task.clone()).await;
+                            if let Some(db) = db {
+                                let _ = db.save_task(&failed_task);
+                            }
                         }
                     }
                 }
-                
-                // Broadcast completion
+
+                // Broadcast final completion
                 let _ = progress_tx.send(ProgressUpdate {
                     event: TaskEvent::Updated,
                     task_id: task_id.to_string(),
@@ -1679,8 +1810,10 @@ impl DownloadOrchestrator {
             
             for task in tasks {
                 match task.state {
-                    DownloadState::Downloading | DownloadState::Starting => {
-                        // Resume interrupted downloads as QUEUED
+                    DownloadState::Downloading | DownloadState::Starting | DownloadState::Importing => {
+                        // Resume interrupted downloads / incomplete imports as QUEUED.
+                        // Importing tasks were mid-poll when the server restarted — re-run the
+                        // full download-to-import cycle rather than leaving them in a dead state.
                         let mut resumed_task = task.clone();
                         resumed_task.state = DownloadState::Queued;
                         self.task_manager.add_task(resumed_task).await;
@@ -1758,32 +1891,36 @@ impl DownloadOrchestrator {
     }
 
     
-    /// Symlink completed download into Sonarr/Radarr's series/movie folder.
-    /// The source file stays in the downloads directory; a symlink is placed
-    /// at the arr library path so Sonarr/Radarr (and Jellyfin) can find it.
-    /// Returns updated task with the symlink path as destination.
+    /// Symlink completed download into Sonarr/Radarr's series/movie folder and trigger a
+    /// rescan. Returns an `ArrMoveOutcome` — callers MUST NOT set `arr_announced = true`
+    /// here; that only happens after closed-loop polling confirms `downloadFolderImported`.
     async fn move_to_arr_path(
         task: &DownloadTask,
         arr_client: &Arc<tokio::sync::RwLock<Option<Arc<crate::arr::ArrClient>>>>,
-    ) -> Option<DownloadTask> {
+    ) -> ArrMoveOutcome {
         use crate::downloader::MediaType;
-        
-        // Get arr_client (may not be configured)
+
+        // arr not configured → skip polling entirely
         let client = {
             let guard = arr_client.read().await;
-            guard.clone()?
+            match guard.clone() {
+                Some(c) => c,
+                None => return ArrMoveOutcome::Skipped { task: task.clone() },
+            }
         };
-        
+
         let media_type = task.detect_media_type();
-        
-        // Get the target folder path from Sonarr/Radarr
-        // Always query by tmdb_id — no dependency on cached arr_series_id
+
+        // Resolve arr ID and library root folder
         let (arr_folder, arr_id) = match media_type {
             MediaType::TvSeries | MediaType::TvEpisode => {
                 let series_id = match task.arr_series_id {
                     Some(id) => id,
                     None => {
-                        let tmdb_id = task.tmdb_id?;
+                        let tmdb_id = match task.tmdb_id {
+                            Some(id) => id,
+                            None => return ArrMoveOutcome::Skipped { task: task.clone() },
+                        };
                         tracing::info!("Looking up series by TMDB ID: {}", tmdb_id);
                         match client.series_exists(tmdb_id).await {
                             Ok(Some(id)) => {
@@ -1791,9 +1928,7 @@ impl DownloadOrchestrator {
                                 id as i64
                             }
                             Ok(None) => {
-                                // Safety net: artifact manager should have added this at grab time.
-                                // If missing, auto-add now as fallback.
-                                tracing::warn!("Series not in Sonarr for TMDB {} (artifact manager missed?) — auto-adding as fallback", tmdb_id);
+                                tracing::warn!("Series not in Sonarr for TMDB {} — auto-adding as fallback", tmdb_id);
                                 let root_path = match client.get_sonarr_root_folders().await {
                                     Ok(folders) => folders.first().map(|f| f.path.clone()).unwrap_or_else(|| "/data/media/tv".to_string()),
                                     Err(_) => "/data/media/tv".to_string(),
@@ -1805,13 +1940,13 @@ impl DownloadOrchestrator {
                                     }
                                     Err(e) => {
                                         tracing::error!("Fallback: failed to add series to Sonarr for TMDB {}: {}", tmdb_id, e);
-                                        return None;
+                                        return ArrMoveOutcome::Failed { reason: format!("Sonarr add failed: {}", e) };
                                     }
                                 }
                             }
                             Err(e) => {
                                 tracing::warn!("Failed to look up series by TMDB {}: {}", tmdb_id, e);
-                                return None;
+                                return ArrMoveOutcome::Failed { reason: format!("Sonarr lookup failed: {}", e) };
                             }
                         }
                     }
@@ -1820,7 +1955,7 @@ impl DownloadOrchestrator {
                     Ok(path) => path,
                     Err(e) => {
                         tracing::warn!("Failed to get series path for ID {}: {}", series_id, e);
-                        return None;
+                        return ArrMoveOutcome::Failed { reason: format!("get_series_path failed: {}", e) };
                     }
                 };
                 (path, series_id)
@@ -1829,7 +1964,10 @@ impl DownloadOrchestrator {
                 let movie_id = match task.arr_movie_id {
                     Some(id) => id,
                     None => {
-                        let tmdb_id = task.tmdb_id?;
+                        let tmdb_id = match task.tmdb_id {
+                            Some(id) => id,
+                            None => return ArrMoveOutcome::Skipped { task: task.clone() },
+                        };
                         tracing::info!("Looking up movie by TMDB ID: {}", tmdb_id);
                         match client.movie_exists(tmdb_id).await {
                             Ok(Some(id)) => {
@@ -1837,9 +1975,7 @@ impl DownloadOrchestrator {
                                 id as i64
                             }
                             Ok(None) => {
-                                // Safety net: artifact manager should have added this at grab time.
-                                // If missing, auto-add now as fallback.
-                                tracing::warn!("Movie not in Radarr for TMDB {} (artifact manager missed?) — auto-adding as fallback", tmdb_id);
+                                tracing::warn!("Movie not in Radarr for TMDB {} — auto-adding as fallback", tmdb_id);
                                 let root_path = match client.get_radarr_root_folders().await {
                                     Ok(folders) => folders.first().map(|f| f.path.clone()).unwrap_or_else(|| "/data/media/movies".to_string()),
                                     Err(_) => "/data/media/movies".to_string(),
@@ -1851,13 +1987,13 @@ impl DownloadOrchestrator {
                                     }
                                     Err(e) => {
                                         tracing::error!("Fallback: failed to add movie to Radarr for TMDB {}: {}", tmdb_id, e);
-                                        return None;
+                                        return ArrMoveOutcome::Failed { reason: format!("Radarr add failed: {}", e) };
                                     }
                                 }
                             }
                             Err(e) => {
                                 tracing::warn!("Failed to look up movie by TMDB {}: {}", tmdb_id, e);
-                                return None;
+                                return ArrMoveOutcome::Failed { reason: format!("Radarr lookup failed: {}", e) };
                             }
                         }
                     }
@@ -1866,135 +2002,96 @@ impl DownloadOrchestrator {
                     Ok(path) => path,
                     Err(e) => {
                         tracing::warn!("Failed to get movie path for ID {}: {}", movie_id, e);
-                        return None;
+                        return ArrMoveOutcome::Failed { reason: format!("get_movie_path failed: {}", e) };
                     }
                 };
                 (path, movie_id)
             }
         };
-        
+
         // Build target path
         let source = std::path::Path::new(&task.destination);
-        let filename = source.file_name()?;
-        
+        let filename = match source.file_name() {
+            Some(f) => f,
+            None => return ArrMoveOutcome::Failed { reason: "task destination has no filename".into() },
+        };
+
         let target_dir = match media_type {
             MediaType::TvSeries | MediaType::TvEpisode => {
-                // TV: {series_path}/Season XX/
                 let season = match task.tmdb_season {
                     Some(s) => s,
                     None => {
-                        tracing::warn!("TV task {} has no season number — skipping arr move to prevent Season 1 mislabeling", task.id);
-                        return None;
+                        tracing::warn!("TV task {} has no season number — skipping arr move", task.id);
+                        return ArrMoveOutcome::Skipped { task: task.clone() };
                     }
                 };
                 std::path::PathBuf::from(&arr_folder).join(format!("Season {}", season))
             }
-            MediaType::Movie => {
-                // Movie: {movie_path}/
-                std::path::PathBuf::from(&arr_folder)
-            }
+            MediaType::Movie => std::path::PathBuf::from(&arr_folder),
         };
-        
+
         let target_path = target_dir.join(filename);
-        
-        // If source and target are the same, file is already at arr path — just trigger rescan
+
+        // Helper: build the updated task with arr IDs set but arr_announced intentionally false.
+        let make_placed = |mut t: DownloadTask| -> DownloadTask {
+            match media_type {
+                MediaType::TvSeries | MediaType::TvEpisode => t.arr_series_id = Some(arr_id),
+                MediaType::Movie => t.arr_movie_id = Some(arr_id),
+            }
+            t
+        };
+
+        // ── Case 1: source IS the target — file already at arr path, just rescan ──────────
         if source == target_path {
-                    tracing::info!("File already at target path: {:?} — triggering rescan only", target_path);
-            let rescan_result = match media_type {
-                MediaType::TvSeries | MediaType::TvEpisode => {
-                    client.trigger_series_rescan_with_path(arr_id, Some(target_path.to_str().unwrap_or(""))).await
-                }
-                MediaType::Movie => {
-                    client.trigger_movie_refresh_with_path(arr_id, Some(target_path.to_str().unwrap_or(""))).await
-                }
-            };
-            if let Err(e) = rescan_result {
+            tracing::info!("File already at arr path {:?} — triggering rescan only", target_path);
+            if let Err(e) = match media_type {
+                MediaType::TvSeries | MediaType::TvEpisode =>
+                    client.trigger_series_rescan_with_path(arr_id, Some(target_path.to_str().unwrap_or(""))).await,
+                MediaType::Movie =>
+                    client.trigger_movie_refresh_with_path(arr_id, Some(target_path.to_str().unwrap_or(""))).await,
+            } {
                 tracing::warn!("Arr rescan trigger failed (non-fatal): {}", e);
             }
-            
-            // Return updated task even if already there, to ensure announced = true
-            let mut updated = task.clone();
-            updated.arr_announced = true;
-            match media_type {
-                MediaType::TvSeries | MediaType::TvEpisode => updated.arr_series_id = Some(arr_id as i64),
-                MediaType::Movie => updated.arr_movie_id = Some(arr_id as i64),
-            }
-            return Some(updated);
+            return ArrMoveOutcome::Placed { task: make_placed(task.clone()), arr_id, media_type };
         }
 
-        // Create target directory
+        // ── Case 2: target dir not mountable — arr imports autonomously via SABnzbd ────────
         if let Err(e) = tokio::fs::create_dir_all(&target_dir).await {
-            // Media path is not mounted in this container (e.g. /data/media not in compose volumes).
-            // Sonarr/Radarr imports the file autonomously via SABnzbd history polling.
-            // Trigger a rescan so arr picks up whatever it already imported, then mark announced.
             tracing::warn!(
                 "Cannot create target dir {:?}: {} — media path not mounted. \
-                 Trusting arr SABnzbd import; triggering rescan and marking announced.",
+                 Trusting arr SABnzbd import; triggering rescan and entering Importing state.",
                 target_dir, e
             );
-            let rescan_result = match media_type {
-                MediaType::TvSeries | MediaType::TvEpisode => {
-                    client.trigger_series_rescan_with_path(arr_id, None).await
-                }
-                MediaType::Movie => {
-                    client.trigger_movie_refresh_with_path(arr_id, None).await
-                }
-            };
-            if let Err(re) = rescan_result {
+            if let Err(re) = match media_type {
+                MediaType::TvSeries | MediaType::TvEpisode =>
+                    client.trigger_series_rescan_with_path(arr_id, None).await,
+                MediaType::Movie =>
+                    client.trigger_movie_refresh_with_path(arr_id, None).await,
+            } {
                 tracing::warn!("Arr rescan trigger failed (non-fatal): {}", re);
             }
-            let mut updated = task.clone();
-            updated.arr_announced = true;
-            match media_type {
-                MediaType::TvSeries | MediaType::TvEpisode => updated.arr_series_id = Some(arr_id as i64),
-                MediaType::Movie => updated.arr_movie_id = Some(arr_id as i64),
-            }
-            return Some(updated);
+            return ArrMoveOutcome::Placed { task: make_placed(task.clone()), arr_id, media_type };
         }
 
-        // Source file may be gone — arr imported it autonomously (via SABnzbd history + rename)
-        // before we could move it, or it was lost. Either way, no copy loop: just trigger a
-        // rescan and clear the retry queue. Arr renames on import so we cannot rely on exact
-        // filename presence at target_path.
+        // ── Case 3: source gone — arr imported/renamed autonomously ─────────────────────────
         let source_exists = tokio::fs::metadata(source).await.is_ok();
         if !source_exists {
-            if tokio::fs::metadata(&target_path).await.is_ok() {
-                tracing::info!(
-                    "Source {:?} gone, target {:?} exists — triggering rescan",
-                    source, target_path
-                );
-            } else {
-                tracing::info!(
-                    "Source {:?} gone from downloads (arr imported/renamed or lost) — triggering rescan to clear",
-                    source
-                );
-            }
-            let rescan_result = match media_type {
-                MediaType::TvSeries | MediaType::TvEpisode => {
-                    client.trigger_series_rescan_with_path(arr_id, None).await
-                }
-                MediaType::Movie => {
-                    client.trigger_movie_refresh_with_path(arr_id, None).await
-                }
-            };
-            if let Err(e) = rescan_result {
+            tracing::info!(
+                "Source {:?} gone (arr imported/renamed or lost) — triggering rescan",
+                source
+            );
+            if let Err(e) = match media_type {
+                MediaType::TvSeries | MediaType::TvEpisode =>
+                    client.trigger_series_rescan_with_path(arr_id, None).await,
+                MediaType::Movie =>
+                    client.trigger_movie_refresh_with_path(arr_id, None).await,
+            } {
                 tracing::warn!("Arr rescan trigger failed (non-fatal): {}", e);
             }
-            let mut updated = task.clone();
-            updated.arr_announced = true;
-            match media_type {
-                MediaType::TvSeries | MediaType::TvEpisode => updated.arr_series_id = Some(arr_id as i64),
-                MediaType::Movie => updated.arr_movie_id = Some(arr_id as i64),
-            }
-            return Some(updated);
+            return ArrMoveOutcome::Placed { task: make_placed(task.clone()), arr_id, media_type };
         }
 
-        // Guard against duplicate-file creation: if arr already imported this episode/movie
-        // under its own naming scheme (e.g. "Monarch: Legacy of Monsters (2023) - S01E08.mkv"),
-        // the file exists in target_dir under a DIFFERENT name than target_path. Creating a
-        // second symlink here would cause reconcile_downloads to produce two real files in the
-        // same library folder. Detect this by scanning target_dir for any non-symlink media file
-        // that encodes the same episode or is any movie file (for movies, any file = already imported).
+        // ── Case 4: arr already imported under its own naming scheme — skip symlink ─────────
         {
             let already_imported = 'check: {
                 let mut read_dir = match tokio::fs::read_dir(&target_dir).await {
@@ -2002,9 +2099,6 @@ impl DownloadOrchestrator {
                     Err(_) => break 'check false,
                 };
                 let media_exts = ["mkv", "mp4", "avi", "m4v", "ts", "mov"];
-                // Build a match pattern from season+episode numbers so we can detect
-                // arr-renamed files like "… - S01E08 - …" even though target_path uses
-                // a different base name.
                 let ep_pattern = task.tmdb_season.zip(task.tmdb_episode)
                     .map(|(s, e)| format!("S{:02}E{:02}", s, e).to_lowercase());
 
@@ -2014,11 +2108,9 @@ impl DownloadOrchestrator {
                         Ok(m) => m,
                         Err(_) => continue,
                     };
-                    // Skip symlinks — those are our own previous placements
                     if meta.file_type().is_symlink() { continue; }
                     let ext = ep.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
                     if !media_exts.contains(&ext.as_str()) { continue; }
-                    // For movies: any real media file in the movie folder = already imported
                     if matches!(media_type, MediaType::Movie) {
                         tracing::info!(
                             "move_to_arr_path: {:?} already contains {:?} — arr imported; skipping symlink",
@@ -2026,7 +2118,6 @@ impl DownloadOrchestrator {
                         );
                         break 'check true;
                     }
-                    // For TV: match on SxxExx pattern in the existing filename
                     if let Some(ref pat) = ep_pattern {
                         let name = ep.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
                         if name.contains(pat.as_str()) {
@@ -2042,78 +2133,48 @@ impl DownloadOrchestrator {
             };
 
             if already_imported {
-                // Arr already has the file; just trigger a rescan to ensure its DB is current
-                // and mark this task as announced so the sweep stops retrying.
-                let rescan_result = match media_type {
-                    MediaType::TvSeries | MediaType::TvEpisode => {
-                        client.trigger_series_rescan_with_path(arr_id, None).await
-                    }
-                    MediaType::Movie => {
-                        client.trigger_movie_refresh_with_path(arr_id, None).await
-                    }
-                };
-                if let Err(e) = rescan_result {
+                if let Err(e) = match media_type {
+                    MediaType::TvSeries | MediaType::TvEpisode =>
+                        client.trigger_series_rescan_with_path(arr_id, None).await,
+                    MediaType::Movie =>
+                        client.trigger_movie_refresh_with_path(arr_id, None).await,
+                } {
                     tracing::warn!("Arr rescan trigger failed (non-fatal): {}", e);
                 }
-                let mut updated = task.clone();
-                updated.arr_announced = true;
-                match media_type {
-                    MediaType::TvSeries | MediaType::TvEpisode => updated.arr_series_id = Some(arr_id as i64),
-                    MediaType::Movie => updated.arr_movie_id = Some(arr_id as i64),
-                }
-                return Some(updated);
+                return ArrMoveOutcome::Placed { task: make_placed(task.clone()), arr_id, media_type };
             }
         }
 
-        // If a symlink or file already exists at target, remove it first (re-grab scenario)
+        // ── Case 5: normal path — create symlink then trigger rescan ────────────────────────
         if target_path.exists() || tokio::fs::symlink_metadata(&target_path).await.is_ok() {
             tracing::info!("Removing existing file/symlink at {:?}", target_path);
             let _ = tokio::fs::remove_file(&target_path).await;
         }
 
-        // Create symlink at library path pointing to the downloaded file.
-        // File stays in /data/downloads; Sonarr/Radarr discover it via the symlink + RescanSeries/RescanMovie.
-        // The reconciliation pass in library_sync_service converts the symlink to a real file in the background.
-        tracing::info!(
-            "Creating library symlink: {:?} -> {:?}",
-            target_path, source
-        );
+        tracing::info!("Creating library symlink: {:?} -> {:?}", target_path, source);
 
-        let move_result = match tokio::fs::symlink(&source, &target_path).await {
+        match tokio::fs::symlink(&source, &target_path).await {
             Ok(()) => {
                 tracing::info!("Symlink created: {:?} -> {:?}", target_path, source);
-                let mut updated = task.clone();
-                updated.destination = target_path.to_string_lossy().to_string();
-                updated.arr_announced = true;
-                match media_type {
-                    MediaType::TvSeries | MediaType::TvEpisode => updated.arr_series_id = Some(arr_id as i64),
-                    MediaType::Movie => updated.arr_movie_id = Some(arr_id as i64),
+                // Trigger rescan (fire-and-forget); polling loop will confirm import
+                let target_path_str = target_path.to_str().unwrap_or("");
+                if let Err(e) = match media_type {
+                    MediaType::TvSeries | MediaType::TvEpisode =>
+                        client.trigger_series_rescan_with_path(arr_id, Some(target_path_str)).await,
+                    MediaType::Movie =>
+                        client.trigger_movie_refresh_with_path(arr_id, Some(target_path_str)).await,
+                } {
+                    tracing::warn!("Arr scan trigger failed (non-fatal): {}", e);
                 }
-                Some(updated)
+                let mut placed_task = make_placed(task.clone());
+                placed_task.destination = target_path.to_string_lossy().to_string();
+                ArrMoveOutcome::Placed { task: placed_task, arr_id, media_type }
             }
             Err(e) => {
                 tracing::error!("Failed to create symlink {:?} -> {:?}: {}", target_path, source, e);
-                None
-            }
-        };
-        
-        // Trigger Arr scan for instant import with the target file path (fire-and-forget)
-        if move_result.is_some() {
-            let target_path_str = target_path.to_str().unwrap_or("");
-            let rescan_result = match media_type {
-                MediaType::TvSeries | MediaType::TvEpisode => {
-                    client.trigger_series_rescan_with_path(arr_id, Some(target_path_str)).await
-                }
-                MediaType::Movie => {
-                    client.trigger_movie_refresh_with_path(arr_id, Some(target_path_str)).await
-                }
-            };
-            if let Err(e) = rescan_result {
-                tracing::warn!("Arr scan trigger failed (non-fatal): {}", e);
+                ArrMoveOutcome::Failed { reason: format!("symlink creation failed: {}", e) }
             }
         }
-        
-        move_result
     }
 
     /// Reload *arr client with new configuration (dynamic update without restart)

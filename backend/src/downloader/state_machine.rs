@@ -118,7 +118,7 @@ impl TaskState for DownloadingState {
     fn state_enum(&self) -> DownloadState {
         DownloadState::Downloading
     }
-    
+
     fn can_transition_to(&self, target: DownloadState) -> bool {
         matches!(
             target,
@@ -128,6 +128,7 @@ impl TaskState for DownloadingState {
                 | DownloadState::Cancelled
                 | DownloadState::Waiting
                 | DownloadState::Extracting
+                | DownloadState::Importing
         )
     }
     
@@ -307,13 +308,14 @@ impl TaskState for ExtractingState {
     fn state_enum(&self) -> DownloadState {
         DownloadState::Extracting
     }
-    
+
     fn can_transition_to(&self, target: DownloadState) -> bool {
         matches!(
             target,
             DownloadState::Completed
                 | DownloadState::Failed
                 | DownloadState::Cancelled
+                | DownloadState::Importing
         )
     }
     
@@ -334,20 +336,45 @@ impl TaskState for SkippedState {
     fn state_enum(&self) -> DownloadState {
         DownloadState::Skipped
     }
-    
+
     fn can_transition_to(&self, target: DownloadState) -> bool {
         matches!(target, DownloadState::Queued)
     }
-    
+
     fn available_actions(&self) -> Vec<&'static str> {
         vec!["resume", "delete"]
     }
-    
+
     fn can_resume(&self) -> bool {
         true
     }
-    
+
     fn can_delete(&self) -> bool {
+        true
+    }
+}
+
+/// Importing state - file placed in arr library path; polling for import confirmation
+#[derive(Debug)]
+pub struct ImportingState;
+
+impl TaskState for ImportingState {
+    fn state_enum(&self) -> DownloadState {
+        DownloadState::Importing
+    }
+
+    fn can_transition_to(&self, target: DownloadState) -> bool {
+        matches!(
+            target,
+            DownloadState::Completed | DownloadState::Failed | DownloadState::Cancelled
+        )
+    }
+
+    fn available_actions(&self) -> Vec<&'static str> {
+        vec!["cancel"]
+    }
+
+    fn can_cancel(&self) -> bool {
         true
     }
 }
@@ -373,6 +400,7 @@ static FAILED: Lazy<Arc<dyn TaskState>> = Lazy::new(|| Arc::new(FailedState));
 static CANCELLED: Lazy<Arc<dyn TaskState>> = Lazy::new(|| Arc::new(CancelledState));
 static EXTRACTING: Lazy<Arc<dyn TaskState>> = Lazy::new(|| Arc::new(ExtractingState));
 static SKIPPED: Lazy<Arc<dyn TaskState>> = Lazy::new(|| Arc::new(SkippedState));
+static IMPORTING: Lazy<Arc<dyn TaskState>> = Lazy::new(|| Arc::new(ImportingState));
 
 impl TaskStateFactory {
     /// Get state object for given state enum (returns singleton)
@@ -388,6 +416,7 @@ impl TaskStateFactory {
             DownloadState::Cancelled => CANCELLED.clone(),
             DownloadState::Extracting => EXTRACTING.clone(),
             DownloadState::Skipped => SKIPPED.clone(),
+            DownloadState::Importing => IMPORTING.clone(),
         }
     }
 }
