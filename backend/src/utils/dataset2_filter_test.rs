@@ -18,7 +18,8 @@ mod tests {
     #[test]
     #[ignore = "requires local dataset file at debug_log/dataset_2.json"]
     fn count_dataset2_parsing_success() {
-        let file_path = "/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/debug_log/dataset_2.json";
+        let file_path =
+            "/Users/blavkbeav/Documents/Workspace/Flasharr/Flasharr/debug_log/dataset_2.json";
         let file = File::open(file_path).expect("Failed to open dataset file");
         let reader = BufReader::new(file);
         let dataset: Dataset = serde_json::from_reader(reader).expect("Failed to parse JSON");
@@ -33,11 +34,11 @@ mod tests {
 
         for item in &dataset.data {
             let filename = &item.name;
-            
+
             // Old method
             let old = FilenameParser::parse(filename);
             let old_has_episode = old.episode.is_some();
-            
+
             // New method
             let new = smart_parse(filename);
             let new_has_episode = new.episode.is_some();
@@ -60,19 +61,25 @@ mod tests {
         println!("├─────────────────────────────────────────────────────┤");
         println!("│ Method              │ Passed  │ Failed  │ Pass Rate │");
         println!("├─────────────────────┼─────────┼─────────┼───────────┤");
-        println!("│ Old (FilenameParser)│ {:>7} │ {:>7} │   {:>5.1}%  │", 
-                 old_passed, 
-                 dataset.data.len() - old_passed,
-                 (old_passed as f64 / dataset.data.len() as f64) * 100.0);
-        println!("│ New (SmartTokenizer)│ {:>7} │ {:>7} │   {:>5.1}%  │", 
-                 new_passed,
-                 dataset.data.len() - new_passed,
-                 (new_passed as f64 / dataset.data.len() as f64) * 100.0);
+        println!(
+            "│ Old (FilenameParser)│ {:>7} │ {:>7} │   {:>5.1}%  │",
+            old_passed,
+            dataset.data.len() - old_passed,
+            (old_passed as f64 / dataset.data.len() as f64) * 100.0
+        );
+        println!(
+            "│ New (SmartTokenizer)│ {:>7} │ {:>7} │   {:>5.1}%  │",
+            new_passed,
+            dataset.data.len() - new_passed,
+            (new_passed as f64 / dataset.data.len() as f64) * 100.0
+        );
         println!("└─────────────────────┴─────────┴─────────┴───────────┘");
 
-        println!("\n📈 Improvement: +{} files ({:.1}% increase)",
-                 new_passed - old_passed,
-                 ((new_passed - old_passed) as f64 / old_passed as f64) * 100.0);
+        println!(
+            "\n📈 Improvement: +{} files ({:.1}% increase)",
+            new_passed - old_passed,
+            ((new_passed - old_passed) as f64 / old_passed as f64) * 100.0
+        );
 
         if !old_failed_examples.is_empty() {
             println!("\n❌ Old Method Failed Examples (first 5):");
@@ -89,8 +96,17 @@ mod tests {
         }
 
         println!("\n✅ Conclusion:");
-        println!("   Old Method: {} files would be available for smart search", old_passed);
-        println!("   New Method: {} files would be available for smart search", new_passed);
-        println!("   Difference: {} more files accessible with new method\n", new_passed - old_passed);
+        println!(
+            "   Old Method: {} files would be available for smart search",
+            old_passed
+        );
+        println!(
+            "   New Method: {} files would be available for smart search",
+            new_passed
+        );
+        println!(
+            "   Difference: {} more files accessible with new method\n",
+            new_passed - old_passed
+        );
     }
 }

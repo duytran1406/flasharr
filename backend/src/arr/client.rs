@@ -3,9 +3,11 @@
 //! HTTP client for communicating with Sonarr and Radarr APIs.
 //! Triggers automatic imports when downloads complete.
 
+use crate::config::ArrConfig;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use crate::config::ArrConfig;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{Mutex, OnceCell};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RootFolder {
@@ -20,9 +22,8 @@ pub struct ArrClient {
     http_client: Client,
     sonarr_config: Option<ArrConfig>,
     radarr_config: Option<ArrConfig>,
+    tmdb_tvdb_cache: Arc<Mutex<HashMap<i64, Arc<OnceCell<Result<i32, String>>>>>>,
 }
-
-
 
 // ============================================================================
 // Sonarr Types
@@ -193,7 +194,6 @@ pub struct HealthCheck {
     pub wiki_url: Option<String>,
 }
 
-
 impl ArrClient {
     /// Create a new *arr client with configuration
     pub fn new(sonarr_config: Option<ArrConfig>, radarr_config: Option<ArrConfig>) -> Self {
@@ -201,16 +201,19 @@ impl ArrClient {
             http_client: Client::new(),
             sonarr_config,
             radarr_config,
+            tmdb_tvdb_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-
-
     /// Test connection to an *arr service (Sonarr or Radarr)
-    pub async fn test_connection(url: &str, api_key: &str, service_name: &str) -> anyhow::Result<String> {
+    pub async fn test_connection(
+        url: &str,
+        api_key: &str,
+        service_name: &str,
+    ) -> anyhow::Result<String> {
         let client = Client::new();
         let test_url = format!("{}/api/v3/system/status", url.trim_end_matches('/'));
-        
+
         let response = client
             .get(&test_url)
             .header("X-Api-Key", api_key)
@@ -240,7 +243,6 @@ impl ArrClient {
         Self::test_connection(url, api_key, "Radarr").await
     }
 
-
     // ============================================================================
     // Series/Movie Management Methods
     // ============================================================================
@@ -253,7 +255,9 @@ impl ArrClient {
         quality_profile_id: i32,
         root_folder_path: &str,
     ) -> anyhow::Result<i32> {
-        let config = self.sonarr_config.as_ref()
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         if !config.enabled {
@@ -270,7 +274,8 @@ impl ArrClient {
             tvdb_id
         );
 
-        let lookup_response = self.http_client
+        let lookup_response = self
+            .http_client
             .get(&lookup_url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -281,7 +286,8 @@ impl ArrClient {
         }
 
         let mut lookup_results: Vec<serde_json::Value> = lookup_response.json().await?;
-        let series_data = lookup_results.first_mut()
+        let series_data = lookup_results
+            .first_mut()
             .ok_or_else(|| anyhow::anyhow!("No series found for TVDB ID {}", tvdb_id))?;
 
         // Step 3: Modify series data for adding
@@ -295,7 +301,8 @@ impl ArrClient {
 
         // Step 4: Add series to Sonarr
         let add_url = format!("{}/api/v3/series", config.url.trim_end_matches('/'));
-        let add_response = self.http_client
+        let add_response = self
+            .http_client
             .post(&add_url)
             .header("X-Api-Key", &config.api_key)
             .json(&series_data)
@@ -309,8 +316,12 @@ impl ArrClient {
         }
 
         let added_series: SonarrSeries = add_response.json().await?;
-        tracing::info!("Added series '{}' to Sonarr (ID: {})", added_series.title, added_series.id);
-        
+        tracing::info!(
+            "Added series '{}' to Sonarr (ID: {})",
+            added_series.title,
+            added_series.id
+        );
+
         Ok(added_series.id)
     }
 
@@ -322,7 +333,9 @@ impl ArrClient {
         quality_profile_id: i32,
         root_folder_path: &str,
     ) -> anyhow::Result<i32> {
-        let config = self.radarr_config.as_ref()
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         if !config.enabled {
@@ -336,7 +349,8 @@ impl ArrClient {
             tmdb_id
         );
 
-        let lookup_response = self.http_client
+        let lookup_response = self
+            .http_client
             .get(&lookup_url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -358,7 +372,8 @@ impl ArrClient {
 
         // Step 3: Add movie to Radarr
         let add_url = format!("{}/api/v3/movie", config.url.trim_end_matches('/'));
-        let add_response = self.http_client
+        let add_response = self
+            .http_client
             .post(&add_url)
             .header("X-Api-Key", &config.api_key)
             .json(&movie_data)
@@ -372,15 +387,21 @@ impl ArrClient {
         }
 
         let added_movie: RadarrMovie = add_response.json().await?;
-        tracing::info!("Added movie '{}' to Radarr (ID: {})", added_movie.title, added_movie.id);
-        
+        tracing::info!(
+            "Added movie '{}' to Radarr (ID: {})",
+            added_movie.title,
+            added_movie.id
+        );
+
         Ok(added_movie.id)
     }
 
     /// Check if series exists in Sonarr by TMDB ID
     /// Returns Sonarr series ID if exists, None otherwise
     pub async fn series_exists(&self, tmdb_id: i64) -> anyhow::Result<Option<i32>> {
-        let config = self.sonarr_config.as_ref()
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         if !config.enabled {
@@ -389,7 +410,8 @@ impl ArrClient {
 
         // Get all series from Sonarr
         let url = format!("{}/api/v3/series", config.url.trim_end_matches('/'));
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -400,11 +422,16 @@ impl ArrClient {
         }
 
         let all_series: Vec<SonarrSeries> = response.json().await?;
-        
+
         // Primary: Match directly by TMDB ID (most reliable, no external API needed)
         for series in &all_series {
             if series.tmdb_id == Some(tmdb_id as i32) {
-                tracing::info!("Found series '{}' in Sonarr by tmdb_id={} (ID: {})", series.title, tmdb_id, series.id);
+                tracing::info!(
+                    "Found series '{}' in Sonarr by tmdb_id={} (ID: {})",
+                    series.title,
+                    tmdb_id,
+                    series.id
+                );
                 return Ok(Some(series.id));
             }
         }
@@ -414,24 +441,35 @@ impl ArrClient {
             Ok(tvdb_id) => {
                 for series in &all_series {
                     if series.tvdb_id == Some(tvdb_id) {
-                        tracing::info!("Found series '{}' in Sonarr by tvdb_id={} (from tmdb_id={}, ID: {})", series.title, tvdb_id, tmdb_id, series.id);
+                        tracing::info!(
+                            "Found series '{}' in Sonarr by tvdb_id={} (from tmdb_id={}, ID: {})",
+                            series.title,
+                            tvdb_id,
+                            tmdb_id,
+                            series.id
+                        );
                         return Ok(Some(series.id));
                     }
                 }
             }
             Err(e) => {
-                tracing::debug!("TMDB→TVDB conversion failed for tmdb_id={}: {} (non-fatal, tmdb_id match already tried)", tmdb_id, e);
+                tracing::debug!(
+                    "TMDB→TVDB conversion failed for tmdb_id={}: {} (non-fatal, tmdb_id match already tried)",
+                    tmdb_id,
+                    e
+                );
             }
         }
 
         Ok(None)
     }
 
-
     /// Check if movie exists in Radarr by TMDB ID
     /// Returns Radarr movie ID if exists, None otherwise
     pub async fn movie_exists(&self, tmdb_id: i64) -> anyhow::Result<Option<i32>> {
-        let config = self.radarr_config.as_ref()
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         if !config.enabled {
@@ -440,7 +478,8 @@ impl ArrClient {
 
         // Get all movies from Radarr
         let url = format!("{}/api/v3/movie", config.url.trim_end_matches('/'));
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -467,15 +506,16 @@ impl ArrClient {
         Ok(None)
     }
 
-
-
     /// Get root folders from Sonarr
     pub async fn get_sonarr_root_folders(&self) -> anyhow::Result<Vec<RootFolder>> {
-        let config = self.sonarr_config.as_ref()
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         let url = format!("{}/api/v3/rootfolder", config.url.trim_end_matches('/'));
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -489,28 +529,31 @@ impl ArrClient {
         Ok(folders)
     }
 
-
-
     /// Get Radarr root folders
     pub async fn get_radarr_root_folders(&self) -> anyhow::Result<Vec<RootFolder>> {
-        let config = self.radarr_config.as_ref()
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         let url = format!("{}/api/v3/rootfolder", config.url.trim_end_matches('/'));
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
             .await?;
 
         if !response.status().is_success() {
-            anyhow::bail!("Failed to get Radarr root folders: HTTP {}", response.status());
+            anyhow::bail!(
+                "Failed to get Radarr root folders: HTTP {}",
+                response.status()
+            );
         }
 
         let folders: Vec<RootFolder> = response.json().await?;
         Ok(folders)
     }
-
 
     // ============================================================================
     // Path Lookup Methods (for post-completion file placement)
@@ -519,43 +562,74 @@ impl ArrClient {
     /// Get series folder path from Sonarr by series ID
     /// Returns the path Sonarr uses for this series (e.g., "/data/media/tv/How Dare You!! (2026)")
     pub async fn get_series_path(&self, series_id: i64) -> anyhow::Result<String> {
-        let config = self.sonarr_config.as_ref()
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
-        let url = format!("{}/api/v3/series/{}", config.url.trim_end_matches('/'), series_id);
-        let response = self.http_client
+        let url = format!(
+            "{}/api/v3/series/{}",
+            config.url.trim_end_matches('/'),
+            series_id
+        );
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
             .await?;
 
         if !response.status().is_success() {
-            anyhow::bail!("Failed to get series {}: HTTP {}", series_id, response.status());
+            anyhow::bail!(
+                "Failed to get series {}: HTTP {}",
+                series_id,
+                response.status()
+            );
         }
 
         let series: SonarrSeries = response.json().await?;
-        series.path.ok_or_else(|| anyhow::anyhow!("Series {} has no path", series_id))
+        series
+            .path
+            .ok_or_else(|| anyhow::anyhow!("Series {} has no path", series_id))
     }
 
     /// Get movie folder path from Radarr by movie ID
     /// Returns the path Radarr uses for this movie (e.g., "/data/media/movies/Snow White (2025)")
     pub async fn get_movie_path(&self, movie_id: i64) -> anyhow::Result<String> {
-        let config = self.radarr_config.as_ref()
+        let movie = self.get_movie_by_id(movie_id).await?;
+        movie
+            .path
+            .ok_or_else(|| anyhow::anyhow!("Movie {} has no path", movie_id))
+    }
+
+    /// Get Radarr movie details by Radarr movie ID.
+    pub async fn get_movie_by_id(&self, movie_id: i64) -> anyhow::Result<RadarrMovie> {
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
-        let url = format!("{}/api/v3/movie/{}", config.url.trim_end_matches('/'), movie_id);
-        let response = self.http_client
+        let url = format!(
+            "{}/api/v3/movie/{}",
+            config.url.trim_end_matches('/'),
+            movie_id
+        );
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
             .await?;
 
         if !response.status().is_success() {
-            anyhow::bail!("Failed to get movie {}: HTTP {}", movie_id, response.status());
+            anyhow::bail!(
+                "Failed to get movie {}: HTTP {}",
+                movie_id,
+                response.status()
+            );
         }
 
-        let movie: RadarrMovie = response.json().await?;
-        movie.path.ok_or_else(|| anyhow::anyhow!("Movie {} has no path", movie_id))
+        Ok(response.json().await?)
     }
 
     // ============================================================================
@@ -571,8 +645,14 @@ impl ArrClient {
 
     /// Trigger Sonarr to rescan the series folder. `path` is unused but kept for call-site
     /// compatibility — Sonarr's RescanSeries operates at series level, not file level.
-    pub async fn trigger_series_rescan_with_path(&self, series_id: i64, _path: Option<&str>) -> anyhow::Result<()> {
-        let config = self.sonarr_config.as_ref()
+    pub async fn trigger_series_rescan_with_path(
+        &self,
+        series_id: i64,
+        _path: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         let url = format!("{}/api/v3/command", config.url.trim_end_matches('/'));
@@ -581,7 +661,8 @@ impl ArrClient {
             "seriesId": series_id
         });
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&url)
             .header("X-Api-Key", &config.api_key)
             .json(&body)
@@ -591,7 +672,12 @@ impl ArrClient {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("RescanSeries failed for series {}: HTTP {} - {}", series_id, status, text);
+            anyhow::bail!(
+                "RescanSeries failed for series {}: HTTP {} - {}",
+                series_id,
+                status,
+                text
+            );
         }
 
         tracing::info!("Triggered RescanSeries for series ID {}", series_id);
@@ -606,8 +692,14 @@ impl ArrClient {
 
     /// Trigger Radarr to rescan the movie folder. `path` is unused — RescanMovie operates
     /// at movie level, not file level.
-    pub async fn trigger_movie_refresh_with_path(&self, movie_id: i64, _path: Option<&str>) -> anyhow::Result<()> {
-        let config = self.radarr_config.as_ref()
+    pub async fn trigger_movie_refresh_with_path(
+        &self,
+        movie_id: i64,
+        _path: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         let url = format!("{}/api/v3/command", config.url.trim_end_matches('/'));
@@ -616,7 +708,8 @@ impl ArrClient {
             "movieId": movie_id
         });
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&url)
             .header("X-Api-Key", &config.api_key)
             .json(&body)
@@ -626,10 +719,109 @@ impl ArrClient {
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("RescanMovie failed for movie {}: HTTP {} - {}", movie_id, status, text);
+            anyhow::bail!(
+                "RescanMovie failed for movie {}: HTTP {} - {}",
+                movie_id,
+                status,
+                text
+            );
         }
 
         tracing::info!("Triggered RescanMovie for movie ID {}", movie_id);
+        Ok(())
+    }
+
+    /// Ask Sonarr to import a completed download from the download-client folder.
+    /// This keeps Flasharr out of the media library filesystem and lets Sonarr
+    /// own move/rename decisions.
+    pub async fn trigger_downloaded_episodes_scan(
+        &self,
+        path: &str,
+        download_client_id: &str,
+    ) -> anyhow::Result<()> {
+        let config = self
+            .sonarr_config
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
+
+        let url = format!("{}/api/v3/command", config.url.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "name": "DownloadedEpisodesScan",
+            "path": path,
+            "downloadClientId": download_client_id,
+            "importMode": "Move"
+        });
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("X-Api-Key", &config.api_key)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "DownloadedEpisodesScan failed for path {}: HTTP {} - {}",
+                path,
+                status,
+                text
+            );
+        }
+
+        tracing::info!(
+            "Triggered DownloadedEpisodesScan for {} ({})",
+            path,
+            download_client_id
+        );
+        Ok(())
+    }
+
+    /// Ask Radarr to import a completed download from the download-client folder.
+    pub async fn trigger_downloaded_movies_scan(
+        &self,
+        path: &str,
+        download_client_id: &str,
+    ) -> anyhow::Result<()> {
+        let config = self
+            .radarr_config
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
+
+        let url = format!("{}/api/v3/command", config.url.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "name": "DownloadedMoviesScan",
+            "path": path,
+            "downloadClientId": download_client_id,
+            "importMode": "Move"
+        });
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("X-Api-Key", &config.api_key)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "DownloadedMoviesScan failed for path {}: HTTP {} - {}",
+                path,
+                status,
+                text
+            );
+        }
+
+        tracing::info!(
+            "Triggered DownloadedMoviesScan for {} ({})",
+            path,
+            download_client_id
+        );
         Ok(())
     }
 
@@ -653,7 +845,9 @@ impl ArrClient {
         nzo_id: &str,
         timeout: std::time::Duration,
     ) -> anyhow::Result<bool> {
-        let config = self.sonarr_config.as_ref()
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         let deadline = std::time::Instant::now() + timeout;
@@ -662,20 +856,22 @@ impl ArrClient {
 
         tracing::info!(
             "[import-poll] Sonarr: series_id={} nzo_id={} timeout={:?}",
-            series_id, nzo_id, timeout
+            series_id,
+            nzo_id,
+            timeout
         );
 
         loop {
-            // Query history filtered by seriesId and the imported event type.
+            // Query history filtered by seriesId.
             // pageSize=50 is sufficient — we are looking for very recent events.
             let url = format!(
-                "{}/api/v3/history?page=1&pageSize=50&sortKey=date&sortDirection=descending\
-                 &eventType=downloadFolderImported&seriesId={}",
+                "{}/api/v3/history?page=1&pageSize=50&sortKey=date&sortDirection=descending&seriesId={}",
                 config.url.trim_end_matches('/'),
                 series_id
             );
 
-            match self.http_client
+            match self
+                .http_client
                 .get(&url)
                 .header("X-Api-Key", &config.api_key)
                 .send()
@@ -686,11 +882,15 @@ impl ArrClient {
                     let records = body["records"].as_array().cloned().unwrap_or_default();
 
                     for record in &records {
+                        // Sonarr event types include 'grabbed', 'downloadFolderImported', etc.
+                        let event_type = record["eventType"].as_str().unwrap_or("");
+                        if event_type != "downloadFolderImported" {
+                            continue;
+                        }
+
                         // Check downloadId field (Sonarr stores our nzo_id here)
-                        let download_id = record["downloadId"]
-                            .as_str()
-                            .unwrap_or("")
-                            .to_lowercase();
+                        let download_id =
+                            record["downloadId"].as_str().unwrap_or("").to_lowercase();
                         if download_id == nzo_id_lower && !download_id.is_empty() {
                             tracing::info!(
                                 "[import-poll] Sonarr confirmed import via downloadId match: series_id={}",
@@ -702,7 +902,8 @@ impl ArrClient {
 
                     tracing::debug!(
                         "[import-poll] Sonarr: {} history records checked, no match yet for nzo_id={}",
-                        records.len(), nzo_id
+                        records.len(),
+                        nzo_id
                     );
                 }
                 Ok(resp) => {
@@ -712,14 +913,132 @@ impl ArrClient {
                     );
                 }
                 Err(e) => {
-                    tracing::warn!("[import-poll] Sonarr history request failed: {} — continuing", e);
+                    tracing::warn!(
+                        "[import-poll] Sonarr history request failed: {} — continuing",
+                        e
+                    );
                 }
             }
 
             if std::time::Instant::now() >= deadline {
                 tracing::warn!(
                     "[import-poll] Sonarr import not confirmed within {:?} for series_id={} nzo_id={}",
-                    timeout, series_id, nzo_id
+                    timeout,
+                    series_id,
+                    nzo_id
+                );
+                return Ok(false);
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+    }
+
+    /// Poll Sonarr until either the download history matches or the specific
+    /// episode is present in the library. RescanSeries imports often do not keep
+    /// Flasharr's task UUID in history, so episode state is the durable signal.
+    pub async fn poll_sonarr_episode_import_confirmation(
+        &self,
+        series_id: i64,
+        nzo_id: &str,
+        season_number: i32,
+        episode_number: i32,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<bool> {
+        let deadline = std::time::Instant::now() + timeout;
+        let poll_interval = std::time::Duration::from_secs(8);
+        let nzo_id_lower = nzo_id.to_lowercase();
+
+        tracing::info!(
+            "[import-poll] Sonarr episode: series_id={} S{:02}E{:02} nzo_id={} timeout={:?}",
+            series_id,
+            season_number,
+            episode_number,
+            nzo_id,
+            timeout
+        );
+
+        loop {
+            match self
+                .get_episode_by_details(series_id as i32, season_number, episode_number)
+                .await
+            {
+                Ok(Some(episode)) if episode.has_file => {
+                    tracing::info!(
+                        "[import-poll] Sonarr confirmed import via episode state: series_id={} S{:02}E{:02}",
+                        series_id,
+                        season_number,
+                        episode_number
+                    );
+                    return Ok(true);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        "[import-poll] Sonarr episode state request failed: {} — continuing",
+                        e
+                    );
+                }
+            }
+
+            let config = self
+                .sonarr_config
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
+            let url = format!(
+                "{}/api/v3/history?page=1&pageSize=50&sortKey=date&sortDirection=descending&seriesId={}",
+                config.url.trim_end_matches('/'),
+                series_id
+            );
+
+            match self
+                .http_client
+                .get(&url)
+                .header("X-Api-Key", &config.api_key)
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    let body: serde_json::Value = resp.json().await.unwrap_or_default();
+                    let records = body["records"].as_array().cloned().unwrap_or_default();
+                    for record in &records {
+                        if record["eventType"].as_str().unwrap_or("") != "downloadFolderImported" {
+                            continue;
+                        }
+
+                        let download_id =
+                            record["downloadId"].as_str().unwrap_or("").to_lowercase();
+                        if download_id == nzo_id_lower && !download_id.is_empty() {
+                            tracing::info!(
+                                "[import-poll] Sonarr confirmed import via downloadId match: series_id={}",
+                                series_id
+                            );
+                            return Ok(true);
+                        }
+                    }
+                }
+                Ok(resp) => {
+                    tracing::warn!(
+                        "[import-poll] Sonarr history HTTP {}: continuing poll",
+                        resp.status()
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "[import-poll] Sonarr history request failed: {} — continuing",
+                        e
+                    );
+                }
+            }
+
+            if std::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    "[import-poll] Sonarr episode import not confirmed within {:?} for series_id={} S{:02}E{:02} nzo_id={}",
+                    timeout,
+                    series_id,
+                    season_number,
+                    episode_number,
+                    nzo_id
                 );
                 return Ok(false);
             }
@@ -738,7 +1057,9 @@ impl ArrClient {
         nzo_id: &str,
         timeout: std::time::Duration,
     ) -> anyhow::Result<bool> {
-        let config = self.radarr_config.as_ref()
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         let deadline = std::time::Instant::now() + timeout;
@@ -747,18 +1068,37 @@ impl ArrClient {
 
         tracing::info!(
             "[import-poll] Radarr: movie_id={} nzo_id={} timeout={:?}",
-            movie_id, nzo_id, timeout
+            movie_id,
+            nzo_id,
+            timeout
         );
 
         loop {
+            match self.get_movie_by_id(movie_id).await {
+                Ok(movie) if movie.has_file.unwrap_or(false) => {
+                    tracing::info!(
+                        "[import-poll] Radarr confirmed import via movie state: movie_id={}",
+                        movie_id
+                    );
+                    return Ok(true);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        "[import-poll] Radarr movie state request failed: {} — continuing",
+                        e
+                    );
+                }
+            }
+
             let url = format!(
-                "{}/api/v3/history?page=1&pageSize=50&sortKey=date&sortDirection=descending\
-                 &eventType=downloadFolderImported&movieId={}",
+                "{}/api/v3/history?page=1&pageSize=50&sortKey=date&sortDirection=descending&movieId={}",
                 config.url.trim_end_matches('/'),
                 movie_id
             );
 
-            match self.http_client
+            match self
+                .http_client
                 .get(&url)
                 .header("X-Api-Key", &config.api_key)
                 .send()
@@ -769,10 +1109,13 @@ impl ArrClient {
                     let records = body["records"].as_array().cloned().unwrap_or_default();
 
                     for record in &records {
-                        let download_id = record["downloadId"]
-                            .as_str()
-                            .unwrap_or("")
-                            .to_lowercase();
+                        let event_type = record["eventType"].as_str().unwrap_or("");
+                        if event_type != "downloadFolderImported" {
+                            continue;
+                        }
+
+                        let download_id =
+                            record["downloadId"].as_str().unwrap_or("").to_lowercase();
                         if download_id == nzo_id_lower && !download_id.is_empty() {
                             tracing::info!(
                                 "[import-poll] Radarr confirmed import via downloadId match: movie_id={}",
@@ -784,7 +1127,8 @@ impl ArrClient {
 
                     tracing::debug!(
                         "[import-poll] Radarr: {} history records checked, no match yet for nzo_id={}",
-                        records.len(), nzo_id
+                        records.len(),
+                        nzo_id
                     );
                 }
                 Ok(resp) => {
@@ -794,14 +1138,19 @@ impl ArrClient {
                     );
                 }
                 Err(e) => {
-                    tracing::warn!("[import-poll] Radarr history request failed: {} — continuing", e);
+                    tracing::warn!(
+                        "[import-poll] Radarr history request failed: {} — continuing",
+                        e
+                    );
                 }
             }
 
             if std::time::Instant::now() >= deadline {
                 tracing::warn!(
                     "[import-poll] Radarr import not confirmed within {:?} for movie_id={} nzo_id={}",
-                    timeout, movie_id, nzo_id
+                    timeout,
+                    movie_id,
+                    nzo_id
                 );
                 return Ok(false);
             }
@@ -816,11 +1165,14 @@ impl ArrClient {
 
     /// Get all series from Sonarr
     pub async fn get_all_series(&self) -> anyhow::Result<Vec<SonarrSeries>> {
-        let config = self.sonarr_config.as_ref()
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         let url = format!("{}/api/v3/series", config.url.trim_end_matches('/'));
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -835,11 +1187,14 @@ impl ArrClient {
 
     /// Get all movies from Radarr
     pub async fn get_all_movies(&self) -> anyhow::Result<Vec<RadarrMovie>> {
-        let config = self.radarr_config.as_ref()
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         let url = format!("{}/api/v3/movie", config.url.trim_end_matches('/'));
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -854,11 +1209,18 @@ impl ArrClient {
 
     /// Get episodes for a series from Sonarr
     pub async fn get_episodes(&self, series_id: i32) -> anyhow::Result<Vec<SonarrEpisode>> {
-        let config = self.sonarr_config.as_ref()
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
-        let url = format!("{}/api/v3/episode?seriesId={}", config.url.trim_end_matches('/'), series_id);
-        let response = self.http_client
+        let url = format!(
+            "{}/api/v3/episode?seriesId={}",
+            config.url.trim_end_matches('/'),
+            series_id
+        );
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -873,20 +1235,26 @@ impl ArrClient {
 
     /// Get specific episode from Sonarr by checking all episodes for series
     /// Returns the episode if found (matching season/episode numbers)
-    pub async fn get_episode_by_details(&self, series_id: i32, season_number: i32, episode_number: i32) -> anyhow::Result<Option<SonarrEpisode>> {
+    pub async fn get_episode_by_details(
+        &self,
+        series_id: i32,
+        season_number: i32,
+        episode_number: i32,
+    ) -> anyhow::Result<Option<SonarrEpisode>> {
         let episodes = self.get_episodes(series_id).await?;
-        
+
         // Find matching episode
-        Ok(episodes.into_iter().find(|e| 
-            e.season_number == season_number && 
-            e.episode_number == episode_number
-        ))
+        Ok(episodes
+            .into_iter()
+            .find(|e| e.season_number == season_number && e.episode_number == episode_number))
     }
 
     /// Get movie by TMDB ID from Radarr
     /// Returns full movie object if found
     pub async fn get_movie_by_tmdb(&self, tmdb_id: i64) -> anyhow::Result<Option<RadarrMovie>> {
-        let config = self.radarr_config.as_ref()
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         if !config.enabled {
@@ -896,12 +1264,13 @@ impl ArrClient {
         // Get all movies from Radarr
         // optimization: In V3 API we might be able to filter, but standard pattern is fetch all
         // For large libraries this might be heavy, but it's safe.
-        // Option B: lookup/tmdb?tmdbId=X returns the movie *metadata*, 
+        // Option B: lookup/tmdb?tmdbId=X returns the movie *metadata*,
         // but we want the *library status*. `movie/lookup/tmdb` returns "added": "0001-01-01..." if not added.
         // Let's use `movie` endpoint which returns library movies.
-        
+
         let url = format!("{}/api/v3/movie", config.url.trim_end_matches('/'));
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -926,19 +1295,28 @@ impl ArrClient {
     }
 
     // ============================================================================
-    // Calendar & Missing Methods 
+    // Calendar & Missing Methods
     // ============================================================================
 
     /// Get upcoming episodes from Sonarr calendar
-    pub async fn get_calendar(&self, start: &str, end: &str) -> anyhow::Result<Vec<SonarrCalendarEntry>> {
-        let config = self.sonarr_config.as_ref()
+    pub async fn get_calendar(
+        &self,
+        start: &str,
+        end: &str,
+    ) -> anyhow::Result<Vec<SonarrCalendarEntry>> {
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         let url = format!(
             "{}/api/v3/calendar?start={}&end={}&includeSeries=true",
-            config.url.trim_end_matches('/'), start, end
+            config.url.trim_end_matches('/'),
+            start,
+            end
         );
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -952,15 +1330,24 @@ impl ArrClient {
     }
 
     /// Get missing episodes from Sonarr (wanted/missing)
-    pub async fn get_missing_episodes(&self, page: i32, page_size: i32) -> anyhow::Result<serde_json::Value> {
-        let config = self.sonarr_config.as_ref()
+    pub async fn get_missing_episodes(
+        &self,
+        page: i32,
+        page_size: i32,
+    ) -> anyhow::Result<serde_json::Value> {
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         let url = format!(
             "{}/api/v3/wanted/missing?page={}&pageSize={}&sortKey=airDateUtc&sortDirection=descending",
-            config.url.trim_end_matches('/'), page, page_size
+            config.url.trim_end_matches('/'),
+            page,
+            page_size
         );
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -974,15 +1361,24 @@ impl ArrClient {
     }
 
     /// Get missing movies from Radarr (wanted/missing)
-    pub async fn get_missing_movies(&self, page: i32, page_size: i32) -> anyhow::Result<serde_json::Value> {
-        let config = self.radarr_config.as_ref()
+    pub async fn get_missing_movies(
+        &self,
+        page: i32,
+        page_size: i32,
+    ) -> anyhow::Result<serde_json::Value> {
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         let url = format!(
             "{}/api/v3/wanted/missing?page={}&pageSize={}&sortKey=date&sortDirection=descending",
-            config.url.trim_end_matches('/'), page, page_size
+            config.url.trim_end_matches('/'),
+            page,
+            page_size
         );
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -1001,11 +1397,14 @@ impl ArrClient {
 
     /// Get disk space from Sonarr
     pub async fn get_sonarr_disk_space(&self) -> anyhow::Result<Vec<DiskSpace>> {
-        let config = self.sonarr_config.as_ref()
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         let url = format!("{}/api/v3/diskspace", config.url.trim_end_matches('/'));
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -1020,11 +1419,14 @@ impl ArrClient {
 
     /// Get health checks from Sonarr
     pub async fn get_sonarr_health(&self) -> anyhow::Result<Vec<HealthCheck>> {
-        let config = self.sonarr_config.as_ref()
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         let url = format!("{}/api/v3/health", config.url.trim_end_matches('/'));
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -1039,11 +1441,14 @@ impl ArrClient {
 
     /// Get system status from Sonarr
     pub async fn get_sonarr_status(&self) -> anyhow::Result<SystemStatus> {
-        let config = self.sonarr_config.as_ref()
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         let url = format!("{}/api/v3/system/status", config.url.trim_end_matches('/'));
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -1058,11 +1463,14 @@ impl ArrClient {
 
     /// Get system status from Radarr
     pub async fn get_radarr_status(&self) -> anyhow::Result<SystemStatus> {
-        let config = self.radarr_config.as_ref()
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         let url = format!("{}/api/v3/system/status", config.url.trim_end_matches('/'));
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -1077,14 +1485,18 @@ impl ArrClient {
 
     /// Get recent history from Sonarr
     pub async fn get_sonarr_history(&self, page_size: i32) -> anyhow::Result<serde_json::Value> {
-        let config = self.sonarr_config.as_ref()
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         let url = format!(
             "{}/api/v3/history?page=1&pageSize={}&sortKey=date&sortDirection=descending",
-            config.url.trim_end_matches('/'), page_size
+            config.url.trim_end_matches('/'),
+            page_size
         );
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -1099,14 +1511,18 @@ impl ArrClient {
 
     /// Get recent history from Radarr
     pub async fn get_radarr_history(&self, page_size: i32) -> anyhow::Result<serde_json::Value> {
-        let config = self.radarr_config.as_ref()
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         let url = format!(
             "{}/api/v3/history?page=1&pageSize={}&sortKey=date&sortDirection=descending",
-            config.url.trim_end_matches('/'), page_size
+            config.url.trim_end_matches('/'),
+            page_size
         );
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -1125,14 +1541,17 @@ impl ArrClient {
 
     /// Get the full Sonarr activity queue (all pages, up to 500 items)
     pub async fn get_sonarr_queue(&self) -> anyhow::Result<Vec<serde_json::Value>> {
-        let config = self.sonarr_config.as_ref()
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         let url = format!(
             "{}/api/v3/queue?page=1&pageSize=500&includeUnknownSeriesItems=true",
             config.url.trim_end_matches('/')
         );
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -1143,23 +1562,23 @@ impl ArrClient {
         }
 
         let data: serde_json::Value = response.json().await?;
-        let records = data["records"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let records = data["records"].as_array().cloned().unwrap_or_default();
         Ok(records)
     }
 
     /// Get the full Radarr activity queue (all pages, up to 500 items)
     pub async fn get_radarr_queue(&self) -> anyhow::Result<Vec<serde_json::Value>> {
-        let config = self.radarr_config.as_ref()
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         let url = format!(
             "{}/api/v3/queue?page=1&pageSize=500&includeUnknownMovieItems=true",
             config.url.trim_end_matches('/')
         );
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
@@ -1170,18 +1589,21 @@ impl ArrClient {
         }
 
         let data: serde_json::Value = response.json().await?;
-        let records = data["records"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let records = data["records"].as_array().cloned().unwrap_or_default();
         Ok(records)
     }
 
     /// Bulk-delete queue entries from Sonarr.
     /// `removeFromClient=false` leaves the download client entry intact.
     /// `blocklist=false` does not blacklist the release.
-    pub async fn bulk_delete_sonarr_queue(&self, ids: &[i64], blocklist: bool) -> anyhow::Result<()> {
-        let config = self.sonarr_config.as_ref()
+    pub async fn bulk_delete_sonarr_queue(
+        &self,
+        ids: &[i64],
+        blocklist: bool,
+    ) -> anyhow::Result<()> {
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         let url = format!(
@@ -1190,7 +1612,8 @@ impl ArrClient {
             blocklist
         );
         let body = serde_json::json!({ "ids": ids });
-        let response = self.http_client
+        let response = self
+            .http_client
             .delete(&url)
             .header("X-Api-Key", &config.api_key)
             .json(&body)
@@ -1198,7 +1621,10 @@ impl ArrClient {
             .await?;
 
         if !response.status().is_success() {
-            anyhow::bail!("Sonarr bulk queue delete failed: HTTP {}", response.status());
+            anyhow::bail!(
+                "Sonarr bulk queue delete failed: HTTP {}",
+                response.status()
+            );
         }
         Ok(())
     }
@@ -1207,7 +1633,9 @@ impl ArrClient {
     /// Use blocklist=true for items with no movieId to work around a Radarr NullRef bug in
     /// IgnoredDownloadService when the download client info is absent.
     pub async fn delete_radarr_queue_item(&self, id: i64, blocklist: bool) -> anyhow::Result<()> {
-        let config = self.radarr_config.as_ref()
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         let url = format!(
@@ -1216,21 +1644,32 @@ impl ArrClient {
             id,
             blocklist
         );
-        let response = self.http_client
+        let response = self
+            .http_client
             .delete(&url)
             .header("X-Api-Key", &config.api_key)
             .send()
             .await?;
 
         if !response.status().is_success() {
-            anyhow::bail!("Radarr delete queue item {} failed: HTTP {}", id, response.status());
+            anyhow::bail!(
+                "Radarr delete queue item {} failed: HTTP {}",
+                id,
+                response.status()
+            );
         }
         Ok(())
     }
 
     /// Bulk-delete queue entries from Radarr.
-    pub async fn bulk_delete_radarr_queue(&self, ids: &[i64], blocklist: bool) -> anyhow::Result<()> {
-        let config = self.radarr_config.as_ref()
+    pub async fn bulk_delete_radarr_queue(
+        &self,
+        ids: &[i64],
+        blocklist: bool,
+    ) -> anyhow::Result<()> {
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         let url = format!(
@@ -1239,7 +1678,8 @@ impl ArrClient {
             blocklist
         );
         let body = serde_json::json!({ "ids": ids });
-        let response = self.http_client
+        let response = self
+            .http_client
             .delete(&url)
             .header("X-Api-Key", &config.api_key)
             .json(&body)
@@ -1247,19 +1687,25 @@ impl ArrClient {
             .await?;
 
         if !response.status().is_success() {
-            anyhow::bail!("Radarr bulk queue delete failed: HTTP {}", response.status());
+            anyhow::bail!(
+                "Radarr bulk queue delete failed: HTTP {}",
+                response.status()
+            );
         }
         Ok(())
     }
 
     /// Trigger RescanSeries for a specific Sonarr series to pick up files already in the library path.
     pub async fn trigger_series_rescan_by_id(&self, series_id: i32) -> anyhow::Result<()> {
-        let config = self.sonarr_config.as_ref()
+        let config = self
+            .sonarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Sonarr not configured"))?;
 
         let url = format!("{}/api/v3/command", config.url.trim_end_matches('/'));
         let body = serde_json::json!({ "name": "RescanSeries", "seriesId": series_id });
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&url)
             .header("X-Api-Key", &config.api_key)
             .json(&body)
@@ -1274,12 +1720,15 @@ impl ArrClient {
 
     /// Trigger RescanMovie for a specific Radarr movie.
     pub async fn trigger_movie_rescan_by_id(&self, movie_id: i32) -> anyhow::Result<()> {
-        let config = self.radarr_config.as_ref()
+        let config = self
+            .radarr_config
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Radarr not configured"))?;
 
         let url = format!("{}/api/v3/command", config.url.trim_end_matches('/'));
         let body = serde_json::json!({ "name": "RescanMovie", "movieId": movie_id });
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&url)
             .header("X-Api-Key", &config.api_key)
             .json(&body)
@@ -1306,31 +1755,60 @@ impl ArrClient {
     // Helper Methods
     // ============================================================================
 
-    /// Convert TMDB ID to TVDB ID using Sonarr's lookup API
-    async fn tmdb_to_tvdb_via_sonarr(&self, tmdb_id: i64, _config: &ArrConfig) -> anyhow::Result<i32> {
-        // Use TMDB API to get TVDB ID
+    /// Convert TMDB ID to TVDB ID once per TMDB series ID.
+    ///
+    /// A season pack can enqueue many episodes at the same time. Without this
+    /// shared cell each episode independently hits TMDB's external IDs endpoint,
+    /// and transient lookup differences can make one title partially import.
+    async fn tmdb_to_tvdb_via_sonarr(
+        &self,
+        tmdb_id: i64,
+        _config: &ArrConfig,
+    ) -> anyhow::Result<i32> {
+        let cell = {
+            let mut cache = self.tmdb_tvdb_cache.lock().await;
+            cache
+                .entry(tmdb_id)
+                .or_insert_with(|| Arc::new(OnceCell::new()))
+                .clone()
+        };
+
+        let result = cell
+            .get_or_init(|| async {
+                self.fetch_tvdb_id_from_tmdb(tmdb_id)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await;
+
+        result.clone().map_err(|e| anyhow::anyhow!(e))
+    }
+
+    async fn fetch_tvdb_id_from_tmdb(&self, tmdb_id: i64) -> anyhow::Result<i32> {
         use crate::constants::TMDB_API_KEY;
-        
+
         let external_ids_url = format!(
             "https://api.themoviedb.org/3/tv/{}/external_ids?api_key={}",
             tmdb_id, TMDB_API_KEY
         );
 
+        tracing::info!(
+            "TMDB→TVDB cache MISS for TMDB {} — fetching external IDs",
+            tmdb_id
+        );
         let ext_response = self.http_client.get(&external_ids_url).send().await?;
-        
+
         if !ext_response.status().is_success() {
             anyhow::bail!("Failed to get external IDs: HTTP {}", ext_response.status());
         }
 
         let ext_data: serde_json::Value = ext_response.json().await?;
-        
+
         let tvdb_id = ext_data["tvdb_id"]
             .as_i64()
             .ok_or_else(|| anyhow::anyhow!("No TVDB ID found for TMDB ID {}", tmdb_id))?;
 
+        tracing::info!("TMDB→TVDB resolved TMDB {} → TVDB {}", tmdb_id, tvdb_id);
         Ok(tvdb_id as i32)
     }
-
 }
-
-

@@ -1,29 +1,24 @@
-use axum::{
-    routing::get,
-    Router,
-    Json,
-};
+use axum::{routing::get, Json, Router};
+use figment::providers::Format;
+use moka::future::Cache;
 use serde::Serialize;
 use std::net::SocketAddr;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use figment::providers::Format;
-use tower_http::services::{ServeDir, ServeFile};
-use tower_http::cors::{CorsLayer, Any};
-use moka::future::Cache;
 use std::time::Duration;
+use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod api;
-mod downloader;
-mod hosts;
-mod websocket;
-mod db;
-mod config;
-mod utils;
 mod arr;
+mod config;
 mod constants;
+mod db;
+mod downloader;
 mod error;
+mod hosts;
 mod services;
-
+mod utils;
+mod websocket;
 
 use std::sync::Arc;
 
@@ -95,19 +90,24 @@ async fn main() {
 
     // Create appData directory structure if needed
     if let Err(e) = config::ensure_appdata_dirs() {
-        tracing::warn!("Failed to create appData directories: {}. Continuing with legacy paths.", e);
+        tracing::warn!(
+            "Failed to create appData directories: {}. Continuing with legacy paths.",
+            e
+        );
     }
 
     // Get paths with fallback to old locations
     let config_path = config::get_config_path();
     let db_path = config::get_db_path();
-    
+
     tracing::info!("Loading config from: {}", config_path.display());
     tracing::info!("Using database at: {}", db_path.display());
 
     // Load Config
     let config: config::Config = figment::Figment::new()
-        .merge(figment::providers::Serialized::defaults(config::Config::default()))
+        .merge(figment::providers::Serialized::defaults(
+            config::Config::default(),
+        ))
         .merge(figment::providers::Toml::file(config_path))
         .merge(figment::providers::Env::prefixed("FLASHARR_"))
         .extract()
@@ -115,7 +115,7 @@ async fn main() {
 
     // Initialize Database
     let db = Arc::new(db::Db::new(&db_path).expect("Failed to initialize database"));
-    
+
     // Ensure indexer API key exists (generate if needed)
     if db.get_setting("indexer_api_key").ok().flatten().is_none() {
         let api_key = format!("flasharr_{}", uuid::Uuid::new_v4().simple());
@@ -129,8 +129,12 @@ async fn main() {
     // Initialize components
     let (tx_broadcast, _) = tokio::sync::broadcast::channel(100);
     let shared_http_client = hosts::create_shared_client();
-    let host_registry = Arc::new(hosts::create_registry(&config, shared_http_client, Arc::clone(&db)));
-    
+    let host_registry = Arc::new(hosts::create_registry(
+        &config,
+        shared_http_client,
+        Arc::clone(&db),
+    ));
+
     // Create download config from app config
     let mut download_config = downloader::config::DownloadConfig {
         max_concurrent: config.downloads.max_concurrent,
@@ -140,6 +144,11 @@ async fn main() {
         retry_attempts: 3,
         retry_backoff_base: 30,
         retry_max_wait: 300,
+        symlink_real_base: config.downloads.symlink_real_base.clone().or_else(|| {
+            std::env::var("FLASHARR_SYMLINK_REAL_BASE")
+                .ok()
+                .map(std::path::PathBuf::from)
+        }),
         retry: downloader::config::RetryConfig::default(),
     };
 
@@ -149,10 +158,44 @@ async fn main() {
     let app_data_dir = std::env::var("FLASHARR_APPDATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join("appData"));
-    
+
+    if let Some(shared_dir) = download_config.symlink_real_base.clone() {
+        let app_downloads = app_data_dir.join("downloads");
+        let current_dir = download_config.download_dir.clone();
+        let uses_container_download_path =
+            current_dir == std::path::PathBuf::from("/downloads") || current_dir == app_downloads;
+
+        if uses_container_download_path {
+            let shared_test_file =
+                shared_dir.join(format!(".write_test_{}", uuid::Uuid::new_v4().simple()));
+            let shared_dir_is_writable = std::fs::create_dir_all(&shared_dir)
+                .and_then(|_| std::fs::File::create(&shared_test_file).map(|_| ()))
+                .map(|_| {
+                    let _ = std::fs::remove_file(&shared_test_file);
+                    true
+                })
+                .unwrap_or(false);
+
+            if shared_dir_is_writable {
+                tracing::info!(
+                    "Using shared download directory {} instead of container path {}",
+                    shared_dir.display(),
+                    current_dir.display()
+                );
+                download_config.download_dir = shared_dir;
+            } else {
+                tracing::warn!(
+                    "Shared download directory {} is not writable; keeping configured directory {}",
+                    shared_dir.display(),
+                    current_dir.display()
+                );
+            }
+        }
+    }
+
     let current_dir = &download_config.download_dir;
     let fallback_dir = app_data_dir.join("downloads");
-    
+
     let is_not_writable = if !current_dir.exists() {
         std::fs::create_dir_all(current_dir).is_err()
     } else {
@@ -162,7 +205,7 @@ async fn main() {
             Ok(_) => {
                 let _ = std::fs::remove_file(test_file);
                 false
-            },
+            }
             Err(_) => true,
         }
     };
@@ -173,22 +216,26 @@ async fn main() {
             current_dir.display(),
             fallback_dir.display()
         );
-        
+
         // Ensure fallback directory exists
         if let Err(e) = std::fs::create_dir_all(&fallback_dir) {
-            tracing::error!("CRITICAL: Failed to create fallback download directory {}: {}", fallback_dir.display(), e);
+            tracing::error!(
+                "CRITICAL: Failed to create fallback download directory {}: {}",
+                fallback_dir.display(),
+                e
+            );
         } else {
             download_config.download_dir = fallback_dir;
         }
     } else {
         tracing::info!("Using download directory: {}", current_dir.display());
     }
-    
+
     // Load Arr configuration from database (setup wizard saves here)
     // This ensures webhook handler initializes correctly even if settings were saved before
     let sonarr_config = if let (Some(url), Some(api_key)) = (
         db.get_setting("sonarr_url").ok().flatten(),
-        db.get_setting("sonarr_api_key").ok().flatten()
+        db.get_setting("sonarr_api_key").ok().flatten(),
     ) {
         if !url.is_empty() && !api_key.is_empty() {
             tracing::info!("Loading Sonarr config from database: {}", url);
@@ -204,10 +251,10 @@ async fn main() {
     } else {
         config.sonarr.clone()
     };
-    
+
     let radarr_config = if let (Some(url), Some(api_key)) = (
         db.get_setting("radarr_url").ok().flatten(),
-        db.get_setting("radarr_api_key").ok().flatten()
+        db.get_setting("radarr_api_key").ok().flatten(),
     ) {
         if !url.is_empty() && !api_key.is_empty() {
             tracing::info!("Loading Radarr config from database: {}", url);
@@ -223,7 +270,7 @@ async fn main() {
     } else {
         config.radarr.clone()
     };
-    
+
     // Create download orchestrator with new architecture
     let download_orchestrator = Arc::new(downloader::DownloadOrchestrator::new(
         download_config,
@@ -232,17 +279,16 @@ async fn main() {
         sonarr_config.clone(),
         radarr_config.clone(),
     ));
-    
+
     // Start orchestrator workers
     download_orchestrator.start().await;
     tracing::info!("Download orchestrator started with new architecture");
-    
+
     // Load pending tasks (QUEUED, PAUSED) from database into TaskManager
     // This ensures resume/pause operations work correctly via WebSocket updates
     let pending_count = download_orchestrator.load_pending_tasks().await;
     tracing::info!("Loaded {} pending tasks from database", pending_count);
 
-    
     // Initialize Caches
     let search_cache = Cache::builder()
         .max_capacity(100)
@@ -262,7 +308,7 @@ async fn main() {
             .pool_idle_timeout(Duration::from_secs(90))
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
             .build()
-            .unwrap_or_default()
+            .unwrap_or_default(),
     );
 
     // TimFshare response cache (5 min TTL)
@@ -270,19 +316,22 @@ async fn main() {
         .max_capacity(200)
         .time_to_live(Duration::from_secs(300)) // 5 minutes
         .build();
-    
+
     // Create DownloadService for business logic abstraction
     let download_service = Arc::new(services::DownloadService::new(
         Arc::clone(&db),
         Arc::clone(&download_orchestrator),
     ));
-    
+
     // Create TmdbService for centralized TMDB API access
     let tmdb_service = Arc::new(services::TmdbService::new_with_default_client());
-    
+
     // Create FolderCacheService for folder source caching
-    let folder_cache_service = Arc::new(services::FolderCacheService::new(Arc::clone(&db), Arc::clone(&tmdb_service)));
-    
+    let folder_cache_service = Arc::new(services::FolderCacheService::new(
+        Arc::clone(&db),
+        Arc::clone(&tmdb_service),
+    ));
+
     // Update config with loaded Arr settings so API sees them
     let mut app_config = config.clone();
     app_config.sonarr = sonarr_config.clone();
@@ -297,16 +346,22 @@ async fn main() {
     ));
 
     // Create LibrarySyncService (gets client from orchestrator when available)
-    let ar_client = download_orchestrator.get_arr_client().await.unwrap_or_else(|| {
-        // Fallback: create a temporary client if orchestrator's hasn't loaded (unlikely)
-        Arc::new(arr::ArrClient::new(sonarr_config.clone(), radarr_config.clone()))
-    });
+    let ar_client = download_orchestrator
+        .get_arr_client()
+        .await
+        .unwrap_or_else(|| {
+            // Fallback: create a temporary client if orchestrator's hasn't loaded (unlikely)
+            Arc::new(arr::ArrClient::new(
+                sonarr_config.clone(),
+                radarr_config.clone(),
+            ))
+        });
     let library_sync_service = Arc::new(services::LibrarySyncService::new(
         Arc::clone(&db),
         ar_client,
     ));
 
-    let state = Arc::new(AppState { 
+    let state = Arc::new(AppState {
         host_registry,
         download_orchestrator,
         download_service,
@@ -342,17 +397,32 @@ async fn main() {
         .nest("/api/arr", api::arr::router())
         .nest("/api/media", api::media::router())
         .nest("/api/folder-source", api::folder_source::router())
-        .route("/sabnzbd", get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post))
-        .route("/sabnzbd/", get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post))
-        .route("/sabnzbd/api", get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post))
-        .route("/sabnzbd/api/", get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post));
+        .route(
+            "/sabnzbd",
+            get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post),
+        )
+        .route(
+            "/sabnzbd/",
+            get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post),
+        )
+        .route(
+            "/sabnzbd/api",
+            get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post),
+        )
+        .route(
+            "/sabnzbd/api/",
+            get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post),
+        );
 
     // External integration routes — require API key (called by Jellyflix/other integrations)
     let external_routes = Router::new()
         .nest("/api/indexer", api::indexer::router())
-        .nest("/newznab/api", api::indexer::router())  // Standard Newznab path
-        .nest("/api/auth", api::auth::router())        // Key verification for Jellyflix
-        .layer(axum::middleware::from_fn_with_state(state.clone(), api::auth::auth_middleware));
+        .nest("/newznab/api", api::indexer::router()) // Standard Newznab path
+        .nest("/api/auth", api::auth::router()) // Key verification for Jellyflix
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            api::auth::auth_middleware,
+        ));
 
     let app = Router::new()
         .merge(app_routes)
@@ -361,17 +431,19 @@ async fn main() {
             CorsLayer::new()
                 .allow_origin(Any)
                 .allow_methods(Any)
-                .allow_headers(Any)
+                .allow_headers(Any),
         )
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .fallback_service(ServeDir::new("static").not_found_service(ServeFile::new("static/index.html")))
+        .fallback_service(
+            ServeDir::new("static").not_found_service(ServeFile::new("static/index.html")),
+        )
         .with_state(state);
 
     // Spawn folder cache background sync (daily)
     tokio::spawn(async move {
         // Initial sync on startup (if cache is stale or empty)
         folder_cache_service.sync_if_stale().await;
-        
+
         // Then sync every 24 hours
         let mut interval = tokio::time::interval(Duration::from_secs(86400));
         interval.tick().await; // Skip the first immediate tick (already synced above)
@@ -382,7 +454,9 @@ async fn main() {
                 Ok(report) => {
                     tracing::info!(
                         "[FOLDER-CACHE] Daily sync complete: {} items from {} sources in {:.1}s",
-                        report.total_items, report.total_sources, report.duration_secs
+                        report.total_items,
+                        report.total_sources,
+                        report.duration_secs
                     );
                 }
                 Err(e) => {
@@ -392,41 +466,27 @@ async fn main() {
         }
     });
 
-    // Spawn library background sync (every 6 hours)
-    let sync_service = Arc::clone(&library_sync_service);
-    tokio::spawn(async move {
-        // Initial sync on startup to fix issues immediately
-        tracing::info!("[LIBRARY-SYNC] Starting initial library synchronization");
-        if let Err(e) = sync_service.sync_all().await {
-            tracing::error!("[LIBRARY-SYNC] Initial sync failed: {}", e);
-        }
-        
-        // Then run regular sync
-        sync_service.start_background_sync(6).await;
-    });
-
     // Run server
     let addr = SocketAddr::from(([0, 0, 0, 0], config.server.port));
     tracing::info!("Listening on {}", addr);
-    
+
     // Create socket with SO_REUSEADDR to allow immediate restart after crash
-    use socket2::{Socket, Domain, Type};
-    let socket = Socket::new(Domain::IPV4, Type::STREAM, None)
-        .expect("Failed to create socket");
-    socket.set_reuse_address(true)
+    use socket2::{Domain, Socket, Type};
+    let socket = Socket::new(Domain::IPV4, Type::STREAM, None).expect("Failed to create socket");
+    socket
+        .set_reuse_address(true)
         .expect("Failed to set SO_REUSEADDR");
-    socket.bind(&addr.into())
-        .expect("Failed to bind socket");
-    socket.listen(1024)
-        .expect("Failed to listen on socket");
-    
+    socket.bind(&addr.into()).expect("Failed to bind socket");
+    socket.listen(1024).expect("Failed to listen on socket");
+
     // Set non-blocking mode before converting to tokio
-    socket.set_nonblocking(true)
+    socket
+        .set_nonblocking(true)
         .expect("Failed to set non-blocking mode");
-    
+
     // Convert to tokio listener
     let listener = tokio::net::TcpListener::from_std(socket.into())
         .expect("Failed to convert to tokio listener");
-    
+
     axum::serve(listener, app).await.unwrap();
 }

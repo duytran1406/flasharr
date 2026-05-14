@@ -3,16 +3,16 @@
 //! Handles recursive scanning of Fshare folders and populating the FTS5 cache.
 //! Provides search interface over the cached data.
 
-use std::sync::Arc;
-use std::collections::{VecDeque, HashMap};
-use serde::Serialize;
-use quick_xml::Reader;
-use quick_xml::events::Event;
-use crate::db::Db;
-use crate::db::sqlite::CachedFolderItem;
 use crate::api::folder_source::FolderSourceEntry;
-use crate::utils::parser::FilenameParser;
+use crate::db::sqlite::CachedFolderItem;
+use crate::db::Db;
 use crate::services::tmdb_service::TmdbService;
+use crate::utils::parser::FilenameParser;
+use quick_xml::events::Event;
+use quick_xml::Reader;
+use serde::Serialize;
+use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 /// Maximum recursion depth for subfolder scanning
 const MAX_DEPTH: u32 = 5;
@@ -100,12 +100,19 @@ impl FolderCacheService {
         let item_count = self.db.get_folder_cache_count().unwrap_or(0);
 
         if is_stale || item_count == 0 {
-            tracing::info!("[FOLDER-CACHE] Cache is stale or empty (items: {}, stale: {}), starting sync", item_count, is_stale);
+            tracing::info!(
+                "[FOLDER-CACHE] Cache is stale or empty (items: {}, stale: {}), starting sync",
+                item_count,
+                is_stale
+            );
             match self.sync_all_sources().await {
                 Ok(report) => {
                     tracing::info!(
                         "[FOLDER-CACHE] Sync complete: {} items from {} sources ({} folders) in {:.1}s",
-                        report.total_items, report.total_sources, report.total_folders_scanned, report.duration_secs
+                        report.total_items,
+                        report.total_sources,
+                        report.total_folders_scanned,
+                        report.duration_secs
                     );
                 }
                 Err(e) => {
@@ -113,7 +120,10 @@ impl FolderCacheService {
                 }
             }
         } else {
-            tracing::info!("[FOLDER-CACHE] Cache is fresh ({} items), skipping sync", item_count);
+            tracing::info!(
+                "[FOLDER-CACHE] Cache is fresh ({} items), skipping sync",
+                item_count
+            );
         }
     }
 
@@ -123,7 +133,9 @@ impl FolderCacheService {
         let mut errors = Vec::new();
 
         // Get the gist URL from settings
-        let gist_url = self.db.get_setting("folder_sources_gist_url")
+        let gist_url = self
+            .db
+            .get_setting("folder_sources_gist_url")
             .ok()
             .flatten()
             .unwrap_or_default();
@@ -182,7 +194,10 @@ impl FolderCacheService {
             })
             .collect();
 
-        tracing::info!("[FOLDER-CACHE] Syncing {} folder sources from gist", entries.len());
+        tracing::info!(
+            "[FOLDER-CACHE] Syncing {} folder sources from gist",
+            entries.len()
+        );
 
         // Clear old cache before populating
         if let Err(e) = self.db.clear_folder_cache() {
@@ -193,20 +208,25 @@ impl FolderCacheService {
         let mut total_items = 0;
         let mut total_folders_scanned = 0;
         let mut tmdb_candidates: Vec<TmdbCandidate> = Vec::new();
-        let mut seen_candidate_titles: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut seen_candidate_titles: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
 
         // Process each source
         for entry in &entries {
             let folder_code = match extract_folder_code(&entry.folder_url) {
                 Some(code) => code,
                 None => {
-                    errors.push(format!("Invalid URL for '{}': {}", entry.label, entry.folder_url));
+                    errors.push(format!(
+                        "Invalid URL for '{}': {}",
+                        entry.label, entry.folder_url
+                    ));
                     continue;
                 }
             };
 
             // Extract token from URL
-            let token = entry.folder_url
+            let token = entry
+                .folder_url
                 .split('?')
                 .nth(1)
                 .and_then(|qs| qs.split('&').find(|p| p.starts_with("token=")))
@@ -235,13 +255,14 @@ impl FolderCacheService {
                 let mut page = 1;
 
                 loop {
-                    let xml_body = match fetch_folder_page(&client, &folder.linkcode, &token, page).await {
-                        Ok(body) => body,
-                        Err(e) => {
-                            errors.push(format!("API error for {}: {}", folder.linkcode, e));
-                            break;
-                        }
-                    };
+                    let xml_body =
+                        match fetch_folder_page(&client, &folder.linkcode, &token, page).await {
+                            Ok(body) => body,
+                            Err(e) => {
+                                errors.push(format!("API error for {}: {}", folder.linkcode, e));
+                                break;
+                            }
+                        };
 
                     let (items, has_next) = parse_folder_response(&xml_body);
 
@@ -324,7 +345,10 @@ impl FolderCacheService {
 
                     page += 1;
                     if page > MAX_PAGES_PER_FOLDER {
-                        tracing::warn!("[FOLDER-CACHE] Hit page limit for folder {}", folder.linkcode);
+                        tracing::warn!(
+                            "[FOLDER-CACHE] Hit page limit for folder {}",
+                            folder.linkcode
+                        );
                         break;
                     }
 
@@ -345,14 +369,20 @@ impl FolderCacheService {
         }
 
         // ── TMDB MAPPING PASS ───────────────────────────────────────────────────
-        tracing::info!("[FOLDER-CACHE] Starting TMDB mapping for {} unique titles", tmdb_candidates.len());
-        let (tmdb_mapped, tmdb_skipped) = self.run_tmdb_mapping(&tmdb_candidates, &mut errors).await;
+        tracing::info!(
+            "[FOLDER-CACHE] Starting TMDB mapping for {} unique titles",
+            tmdb_candidates.len()
+        );
+        let (tmdb_mapped, tmdb_skipped) =
+            self.run_tmdb_mapping(&tmdb_candidates, &mut errors).await;
 
         // Update metadata
         let now = chrono::Utc::now().timestamp().to_string();
         let _ = self.db.set_folder_cache_meta("last_sync", &now);
         let _ = self.db.set_folder_cache_meta("sync_status", "idle");
-        let _ = self.db.set_folder_cache_meta("total_items", &total_items.to_string());
+        let _ = self
+            .db
+            .set_folder_cache_meta("total_items", &total_items.to_string());
 
         let duration = start.elapsed().as_secs_f64();
 
@@ -376,7 +406,11 @@ impl FolderCacheService {
 
     /// Run TMDB mapping for top-level folders that don't already have a mapping.
     /// Returns (mapped_count, skipped_count).
-    async fn run_tmdb_mapping(&self, items: &[TmdbCandidate], errors: &mut Vec<String>) -> (usize, usize) {
+    async fn run_tmdb_mapping(
+        &self,
+        items: &[TmdbCandidate],
+        errors: &mut Vec<String>,
+    ) -> (usize, usize) {
         // Load existing mappings to skip already-mapped items
         let existing = match self.db.get_all_folder_tmdb_mappings() {
             Ok(m) => m,
@@ -397,13 +431,16 @@ impl FolderCacheService {
                 continue;
             }
             let key = item.title.trim().to_lowercase();
-            if key.is_empty() { continue; }
+            if key.is_empty() {
+                continue;
+            }
             title_groups.entry(key).or_default().push(item);
         }
 
         tracing::info!(
             "[FOLDER-CACHE] TMDB: {} unique titles to map, {} already mapped",
-            title_groups.len(), already_mapped
+            title_groups.len(),
+            already_mapped
         );
 
         let mut mapped_count = 0usize;
@@ -412,7 +449,11 @@ impl FolderCacheService {
         for (_title_key, group) in &title_groups {
             // Use the first item for context
             let sample = group[0];
-            let media_type = if sample.category == "movie" { "movie" } else { "tv" };
+            let media_type = if sample.category == "movie" {
+                "movie"
+            } else {
+                "tv"
+            };
 
             // Build TMDB search query: title + year (if available)
             let search_query = if let Some(y) = sample.year {
@@ -428,20 +469,25 @@ impl FolderCacheService {
                 if let Some(results) = data.get("results").and_then(|r| r.as_array()) {
                     if let Some(first) = results.first() {
                         let tmdb_id = first.get("id").and_then(|v| v.as_i64()).unwrap_or(0);
-                        let poster = first.get("poster_path")
+                        let poster = first
+                            .get("poster_path")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
 
                         if tmdb_id > 0 {
-                            let title_check = first.get("title")
+                            let title_check = first
+                                .get("title")
                                 .or_else(|| first.get("name"))
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("");
 
                             tracing::debug!(
                                 "[FOLDER-CACHE] TMDB match: '{}' → '{}' (id={}, poster={})",
-                                sample.title, title_check, tmdb_id, poster
+                                sample.title,
+                                title_check,
+                                tmdb_id,
+                                poster
                             );
 
                             // Apply to ALL items in this title group
@@ -480,7 +526,8 @@ impl FolderCacheService {
 
         tracing::info!(
             "[FOLDER-CACHE] TMDB mapping complete: {} newly mapped, {} previously mapped",
-            mapped_count, already_mapped
+            mapped_count,
+            already_mapped
         );
 
         (mapped_count, already_mapped)
@@ -488,7 +535,10 @@ impl FolderCacheService {
 
     /// Search the FTS5 cache
     pub async fn search(&self, query: &str, limit: u32) -> anyhow::Result<Vec<CachedFolderItem>> {
-        let results = self.db.search_folder_cache_async(query.to_string(), limit).await
+        let results = self
+            .db
+            .search_folder_cache_async(query.to_string(), limit)
+            .await
             .map_err(|e| anyhow::anyhow!("Search failed: {}", e))?;
         Ok(results)
     }
@@ -497,7 +547,9 @@ impl FolderCacheService {
     pub fn get_sync_status(&self) -> SyncStatus {
         let last_sync = self.db.get_folder_cache_meta("last_sync").ok().flatten();
         let total_items = self.db.get_folder_cache_count().unwrap_or(0);
-        let sync_status = self.db.get_folder_cache_meta("sync_status")
+        let sync_status = self
+            .db
+            .get_folder_cache_meta("sync_status")
             .ok()
             .flatten()
             .unwrap_or_else(|| "idle".to_string());
@@ -517,27 +569,72 @@ impl FolderCacheService {
 /// Filters out structural folder names, season labels, pure numbers, etc.
 fn is_likely_content_title(title_lower: &str) -> bool {
     // Too short to be a real title
-    if title_lower.len() < 2 { return false; }
+    if title_lower.len() < 2 {
+        return false;
+    }
 
     // Pure numbers (e.g. "01", "2024")
-    if title_lower.chars().all(|c| c.is_ascii_digit()) { return false; }
+    if title_lower.chars().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
 
     // Generic structural folder names
     static SKIP_PATTERNS: &[&str] = &[
-        "season", "s01", "s02", "s03", "s04", "s05", "s06", "s07", "s08", "s09", "s10",
-        "folder", "phim", "movie", "film", "video", "collection", "complete",
-        "subs", "subtitle", "extra", "bonus", "featurette", "sample",
-        "disc", "disk", "cd", "dvd", "bluray", "remux",
-        "temp", "tmp", "new", "old", "backup",
+        "season",
+        "s01",
+        "s02",
+        "s03",
+        "s04",
+        "s05",
+        "s06",
+        "s07",
+        "s08",
+        "s09",
+        "s10",
+        "folder",
+        "phim",
+        "movie",
+        "film",
+        "video",
+        "collection",
+        "complete",
+        "subs",
+        "subtitle",
+        "extra",
+        "bonus",
+        "featurette",
+        "sample",
+        "disc",
+        "disk",
+        "cd",
+        "dvd",
+        "bluray",
+        "remux",
+        "temp",
+        "tmp",
+        "new",
+        "old",
+        "backup",
     ];
 
     // Skip if title IS one of these generic words
-    if SKIP_PATTERNS.contains(&title_lower) { return false; }
+    if SKIP_PATTERNS.contains(&title_lower) {
+        return false;
+    }
 
     // Skip if title starts with common non-content patterns
-    if title_lower.starts_with("season ") { return false; }
-    if title_lower.starts_with("disc ") { return false; }
-    if title_lower.starts_with("01_") || title_lower.starts_with("02_") || title_lower.starts_with("03_") { return false; }
+    if title_lower.starts_with("season ") {
+        return false;
+    }
+    if title_lower.starts_with("disc ") {
+        return false;
+    }
+    if title_lower.starts_with("01_")
+        || title_lower.starts_with("02_")
+        || title_lower.starts_with("03_")
+    {
+        return false;
+    }
 
     true
 }
@@ -549,7 +646,11 @@ fn extract_folder_code(folder_url: &str) -> Option<String> {
     }
     let after = folder_url.split("/folder/").last()?;
     let code = after.split('?').next().unwrap_or("");
-    if code.is_empty() { None } else { Some(code.to_string()) }
+    if code.is_empty() {
+        None
+    } else {
+        Some(code.to_string())
+    }
 }
 
 /// Fetch a single page of a folder listing from the v3 API
@@ -572,9 +673,13 @@ async fn fetch_folder_page(
         query_params.push(("token", token));
     }
 
-    let resp = client.get("https://www.fshare.vn/api/v3/files/folder")
+    let resp = client
+        .get("https://www.fshare.vn/api/v3/files/folder")
         .query(&query_params)
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        )
         .timeout(std::time::Duration::from_secs(15))
         .send()
         .await?;
@@ -610,29 +715,47 @@ fn parse_folder_json(json_text: &str) -> (Vec<FshareXmlItem>, bool) {
 
     if let Some(arr) = parsed.get("items").and_then(|v| v.as_array()) {
         for item in arr {
-            let linkcode = item.get("linkcode").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-            if linkcode.is_empty() || name.is_empty() { continue; }
-
-            let item_type = item.get("type").map(|v| match v {
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::String(s) => s.clone(),
-                _ => String::new(),
-            }).unwrap_or_default();
-
-            let size = item.get("size").map(|v| match v {
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::String(s) => s.clone(),
-                _ => "0".to_string(),
-            }).unwrap_or_else(|| "0".to_string());
-
-            let mimetype = item.get("mimetype")
+            let linkcode = item
+                .get("linkcode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let name = item
+                .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
 
-            let path = item.get("path")
+            if linkcode.is_empty() || name.is_empty() {
+                continue;
+            }
+
+            let item_type = item
+                .get("type")
+                .map(|v| match v {
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::String(s) => s.clone(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
+
+            let size = item
+                .get("size")
+                .map(|v| match v {
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::String(s) => s.clone(),
+                    _ => "0".to_string(),
+                })
+                .unwrap_or_else(|| "0".to_string());
+
+            let mimetype = item
+                .get("mimetype")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let path = item
+                .get("path")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -649,7 +772,8 @@ fn parse_folder_json(json_text: &str) -> (Vec<FshareXmlItem>, bool) {
     }
 
     // Check for pagination
-    let has_next = parsed.get("_links")
+    let has_next = parsed
+        .get("_links")
         .and_then(|links| links.get("next"))
         .map(|next| !next.is_null())
         .unwrap_or(false);
@@ -999,7 +1123,10 @@ mod tests {
 
         println!("\n🔍 Search 'Dune Part': {} results", results.len());
         for r in &results {
-            println!("  - {} (year: {:?}, quality: {})", r.name, r.year, r.quality);
+            println!(
+                "  - {} (year: {:?}, quality: {})",
+                r.name, r.year, r.quality
+            );
         }
     }
 
@@ -1042,7 +1169,11 @@ mod tests {
         assert_eq!(db.get_folder_cache_count().unwrap(), 8);
 
         db.clear_folder_cache().unwrap();
-        assert_eq!(db.get_folder_cache_count().unwrap(), 0, "Cache should be empty after clear");
+        assert_eq!(
+            db.get_folder_cache_count().unwrap(),
+            0,
+            "Cache should be empty after clear"
+        );
 
         // Search after clear = no results
         let results = db.search_folder_cache("Peaky", 50).unwrap();
@@ -1224,8 +1355,16 @@ mod tests {
 
         // Source entries — real Fshare folders
         let entries = vec![
-            ("tv", "Phim Bộ Mỹ", "https://www.fshare.vn/folder/XEVZ47FBZSR4?token=1772074278"),
-            ("movie", "Phim Lẻ", "https://www.fshare.vn/folder/QOV7Z7MDMTXY?token=1772075966"),
+            (
+                "tv",
+                "Phim Bộ Mỹ",
+                "https://www.fshare.vn/folder/XEVZ47FBZSR4?token=1772074278",
+            ),
+            (
+                "movie",
+                "Phim Lẻ",
+                "https://www.fshare.vn/folder/QOV7Z7MDMTXY?token=1772075966",
+            ),
         ];
 
         // Create temp DB
@@ -1243,7 +1382,9 @@ mod tests {
 
         for (category, label, url) in &entries {
             let folder_code = extract_folder_code(url).unwrap();
-            let token = url.split('?').nth(1)
+            let token = url
+                .split('?')
+                .nth(1)
                 .and_then(|qs| qs.split('&').find(|p| p.starts_with("token=")))
                 .and_then(|p| p.strip_prefix("token="))
                 .unwrap_or("")
@@ -1258,7 +1399,9 @@ mod tests {
             let mut batch: Vec<CachedFolderItem> = Vec::new();
 
             while let Some((linkcode, depth)) = queue.pop_front() {
-                if depth > 1 { continue; } // Only top level + 1 deep for test speed
+                if depth > 1 {
+                    continue;
+                } // Only top level + 1 deep for test speed
                 total_folders += 1;
                 let mut page = 1;
 
@@ -1272,9 +1415,16 @@ mod tests {
                     };
 
                     let (items, has_next) = parse_folder_response(&body);
-                    if items.is_empty() { break; }
+                    if items.is_empty() {
+                        break;
+                    }
 
-                    println!("   📄 Page {} (depth {}): {} items", page, depth, items.len());
+                    println!(
+                        "   📄 Page {} (depth {}): {} items",
+                        page,
+                        depth,
+                        items.len()
+                    );
 
                     for item in &items {
                         let is_dir = item.r#type == "0" || item.mimetype.is_empty();
@@ -1312,9 +1462,13 @@ mod tests {
                         }
                     }
 
-                    if !has_next || items.len() < PER_PAGE { break; }
+                    if !has_next || items.len() < PER_PAGE {
+                        break;
+                    }
                     page += 1;
-                    if page > 10 { break; } // Safety limit for test
+                    if page > 10 {
+                        break;
+                    } // Safety limit for test
 
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
@@ -1364,7 +1518,7 @@ mod tests {
                     } else {
                         "📁 dir".to_string()
                     };
-                    println!("   {}. {} [{}] [{}]", i+1, r.name, r.quality, size_str);
+                    println!("   {}. {} [{}] [{}]", i + 1, r.name, r.quality, size_str);
                     println!("      → {}", r.fshare_url);
                 }
                 println!();
@@ -1372,7 +1526,10 @@ mod tests {
         }
 
         // Assertions — cache should have items
-        assert!(total_items > 0, "Should have scanned some items from Fshare");
+        assert!(
+            total_items > 0,
+            "Should have scanned some items from Fshare"
+        );
         println!("✅ Live integration test complete!");
     }
 }

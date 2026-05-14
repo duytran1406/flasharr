@@ -3,15 +3,15 @@
 //! Proxies requests to Sonarr/Radarr APIs so Flasharr frontend can be the single UI.
 //! This module replaces the need for users to visit Sonarr/Radarr/Seerr directly.
 
+use crate::AppState;
 use axum::{
     extract::{Query, State},
+    http::StatusCode,
     routing::{get, post},
     Json, Router,
-    http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use crate::AppState;
 
 // ============================================================================
 // Router
@@ -140,7 +140,10 @@ struct QueueSweepResponse {
 async fn library_overview(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<LibraryOverview>, StatusCode> {
-    let client = state.download_orchestrator.get_arr_client().await
+    let client = state
+        .download_orchestrator
+        .get_arr_client()
+        .await
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
     let sonarr_connected = client.has_sonarr();
@@ -151,42 +154,42 @@ async fn library_overview(
         match client.get_all_series().await {
             Ok(series) => {
                 let count = series.len();
-                let total_eps: i32 = series.iter()
+                let total_eps: i32 = series
+                    .iter()
                     .filter_map(|s| s.statistics.as_ref().and_then(|st| st.episode_count))
                     .sum();
-                let file_eps: i32 = series.iter()
+                let file_eps: i32 = series
+                    .iter()
                     .filter_map(|s| s.statistics.as_ref().and_then(|st| st.episode_file_count))
                     .sum();
-                let size: i64 = series.iter()
+                let size: i64 = series
+                    .iter()
                     .filter_map(|s| s.statistics.as_ref().and_then(|st| st.size_on_disk))
                     .sum();
                 (count, total_eps, file_eps, size)
             }
-            Err(_) => (0, 0, 0, 0)
+            Err(_) => (0, 0, 0, 0),
         }
     } else {
         (0, 0, 0, 0)
     };
 
     // Fetch movie stats
-    let (movie_count, movies_with_files_count, movies_missing_count, movie_size) = if radarr_connected {
-        match client.get_all_movies().await {
-            Ok(movies) => {
-                let count = movies.len();
-                let with_files = movies.iter()
-                    .filter(|m| m.has_file == Some(true))
-                    .count();
-                let missing = count - with_files;
-                let size: i64 = movies.iter()
-                    .filter_map(|m| m.size_on_disk)
-                    .sum();
-                (count, with_files, missing, size)
+    let (movie_count, movies_with_files_count, movies_missing_count, movie_size) =
+        if radarr_connected {
+            match client.get_all_movies().await {
+                Ok(movies) => {
+                    let count = movies.len();
+                    let with_files = movies.iter().filter(|m| m.has_file == Some(true)).count();
+                    let missing = count - with_files;
+                    let size: i64 = movies.iter().filter_map(|m| m.size_on_disk).sum();
+                    (count, with_files, missing, size)
+                }
+                Err(_) => (0, 0, 0, 0),
             }
-            Err(_) => (0, 0, 0, 0)
-        }
-    } else {
-        (0, 0, 0, 0)
-    };
+        } else {
+            (0, 0, 0, 0)
+        };
 
     Ok(Json(LibraryOverview {
         sonarr_connected,
@@ -206,30 +209,32 @@ async fn library_overview(
 async fn all_series(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<crate::arr::SonarrSeries>>, StatusCode> {
-    let client = state.download_orchestrator.get_arr_client().await
+    let client = state
+        .download_orchestrator
+        .get_arr_client()
+        .await
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
-    client.get_all_series().await
-        .map(Json)
-        .map_err(|e| {
-            tracing::error!("Failed to get series: {}", e);
-            StatusCode::BAD_GATEWAY
-        })
+    client.get_all_series().await.map(Json).map_err(|e| {
+        tracing::error!("Failed to get series: {}", e);
+        StatusCode::BAD_GATEWAY
+    })
 }
 
 /// GET /api/arr/movies — All movies from Radarr
 async fn all_movies(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<crate::arr::RadarrMovie>>, StatusCode> {
-    let client = state.download_orchestrator.get_arr_client().await
+    let client = state
+        .download_orchestrator
+        .get_arr_client()
+        .await
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
-    client.get_all_movies().await
-        .map(Json)
-        .map_err(|e| {
-            tracing::error!("Failed to get movies: {}", e);
-            StatusCode::BAD_GATEWAY
-        })
+    client.get_all_movies().await.map(Json).map_err(|e| {
+        tracing::error!("Failed to get movies: {}", e);
+        StatusCode::BAD_GATEWAY
+    })
 }
 
 /// GET /api/arr/episodes?series_id=X — Episodes for a series
@@ -237,10 +242,15 @@ async fn episodes(
     State(state): State<Arc<AppState>>,
     Query(params): Query<EpisodesQuery>,
 ) -> Result<Json<Vec<crate::arr::SonarrEpisode>>, StatusCode> {
-    let client = state.download_orchestrator.get_arr_client().await
+    let client = state
+        .download_orchestrator
+        .get_arr_client()
+        .await
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
-    client.get_episodes(params.series_id).await
+    client
+        .get_episodes(params.series_id)
+        .await
         .map(Json)
         .map_err(|e| {
             tracing::error!("Failed to get episodes: {}", e);
@@ -253,18 +263,25 @@ async fn calendar(
     State(state): State<Arc<AppState>>,
     Query(params): Query<CalendarQuery>,
 ) -> Result<Json<Vec<crate::arr::SonarrCalendarEntry>>, StatusCode> {
-    let client = state.download_orchestrator.get_arr_client().await
+    let client = state
+        .download_orchestrator
+        .get_arr_client()
+        .await
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
     // Default: today to 14 days from now
-    let start = params.start.unwrap_or_else(|| {
-        chrono::Utc::now().format("%Y-%m-%d").to_string()
-    });
+    let start = params
+        .start
+        .unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
     let end = params.end.unwrap_or_else(|| {
-        (chrono::Utc::now() + chrono::Duration::days(14)).format("%Y-%m-%d").to_string()
+        (chrono::Utc::now() + chrono::Duration::days(14))
+            .format("%Y-%m-%d")
+            .to_string()
     });
 
-    client.get_calendar(&start, &end).await
+    client
+        .get_calendar(&start, &end)
+        .await
         .map(Json)
         .map_err(|e| {
             tracing::error!("Failed to get calendar: {}", e);
@@ -277,7 +294,10 @@ async fn missing(
     State(state): State<Arc<AppState>>,
     Query(params): Query<MissingQuery>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let client = state.download_orchestrator.get_arr_client().await
+    let client = state
+        .download_orchestrator
+        .get_arr_client()
+        .await
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
     let page = params.page.unwrap_or(1);
@@ -292,13 +312,15 @@ async fn missing(
                 // Fetch all series to enrich episode data
                 if let Ok(all_series) = client.get_all_series().await {
                     // Create a map of seriesId -> series for quick lookup
-                    let series_map: std::collections::HashMap<i32, &crate::arr::SonarrSeries> = 
+                    let series_map: std::collections::HashMap<i32, &crate::arr::SonarrSeries> =
                         all_series.iter().map(|s| (s.id, s)).collect();
-                    
+
                     // Enrich each episode with series information
                     if let Some(records) = data.get_mut("records").and_then(|r| r.as_array_mut()) {
                         for episode in records.iter_mut() {
-                            if let Some(series_id) = episode.get("seriesId").and_then(|id| id.as_i64()) {
+                            if let Some(series_id) =
+                                episode.get("seriesId").and_then(|id| id.as_i64())
+                            {
                                 if let Some(series) = series_map.get(&(series_id as i32)) {
                                     episode["series"] = serde_json::json!({
                                         "title": series.title,
@@ -319,7 +341,9 @@ async fn missing(
     // Missing movies from Radarr
     if client.has_radarr() {
         match client.get_missing_movies(page, page_size).await {
-            Ok(data) => { result["movies"] = data; }
+            Ok(data) => {
+                result["movies"] = data;
+            }
             Err(e) => tracing::warn!("Failed to get missing movies: {}", e),
         }
     }
@@ -331,22 +355,26 @@ async fn missing(
 async fn storage(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<crate::arr::DiskSpace>>, StatusCode> {
-    let client = state.download_orchestrator.get_arr_client().await
+    let client = state
+        .download_orchestrator
+        .get_arr_client()
+        .await
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
-    client.get_sonarr_disk_space().await
-        .map(Json)
-        .map_err(|e| {
-            tracing::error!("Failed to get disk space: {}", e);
-            StatusCode::BAD_GATEWAY
-        })
+    client.get_sonarr_disk_space().await.map(Json).map_err(|e| {
+        tracing::error!("Failed to get disk space: {}", e);
+        StatusCode::BAD_GATEWAY
+    })
 }
 
 /// GET /api/arr/health — Health status of Sonarr and Radarr
 async fn arr_health(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<ArrStatusResponse>, StatusCode> {
-    let client = state.download_orchestrator.get_arr_client().await
+    let client = state
+        .download_orchestrator
+        .get_arr_client()
+        .await
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
     let sonarr = if client.has_sonarr() {
@@ -389,7 +417,10 @@ async fn history(
     State(state): State<Arc<AppState>>,
     Query(params): Query<HistoryQuery>,
 ) -> Result<Json<HistoryResponse>, StatusCode> {
-    let client = state.download_orchestrator.get_arr_client().await
+    let client = state
+        .download_orchestrator
+        .get_arr_client()
+        .await
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
     let page_size = params.page_size.unwrap_or(20);
@@ -417,7 +448,10 @@ async fn history(
 async fn queue_overview(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<QueueOverviewResponse>, StatusCode> {
-    let client = state.download_orchestrator.get_arr_client().await
+    let client = state
+        .download_orchestrator
+        .get_arr_client()
+        .await
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
     let (sonarr_items, sonarr_total) = if client.has_sonarr() {
@@ -450,8 +484,14 @@ async fn queue_overview(
         (vec![], 0)
     };
 
-    let sonarr_stuck = sonarr_items.iter().filter(|i| is_stuck_sonarr_item(i)).count();
-    let radarr_stuck = radarr_items.iter().filter(|i| is_stuck_radarr_item(i)).count();
+    let sonarr_stuck = sonarr_items
+        .iter()
+        .filter(|i| is_stuck_sonarr_item(i))
+        .count();
+    let radarr_stuck = radarr_items
+        .iter()
+        .filter(|i| is_stuck_radarr_item(i))
+        .count();
 
     Ok(Json(QueueOverviewResponse {
         sonarr_total,
@@ -473,7 +513,10 @@ fn is_stuck_sonarr_item(item: &serde_json::Value) -> bool {
         "completed" | "failed" => true,
         "downloadClientUnavailable" => {
             // Only phantom entries (never assigned): downloadId absent or empty
-            item["downloadId"].as_str().map(|s| s.is_empty()).unwrap_or(true)
+            item["downloadId"]
+                .as_str()
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
                 && item["downloadClientId"].as_i64().is_none()
         }
         _ => false,
@@ -499,7 +542,10 @@ fn is_stuck_radarr_item(item: &serde_json::Value) -> bool {
 async fn queue_sweep(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<QueueSweepResponse>, StatusCode> {
-    let client = state.download_orchestrator.get_arr_client().await
+    let client = state
+        .download_orchestrator
+        .get_arr_client()
+        .await
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
     let mut errors = Vec::<String>::new();
@@ -512,11 +558,13 @@ async fn queue_sweep(
     if client.has_sonarr() {
         match client.get_sonarr_queue().await {
             Ok(items) => {
-                let stuck: Vec<&serde_json::Value> = items.iter()
+                let stuck: Vec<&serde_json::Value> = items
+                    .iter()
                     .filter(|item| is_stuck_sonarr_item(item))
                     .collect();
 
-                let ids: Vec<i64> = stuck.iter()
+                let ids: Vec<i64> = stuck
+                    .iter()
                     .filter_map(|item| item["id"].as_i64())
                     .collect();
 
@@ -529,7 +577,10 @@ async fn queue_sweep(
                 }
 
                 if !ids.is_empty() {
-                    tracing::info!("[QUEUE-SWEEP] Bulk-deleting {} stuck Sonarr queue entries", ids.len());
+                    tracing::info!(
+                        "[QUEUE-SWEEP] Bulk-deleting {} stuck Sonarr queue entries",
+                        ids.len()
+                    );
                     match client.bulk_delete_sonarr_queue(&ids, false).await {
                         Ok(()) => {
                             sonarr_cleared = ids.len();
@@ -544,11 +595,15 @@ async fn queue_sweep(
                 for series_id in series_ids {
                     match client.trigger_series_rescan_by_id(series_id).await {
                         Ok(()) => {
-                            tracing::info!("[QUEUE-SWEEP] Triggered RescanSeries for seriesId={}", series_id);
+                            tracing::info!(
+                                "[QUEUE-SWEEP] Triggered RescanSeries for seriesId={}",
+                                series_id
+                            );
                             series_rescanned += 1;
                         }
                         Err(e) => {
-                            errors.push(format!("RescanSeries seriesId={} failed: {}", series_id, e));
+                            errors
+                                .push(format!("RescanSeries seriesId={} failed: {}", series_id, e));
                         }
                     }
                 }
@@ -563,7 +618,8 @@ async fn queue_sweep(
     if client.has_radarr() {
         match client.get_radarr_queue().await {
             Ok(items) => {
-                let stuck: Vec<&serde_json::Value> = items.iter()
+                let stuck: Vec<&serde_json::Value> = items
+                    .iter()
                     .filter(|item| is_stuck_radarr_item(item))
                     .collect();
 
@@ -571,11 +627,13 @@ async fn queue_sweep(
                 // Items with no movieId ("unknown" items) trigger a NullReferenceException in
                 // Radarr's IgnoredDownloadService when blocklist=false — use blocklist=true as
                 // a workaround; the null downloadClientId prevents any actual blocklist entry.
-                let known_ids: Vec<i64> = stuck.iter()
+                let known_ids: Vec<i64> = stuck
+                    .iter()
                     .filter(|item| item["movieId"].is_number())
                     .filter_map(|item| item["id"].as_i64())
                     .collect();
-                let unknown_ids: Vec<i64> = stuck.iter()
+                let unknown_ids: Vec<i64> = stuck
+                    .iter()
                     .filter(|item| !item["movieId"].is_number())
                     .filter_map(|item| item["id"].as_i64())
                     .collect();
@@ -588,7 +646,10 @@ async fn queue_sweep(
                 }
 
                 if !known_ids.is_empty() {
-                    tracing::info!("[QUEUE-SWEEP] Bulk-deleting {} known Radarr queue entries", known_ids.len());
+                    tracing::info!(
+                        "[QUEUE-SWEEP] Bulk-deleting {} known Radarr queue entries",
+                        known_ids.len()
+                    );
                     match client.bulk_delete_radarr_queue(&known_ids, false).await {
                         Ok(()) => radarr_cleared += known_ids.len(),
                         Err(e) => errors.push(format!("Radarr bulk delete (known) failed: {}", e)),
@@ -599,14 +660,19 @@ async fn queue_sweep(
                 for item_id in unknown_ids {
                     match client.delete_radarr_queue_item(item_id, true).await {
                         Ok(()) => radarr_cleared += 1,
-                        Err(e) => errors.push(format!("Radarr delete item {} failed: {}", item_id, e)),
+                        Err(e) => {
+                            errors.push(format!("Radarr delete item {} failed: {}", item_id, e))
+                        }
                     }
                 }
 
                 for movie_id in movie_ids {
                     match client.trigger_movie_rescan_by_id(movie_id).await {
                         Ok(()) => {
-                            tracing::info!("[QUEUE-SWEEP] Triggered RescanMovie for movieId={}", movie_id);
+                            tracing::info!(
+                                "[QUEUE-SWEEP] Triggered RescanMovie for movieId={}",
+                                movie_id
+                            );
                             movies_rescanned += 1;
                         }
                         Err(e) => {
@@ -623,7 +689,10 @@ async fn queue_sweep(
 
     tracing::info!(
         "[QUEUE-SWEEP] Done — sonarr_cleared={}, radarr_cleared={}, series_rescanned={}, movies_rescanned={}",
-        sonarr_cleared, radarr_cleared, series_rescanned, movies_rescanned
+        sonarr_cleared,
+        radarr_cleared,
+        series_rescanned,
+        movies_rescanned
     );
 
     Ok(Json(QueueSweepResponse {
@@ -641,19 +710,35 @@ async fn add_series(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AddToLibraryRequest>,
 ) -> Result<Json<AddToLibraryResponse>, (axum::http::StatusCode, String)> {
-    let client = state.download_orchestrator.get_arr_client().await
-        .ok_or_else(|| (axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "Arr client not available".to_string()))?;
+    let client = state
+        .download_orchestrator
+        .get_arr_client()
+        .await
+        .ok_or_else(|| {
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Arr client not available".to_string(),
+            )
+        })?;
 
-    let root_folders = client.get_sonarr_root_folders().await
-        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY,
-            format!("Failed to get Sonarr root folders: {}", e)))?;
+    let root_folders = client.get_sonarr_root_folders().await.map_err(|e| {
+        (
+            axum::http::StatusCode::BAD_GATEWAY,
+            format!("Failed to get Sonarr root folders: {}", e),
+        )
+    })?;
 
-    let root_folder = root_folders.first()
-        .ok_or_else(|| (axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-            "No root folders configured in Sonarr".to_string()))?;
+    let root_folder = root_folders.first().ok_or_else(|| {
+        (
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "No root folders configured in Sonarr".to_string(),
+        )
+    })?;
 
-    match client.add_series_by_tmdb(body.tmdb_id, 1, &root_folder.path).await {
+    match client
+        .add_series_by_tmdb(body.tmdb_id, 1, &root_folder.path)
+        .await
+    {
         Ok(series_id) => Ok(Json(AddToLibraryResponse {
             success: true,
             arr_id: series_id,
@@ -662,10 +747,15 @@ async fn add_series(
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("already exists") || msg.contains("already been added") {
-                Err((axum::http::StatusCode::CONFLICT,
-                    "Series is already in the Sonarr library".to_string()))
+                Err((
+                    axum::http::StatusCode::CONFLICT,
+                    "Series is already in the Sonarr library".to_string(),
+                ))
             } else {
-                Err((axum::http::StatusCode::BAD_GATEWAY, format!("Sonarr error: {}", msg)))
+                Err((
+                    axum::http::StatusCode::BAD_GATEWAY,
+                    format!("Sonarr error: {}", msg),
+                ))
             }
         }
     }
@@ -677,19 +767,35 @@ async fn add_movie(
     State(state): State<Arc<AppState>>,
     Json(body): Json<AddToLibraryRequest>,
 ) -> Result<Json<AddToLibraryResponse>, (axum::http::StatusCode, String)> {
-    let client = state.download_orchestrator.get_arr_client().await
-        .ok_or_else(|| (axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "Arr client not available".to_string()))?;
+    let client = state
+        .download_orchestrator
+        .get_arr_client()
+        .await
+        .ok_or_else(|| {
+            (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Arr client not available".to_string(),
+            )
+        })?;
 
-    let root_folders = client.get_radarr_root_folders().await
-        .map_err(|e| (axum::http::StatusCode::BAD_GATEWAY,
-            format!("Failed to get Radarr root folders: {}", e)))?;
+    let root_folders = client.get_radarr_root_folders().await.map_err(|e| {
+        (
+            axum::http::StatusCode::BAD_GATEWAY,
+            format!("Failed to get Radarr root folders: {}", e),
+        )
+    })?;
 
-    let root_folder = root_folders.first()
-        .ok_or_else(|| (axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-            "No root folders configured in Radarr".to_string()))?;
+    let root_folder = root_folders.first().ok_or_else(|| {
+        (
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "No root folders configured in Radarr".to_string(),
+        )
+    })?;
 
-    match client.add_movie_by_tmdb(body.tmdb_id, 1, &root_folder.path).await {
+    match client
+        .add_movie_by_tmdb(body.tmdb_id, 1, &root_folder.path)
+        .await
+    {
         Ok(movie_id) => Ok(Json(AddToLibraryResponse {
             success: true,
             arr_id: movie_id,
@@ -698,10 +804,15 @@ async fn add_movie(
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("already exists") || msg.contains("already been added") {
-                Err((axum::http::StatusCode::CONFLICT,
-                    "Movie is already in the Radarr library".to_string()))
+                Err((
+                    axum::http::StatusCode::CONFLICT,
+                    "Movie is already in the Radarr library".to_string(),
+                ))
             } else {
-                Err((axum::http::StatusCode::BAD_GATEWAY, format!("Radarr error: {}", msg)))
+                Err((
+                    axum::http::StatusCode::BAD_GATEWAY,
+                    format!("Radarr error: {}", msg),
+                ))
             }
         }
     }

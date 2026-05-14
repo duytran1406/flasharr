@@ -28,7 +28,7 @@ pub struct EngineStats {
     pub paused: usize,
     pub cancelled: usize,
     pub total_speed: f64,
-    
+
     /// Database-sourced status counts (for filter dropdown)
     /// Optional to allow backwards compatibility during rollout
     #[serde(skip_serializing_if = "Option::is_none")]

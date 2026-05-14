@@ -28,6 +28,10 @@ export { default as AccountWarningModal } from './AccountWarningModal.svelte';
 // Notification Components — Flasharr-specific Toasts (uses $lib/stores/toasts)
 export { default as Toasts } from './Toasts.svelte';
 
+// Discover Components
+export { default as DiscoverFilterBar } from './DiscoverFilterBar.svelte';
+export type { UnifiedGenre } from './DiscoverFilterBar.svelte';
+
 // Shared / Visual Components
 export { default as SpeedGraph } from './SpeedGraph.svelte';
 export { default as Carousel3D } from './Carousel3D.svelte';

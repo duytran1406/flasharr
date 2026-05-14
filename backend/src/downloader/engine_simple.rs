@@ -3,11 +3,11 @@
 //! Pure HTTP download logic without task management.
 //! Uses single-stream downloading for simplicity and reliability.
 
+use futures_util::StreamExt;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
-use futures_util::StreamExt;
 
 use super::config::DownloadConfig;
 use super::progress::DownloadProgress;
@@ -16,7 +16,7 @@ use super::progress::DownloadProgress;
 pub struct SimpleDownloadEngine {
     /// HTTP client
     http_client: reqwest::Client,
-    
+
     /// Configuration
     #[allow(dead_code)]
     config: DownloadConfig,
@@ -33,13 +33,13 @@ impl SimpleDownloadEngine {
             .timeout(std::time::Duration::from_secs(86400)) // 24h total timeout for large files
             .build()
             .expect("Failed to create HTTP client");
-        
+
         Self {
             http_client,
             config,
         }
     }
-    
+
     /// Download a file with progress tracking (single-stream).
     ///
     /// Includes two layers of resilience:
@@ -69,7 +69,8 @@ impl SimpleDownloadEngine {
                 Err(e) => {
                     tracing::error!(
                         "Failed to create download directory {}: {}. Falling back to rescue path.",
-                        parent.display(), e
+                        parent.display(),
+                        e
                     );
                     false
                 }
@@ -101,10 +102,18 @@ impl SimpleDownloadEngine {
             let filename = dest_path.file_name().unwrap_or_default();
             let rescue_path = rescue_dir.join(filename);
             tracing::warn!("Rescue path: {:?}", rescue_path);
-            return self.download_single_stream_with_rename(url, rescue_path, progress_callback, cancel_token).await;
+            return self
+                .download_single_stream_with_rename(
+                    url,
+                    rescue_path,
+                    progress_callback,
+                    cancel_token,
+                )
+                .await;
         }
 
-        self.download_single_stream_with_rename(url, dest_path, progress_callback, cancel_token).await
+        self.download_single_stream_with_rename(url, dest_path, progress_callback, cancel_token)
+            .await
     }
 
     /// Downloads to a `.flasharr` temp file then renames on completion, so Sonarr/Radarr
@@ -119,18 +128,20 @@ impl SimpleDownloadEngine {
     where
         F: Fn(DownloadProgress) + Send + Sync + 'static,
     {
-        let temp_destination = dest_path.with_extension(
-            format!("{}.flasharr", dest_path.extension().and_then(|e| e.to_str()).unwrap_or(""))
+        let temp_destination = dest_path.with_extension(format!(
+            "{}.flasharr",
+            dest_path.extension().and_then(|e| e.to_str()).unwrap_or("")
+        ));
+
+        tracing::info!(
+            "Starting single-stream download: {} -> {:?}",
+            url,
+            temp_destination
         );
 
-        tracing::info!("Starting single-stream download: {} -> {:?}", url, temp_destination);
-
-        let total_downloaded = self.download_single_stream(
-            url,
-            &temp_destination,
-            cancel_token,
-            progress_callback,
-        ).await?;
+        let total_downloaded = self
+            .download_single_stream(url, &temp_destination, cancel_token, progress_callback)
+            .await?;
 
         tracing::info!("Download completed: {} bytes", total_downloaded);
 
@@ -154,7 +165,9 @@ impl SimpleDownloadEngine {
             } else {
                 let app_data_dir = std::env::var("FLASHARR_APPDATA_DIR")
                     .map(PathBuf::from)
-                    .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join("appData"));
+                    .unwrap_or_else(|_| {
+                        std::env::current_dir().unwrap_or_default().join("appData")
+                    });
                 let rel_path = path.strip_prefix("/downloads").unwrap_or(&path);
                 let fallback = app_data_dir.join("downloads").join(rel_path);
                 tracing::warn!(
@@ -253,9 +266,21 @@ impl SimpleDownloadEngine {
 
             if last_progress_update.elapsed() >= progress_interval {
                 let elapsed = start_time.elapsed().as_secs_f64();
-                let speed = if elapsed > 0.0 { (downloaded - resume_position) as f64 / elapsed } else { 0.0 };
-                let eta = if speed > 0.0 && total_size > downloaded { (total_size - downloaded) as f64 / speed } else { 0.0 };
-                let percentage = if total_size > 0 { (downloaded as f64 / total_size as f64) * 100.0 } else { 0.0 };
+                let speed = if elapsed > 0.0 {
+                    (downloaded - resume_position) as f64 / elapsed
+                } else {
+                    0.0
+                };
+                let eta = if speed > 0.0 && total_size > downloaded {
+                    (total_size - downloaded) as f64 / speed
+                } else {
+                    0.0
+                };
+                let percentage = if total_size > 0 {
+                    (downloaded as f64 / total_size as f64) * 100.0
+                } else {
+                    0.0
+                };
 
                 progress_callback(DownloadProgress {
                     downloaded_bytes: downloaded,
@@ -273,7 +298,11 @@ impl SimpleDownloadEngine {
         file.flush().await?;
 
         let elapsed = start_time.elapsed().as_secs_f64();
-        let speed = if elapsed > 0.0 { (downloaded - resume_position) as f64 / elapsed } else { 0.0 };
+        let speed = if elapsed > 0.0 {
+            (downloaded - resume_position) as f64 / elapsed
+        } else {
+            0.0
+        };
         progress_callback(DownloadProgress {
             downloaded_bytes: downloaded,
             total_bytes: total_size,

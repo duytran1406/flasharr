@@ -2,18 +2,17 @@
 //!
 //! Proxy endpoints for The Movie Database (TMDB) API.
 
+use crate::AppState;
 use axum::{
-    routing::get,
-    Router,
-    Json,
-    extract::{State, Path, Query},
+    extract::{Path, Query, State},
     http::StatusCode,
+    routing::get,
+    Json, Router,
 };
-use std::sync::Arc;
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use reqwest::Client;
-use crate::AppState;
+use std::sync::Arc;
 
 const TMDB_API_BASE: &str = "https://api.themoviedb.org/3";
 const TMDB_IMAGE_BASE: &str = "https://image.tmdb.org/t/p";
@@ -66,8 +65,12 @@ struct PaginationQuery {
     page: u32,
 }
 
-fn default_media_type() -> String { "multi".to_string() }
-fn default_page() -> u32 { 1 }
+fn default_media_type() -> String {
+    "multi".to_string()
+}
+fn default_page() -> u32 {
+    1
+}
 
 // ============================================================================
 // Response Types
@@ -92,33 +95,40 @@ struct TmdbClient {
 impl TmdbClient {
     fn new() -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             // Hardcoded TMDB API key - won't change for lifetime
             api_key: "8d95150f3391194ca66fef44df497ad6".to_string(),
         }
     }
-    
+
     async fn get(&self, path: &str, extra_params: &[(&str, &str)]) -> Result<Value, StatusCode> {
         if self.api_key.is_empty() {
             return Err(StatusCode::SERVICE_UNAVAILABLE);
         }
-        
+
         let mut url = format!("{}{}", TMDB_API_BASE, path);
         url.push_str(&format!("?api_key={}", self.api_key));
-        
+
         for (key, value) in extra_params {
             url.push_str(&format!("&{}={}", key, value));
         }
-        
-        let resp = self.client.get(&url)
+
+        let resp = self
+            .client
+            .get(&url)
             .send()
             .await
             .map_err(|_| StatusCode::BAD_GATEWAY)?;
-            
+
         if !resp.status().is_success() {
-            return Err(StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY));
+            return Err(
+                StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY)
+            );
         }
-        
+
         resp.json::<Value>()
             .await
             .map_err(|_| StatusCode::BAD_GATEWAY)
@@ -135,15 +145,14 @@ async fn search(
     Query(params): Query<SearchQuery>,
 ) -> Result<Json<Value>, StatusCode> {
     let client = TmdbClient::new();
-    
+
     let path = format!("/search/{}", params.media_type);
     let page_str = params.page.to_string();
-    
-    let data = client.get(&path, &[
-        ("query", params.q.as_str()),
-        ("page", &page_str),
-    ]).await?;
-    
+
+    let data = client
+        .get(&path, &[("query", params.q.as_str()), ("page", &page_str)])
+        .await?;
+
     Ok(Json(data))
 }
 
@@ -154,18 +163,20 @@ async fn discover(
     Query(params): Query<DiscoverQuery>,
 ) -> Result<Json<Value>, StatusCode> {
     let client = TmdbClient::new();
-    
+
     let path = format!("/discover/{}", media_type);
     let page_str = params.page.to_string();
-    let mut query_params: Vec<(&str, String)> = vec![
-        ("page", page_str),
-    ];
-    
+    let mut query_params: Vec<(&str, String)> = vec![("page", page_str)];
+
     if let Some(ref genre) = params.genre {
         query_params.push(("with_genres", genre.clone()));
     }
     if let Some(year) = params.year {
-        let key = if media_type == "movie" { "primary_release_year" } else { "first_air_date_year" };
+        let key = if media_type == "movie" {
+            "primary_release_year"
+        } else {
+            "first_air_date_year"
+        };
         query_params.push((key, year.to_string()));
     }
     if let Some(ref sort) = params.sort_by {
@@ -174,11 +185,10 @@ async fn discover(
     if let Some(vote) = params.vote_average_gte {
         query_params.push(("vote_average.gte", vote.to_string()));
     }
-    
-    let params_ref: Vec<(&str, &str)> = query_params.iter()
-        .map(|(k, v)| (*k, v.as_str()))
-        .collect();
-    
+
+    let params_ref: Vec<(&str, &str)> =
+        query_params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+
     let data = client.get(&path, &params_ref).await?;
     Ok(Json(data))
 }
@@ -190,11 +200,11 @@ async fn movie_details(
 ) -> Result<Json<Value>, StatusCode> {
     let client = TmdbClient::new();
     let path = format!("/movie/{}", id);
-    
-    let data = client.get(&path, &[
-        ("append_to_response", "credits,videos,images"),
-    ]).await?;
-    
+
+    let data = client
+        .get(&path, &[("append_to_response", "credits,videos,images")])
+        .await?;
+
     Ok(Json(data))
 }
 
@@ -208,14 +218,23 @@ async fn tv_details(
     let client = TmdbClient::new();
     let path = format!("/tv/{}", id);
 
-    let mut data = client.get(&path, &[
-        ("append_to_response", "credits,videos,images,keywords,content_ratings,external_ids"),
-        ("language", "en-US"),
-    ]).await?;
+    let mut data = client
+        .get(
+            &path,
+            &[
+                (
+                    "append_to_response",
+                    "credits,videos,images,keywords,content_ratings,external_ids",
+                ),
+                ("language", "en-US"),
+            ],
+        )
+        .await?;
 
     // If the English overview is empty, re-fetch with the show's original language
     // so Chinese/Korean/Japanese shows display their native-language overview.
-    let overview_empty = data.get("overview")
+    let overview_empty = data
+        .get("overview")
         .and_then(|v| v.as_str())
         .map(|s| s.trim().is_empty())
         .unwrap_or(true);
@@ -239,18 +258,32 @@ async fn tv_details(
                 _ => orig_lang,
             };
 
-            if let Ok(native_data) = client.get(&path, &[
-                ("append_to_response", "keywords,content_ratings,external_ids"),
-                ("language", locale),
-            ]).await {
+            if let Ok(native_data) = client
+                .get(
+                    &path,
+                    &[
+                        (
+                            "append_to_response",
+                            "keywords,content_ratings,external_ids",
+                        ),
+                        ("language", locale),
+                    ],
+                )
+                .await
+            {
                 // Splice in only the overview (and name if also missing)
                 if let Some(overview) = native_data.get("overview").and_then(|v| v.as_str()) {
                     if !overview.trim().is_empty() {
                         if let Some(obj) = data.as_object_mut() {
                             obj.insert("overview".to_string(), Value::String(overview.to_string()));
                             // Also expose original-language name for UI display
-                            if let Some(orig_name) = native_data.get("name").and_then(|v| v.as_str()) {
-                                obj.insert("original_name_native".to_string(), Value::String(orig_name.to_string()));
+                            if let Some(orig_name) =
+                                native_data.get("name").and_then(|v| v.as_str())
+                            {
+                                obj.insert(
+                                    "original_name_native".to_string(),
+                                    Value::String(orig_name.to_string()),
+                                );
                             }
                         }
                     }
@@ -269,9 +302,9 @@ async fn collection_details(
 ) -> Result<Json<Value>, StatusCode> {
     let client = TmdbClient::new();
     let path = format!("/collection/{}", id);
-    
+
     let data = client.get(&path, &[]).await?;
-    
+
     Ok(Json(data))
 }
 
@@ -282,7 +315,7 @@ async fn season_details(
 ) -> Result<Json<Value>, StatusCode> {
     let client = TmdbClient::new();
     let path = format!("/tv/{}/season/{}", id, season);
-    
+
     let data = client.get(&path, &[]).await?;
     Ok(Json(data))
 }
@@ -294,7 +327,7 @@ async fn genres(
 ) -> Result<Json<Value>, StatusCode> {
     let client = TmdbClient::new();
     let path = format!("/genre/{}/list", media_type);
-    
+
     let data = client.get(&path, &[]).await?;
     Ok(Json(data))
 }
@@ -308,7 +341,7 @@ async fn similar(
     let client = TmdbClient::new();
     let path = format!("/{}/{}/similar", media_type, id);
     let page_str = params.page.to_string();
-    
+
     let data = client.get(&path, &[("page", &page_str)]).await?;
     Ok(Json(data))
 }
@@ -322,7 +355,7 @@ async fn recommendations(
     let client = TmdbClient::new();
     let path = format!("/{}/{}/recommendations", media_type, id);
     let page_str = params.page.to_string();
-    
+
     let data = client.get(&path, &[("page", &page_str)]).await?;
     Ok(Json(data))
 }
@@ -336,7 +369,7 @@ async fn trending(
     let client = TmdbClient::new();
     let path = format!("/trending/{}/{}", media_type, time_window);
     let page_str = params.page.to_string();
-    
+
     let data = client.get(&path, &[("page", &page_str)]).await?;
     Ok(Json(data))
 }
@@ -347,26 +380,26 @@ async fn proxy_image(
 ) -> Result<axum::response::Response, StatusCode> {
     let client = Client::new();
     let url = format!("{}/{}/{}", TMDB_IMAGE_BASE, size, path);
-    
-    let resp = client.get(&url)
+
+    let resp = client
+        .get(&url)
         .send()
         .await
         .map_err(|_| StatusCode::BAD_GATEWAY)?;
-        
+
     if !resp.status().is_success() {
         return Err(StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY));
     }
-    
-    let content_type = resp.headers()
+
+    let content_type = resp
+        .headers()
         .get("content-type")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("image/jpeg")
         .to_string();
-        
-    let body = resp.bytes()
-        .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
-        
+
+    let body = resp.bytes().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
+
     Ok(axum::response::Response::builder()
         .header("Content-Type", content_type)
         .header("Cache-Control", "public, max-age=31536000")
@@ -411,7 +444,7 @@ mod tests {
     fn test_search_query_deserialization() {
         let json = r#"{"q": "Inception", "media_type": "movie", "page": 2}"#;
         let query: SearchQuery = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(query.q, "Inception");
         assert_eq!(query.media_type, "movie");
         assert_eq!(query.page, 2);
@@ -421,7 +454,7 @@ mod tests {
     fn test_search_query_defaults() {
         let json = r#"{"q": "Inception"}"#;
         let query: SearchQuery = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(query.q, "Inception");
         assert_eq!(query.media_type, "multi"); // default
         assert_eq!(query.page, 1); // default
@@ -437,7 +470,7 @@ mod tests {
             "vote_average_gte": 7.5
         }"#;
         let query: DiscoverQuery = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(query.page, 1);
         assert_eq!(query.genre, Some("28".to_string()));
         assert_eq!(query.year, Some(2024));
@@ -449,7 +482,7 @@ mod tests {
     fn test_discover_query_minimal() {
         let json = r#"{"page": 1}"#;
         let query: DiscoverQuery = serde_json::from_str(json).unwrap();
-        
+
         assert_eq!(query.page, 1);
         assert_eq!(query.genre, None);
         assert_eq!(query.year, None);
@@ -508,7 +541,7 @@ mod tests {
     async fn test_tmdb_client_url_construction() {
         // This test verifies URL construction logic without making actual requests
         let client = TmdbClient::new();
-        
+
         // Test that empty API key returns error immediately
         if client.api_key.is_empty() {
             let result = client.get("/test", &[]).await;
@@ -625,12 +658,13 @@ mod tests {
             "total_pages": 1,
             "total_results": 0
         });
-        
-        let response = TmdbResponse { data: value.clone() };
+
+        let response = TmdbResponse {
+            data: value.clone(),
+        };
         let serialized = serde_json::to_string(&response).unwrap();
         let deserialized: Value = serde_json::from_str(&serialized).unwrap();
-        
+
         assert_eq!(deserialized, value);
     }
 }
-

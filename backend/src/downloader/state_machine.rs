@@ -10,33 +10,33 @@ use std::fmt::Debug;
 pub trait TaskState: Send + Sync + Debug {
     /// Get the state enum value
     fn state_enum(&self) -> DownloadState;
-    
+
     /// Check if can transition to target state
     fn can_transition_to(&self, target: DownloadState) -> bool;
-    
+
     /// Get available actions in this state
     fn available_actions(&self) -> Vec<&'static str>;
-    
+
     /// Can pause in this state?
     fn can_pause(&self) -> bool {
         false
     }
-    
+
     /// Can resume from this state?
     fn can_resume(&self) -> bool {
         false
     }
-    
+
     /// Can cancel in this state?
     fn can_cancel(&self) -> bool {
         false
     }
-    
+
     /// Can retry from this state?
     fn can_retry(&self) -> bool {
         false
     }
-    
+
     /// Can delete in this state?
     fn can_delete(&self) -> bool {
         false
@@ -55,28 +55,26 @@ impl TaskState for QueuedState {
     fn state_enum(&self) -> DownloadState {
         DownloadState::Queued
     }
-    
+
     fn can_transition_to(&self, target: DownloadState) -> bool {
         matches!(
             target,
-            DownloadState::Starting
-                | DownloadState::Paused
-                | DownloadState::Cancelled
+            DownloadState::Starting | DownloadState::Paused | DownloadState::Cancelled
         )
     }
-    
+
     fn available_actions(&self) -> Vec<&'static str> {
         vec!["pause", "cancel"]
     }
-    
+
     fn can_pause(&self) -> bool {
         true
     }
-    
+
     fn can_cancel(&self) -> bool {
         true
     }
-    
+
     fn can_delete(&self) -> bool {
         true
     }
@@ -90,7 +88,7 @@ impl TaskState for StartingState {
     fn state_enum(&self) -> DownloadState {
         DownloadState::Starting
     }
-    
+
     fn can_transition_to(&self, target: DownloadState) -> bool {
         matches!(
             target,
@@ -100,11 +98,11 @@ impl TaskState for StartingState {
                 | DownloadState::Waiting
         )
     }
-    
+
     fn available_actions(&self) -> Vec<&'static str> {
         vec!["cancel"]
     }
-    
+
     fn can_cancel(&self) -> bool {
         true
     }
@@ -131,15 +129,15 @@ impl TaskState for DownloadingState {
                 | DownloadState::Importing
         )
     }
-    
+
     fn available_actions(&self) -> Vec<&'static str> {
         vec!["pause", "cancel"]
     }
-    
+
     fn can_pause(&self) -> bool {
         true
     }
-    
+
     fn can_cancel(&self) -> bool {
         true
     }
@@ -153,26 +151,23 @@ impl TaskState for PausedState {
     fn state_enum(&self) -> DownloadState {
         DownloadState::Paused
     }
-    
+
     fn can_transition_to(&self, target: DownloadState) -> bool {
-        matches!(
-            target,
-            DownloadState::Queued | DownloadState::Cancelled
-        )
+        matches!(target, DownloadState::Queued | DownloadState::Cancelled)
     }
-    
+
     fn available_actions(&self) -> Vec<&'static str> {
         vec!["resume", "cancel", "delete"]
     }
-    
+
     fn can_resume(&self) -> bool {
         true
     }
-    
+
     fn can_cancel(&self) -> bool {
         true
     }
-    
+
     fn can_delete(&self) -> bool {
         true
     }
@@ -186,7 +181,7 @@ impl TaskState for WaitingState {
     fn state_enum(&self) -> DownloadState {
         DownloadState::Waiting
     }
-    
+
     fn can_transition_to(&self, target: DownloadState) -> bool {
         matches!(
             target,
@@ -197,19 +192,19 @@ impl TaskState for WaitingState {
                 | DownloadState::Cancelled
         )
     }
-    
+
     fn available_actions(&self) -> Vec<&'static str> {
         vec!["pause", "cancel", "retry"]
     }
-    
+
     fn can_pause(&self) -> bool {
         true
     }
-    
+
     fn can_cancel(&self) -> bool {
         true
     }
-    
+
     fn can_retry(&self) -> bool {
         true
     }
@@ -223,19 +218,19 @@ impl TaskState for CompletedState {
     fn state_enum(&self) -> DownloadState {
         DownloadState::Completed
     }
-    
+
     fn can_transition_to(&self, target: DownloadState) -> bool {
         matches!(target, DownloadState::Queued) // Can re-download
     }
-    
+
     fn available_actions(&self) -> Vec<&'static str> {
         vec!["delete", "retry"]
     }
-    
+
     fn can_retry(&self) -> bool {
         true
     }
-    
+
     fn can_delete(&self) -> bool {
         true
     }
@@ -249,26 +244,23 @@ impl TaskState for FailedState {
     fn state_enum(&self) -> DownloadState {
         DownloadState::Failed
     }
-    
+
     fn can_transition_to(&self, target: DownloadState) -> bool {
-        matches!(
-            target,
-            DownloadState::Queued | DownloadState::Cancelled
-        )
+        matches!(target, DownloadState::Queued | DownloadState::Cancelled)
     }
-    
+
     fn available_actions(&self) -> Vec<&'static str> {
         vec!["retry", "delete", "cancel"]
     }
-    
+
     fn can_retry(&self) -> bool {
         true
     }
-    
+
     fn can_delete(&self) -> bool {
         true
     }
-    
+
     fn can_cancel(&self) -> bool {
         true
     }
@@ -282,19 +274,19 @@ impl TaskState for CancelledState {
     fn state_enum(&self) -> DownloadState {
         DownloadState::Cancelled
     }
-    
+
     fn can_transition_to(&self, target: DownloadState) -> bool {
         matches!(target, DownloadState::Queued) // Can restart
     }
-    
+
     fn available_actions(&self) -> Vec<&'static str> {
         vec!["retry", "delete"]
     }
-    
+
     fn can_retry(&self) -> bool {
         true
     }
-    
+
     fn can_delete(&self) -> bool {
         true
     }
@@ -318,11 +310,11 @@ impl TaskState for ExtractingState {
                 | DownloadState::Importing
         )
     }
-    
+
     fn available_actions(&self) -> Vec<&'static str> {
         vec!["cancel"]
     }
-    
+
     fn can_cancel(&self) -> bool {
         true
     }
@@ -424,7 +416,7 @@ impl TaskStateFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_queued_transitions() {
         let state = QueuedState;
@@ -433,7 +425,7 @@ mod tests {
         assert!(state.can_transition_to(DownloadState::Cancelled));
         assert!(!state.can_transition_to(DownloadState::Completed));
     }
-    
+
     #[test]
     fn test_downloading_actions() {
         let state = DownloadingState;
@@ -442,12 +434,12 @@ mod tests {
         assert!(!state.can_resume());
         assert!(!state.can_retry());
     }
-    
+
     #[test]
     fn test_factory_singletons() {
         let state1 = TaskStateFactory::get_state(DownloadState::Queued);
         let state2 = TaskStateFactory::get_state(DownloadState::Queued);
-        
+
         // Should be the same Arc (same pointer)
         assert!(Arc::ptr_eq(&state1, &state2));
     }

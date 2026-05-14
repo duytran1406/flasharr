@@ -3,10 +3,10 @@
 //! Handles detection and handling of duplicate downloads based on Fshare file codes.
 //! Extracted from orchestrator.rs for better modularity.
 
-use crate::downloader::task::{DownloadTask, DownloadState};
+use crate::db::Db;
 use crate::downloader::manager::DownloadTaskManager;
 use crate::downloader::progress::{ProgressUpdate, TaskEvent};
-use crate::db::Db;
+use crate::downloader::task::{DownloadState, DownloadTask};
 use crate::utils::parser::FilenameParser;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -27,18 +27,19 @@ impl DuplicateDetector {
             None
         }
     }
-    
+
     /// Find task by Fshare code in task manager
     pub async fn find_task_by_fshare_code(
         task_manager: &DownloadTaskManager,
-        code: &str
+        code: &str,
     ) -> Option<DownloadTask> {
-        task_manager.get_tasks()
+        task_manager
+            .get_tasks()
             .await
             .into_iter()
             .find(|t| t.fshare_code.as_deref() == Some(code))
     }
-    
+
     /// Handle duplicate download based on existing task state
     /// Returns the existing task if it should be kept, or creates a new one if old should be replaced
     /// Note: Not yet wired into orchestrator due to async complexity - will be done in future refactor
@@ -57,26 +58,29 @@ impl DuplicateDetector {
     ) -> Result<DownloadTask, anyhow::Error> {
         match existing.state {
             // Active states - skip and return existing
-            DownloadState::Queued | 
-            DownloadState::Starting | 
-            DownloadState::Downloading | 
-            DownloadState::Paused | 
-            DownloadState::Completed => {
+            DownloadState::Queued
+            | DownloadState::Starting
+            | DownloadState::Downloading
+            | DownloadState::Paused
+            | DownloadState::Completed => {
                 tracing::info!(
                     "Duplicate detected [code: {}]: Task {} already exists in state {:?}, skipping",
-                    code, existing.id, existing.state
+                    code,
+                    existing.id,
+                    existing.state
                 );
                 Ok(existing)
             }
-            
+
             // Failed/Cancelled states - delete old and create new
-            DownloadState::Failed | 
-            DownloadState::Cancelled => {
+            DownloadState::Failed | DownloadState::Cancelled => {
                 tracing::info!(
                     "Duplicate detected [code: {}]: Task {} is {:?}, deleting and creating new",
-                    code, existing.id, existing.state
+                    code,
+                    existing.id,
+                    existing.state
                 );
-                
+
                 // Delete old task
                 task_manager.delete_task(existing.id).await;
 
@@ -88,7 +92,10 @@ impl DuplicateDetector {
                 // Create new task
                 let mut task = DownloadTask::new(url, filename, host, category);
                 task.fshare_code = Some(code);
-                task.destination = download_dir.join(&task.filename).to_string_lossy().to_string();
+                task.destination = download_dir
+                    .join(&task.filename)
+                    .to_string_lossy()
+                    .to_string();
 
                 // Parse quality metadata from filename
                 let quality_attrs = FilenameParser::extract_quality_attributes(&task.filename);
@@ -97,12 +104,12 @@ impl DuplicateDetector {
 
                 // Add to manager
                 task_manager.add_task(task.clone()).await;
-                
+
                 // Persist to database
                 if let Some(db) = db {
                     db.save_task(&task)?;
                 }
-                
+
                 // Broadcast task added event
                 let _ = progress_tx.send(ProgressUpdate {
                     event: TaskEvent::Added,
@@ -114,16 +121,18 @@ impl DuplicateDetector {
                     percentage: 0.0,
                     state: "QUEUED".to_string(),
                 });
-                
+
                 tracing::info!("Created new download: {} ({})", task.filename, task.id);
                 Ok(task)
             }
-            
+
             // Other states - skip and return existing
             _ => {
                 tracing::info!(
                     "Duplicate detected [code: {}]: Task {} in state {:?}, skipping",
-                    code, existing.id, existing.state
+                    code,
+                    existing.id,
+                    existing.state
                 );
                 Ok(existing)
             }

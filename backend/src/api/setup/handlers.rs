@@ -1,12 +1,8 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::Json,
-};
+use crate::AppState;
+use axum::{extract::State, http::StatusCode, response::Json};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use once_cell::sync::Lazy;
-use crate::AppState;
 
 /// Shared HTTP client for all test connections (reuses connection pool)
 static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
@@ -98,7 +94,7 @@ pub async fn setup_fshare(
     Json(payload): Json<FshareCredentials>,
 ) -> Result<Json<TestResult>, StatusCode> {
     let client = &*HTTP_CLIENT;
-    
+
     // Try API login first
     let api_result = client
         .post("https://download.fsharegroup.site/api/user/login")
@@ -109,12 +105,15 @@ pub async fn setup_fshare(
         .timeout(std::time::Duration::from_secs(10))
         .send()
         .await;
-    
+
     match api_result {
         Ok(response) => {
             if let Ok(data) = response.json::<serde_json::Value>().await {
                 if data["code"] == 200 {
-                    if let Err(e) = state.db.save_fshare_credentials(&payload.email, &payload.password) {
+                    if let Err(e) = state
+                        .db
+                        .save_fshare_credentials(&payload.email, &payload.password)
+                    {
                         tracing::error!("Failed to save Fshare credentials: {}", e);
                         return Ok(Json(TestResult {
                             success: false,
@@ -146,8 +145,14 @@ pub async fn setup_fshare(
         Err(e) => {
             let err_str = format!("{}", e);
             // Only fall back on connectivity errors, not other failures
-            if err_str.contains("timed out") || err_str.contains("connect") || err_str.contains("dns") {
-                tracing::warn!("[SETUP] FShare API unreachable ({}), trying web form login", err_str);
+            if err_str.contains("timed out")
+                || err_str.contains("connect")
+                || err_str.contains("dns")
+            {
+                tracing::warn!(
+                    "[SETUP] FShare API unreachable ({}), trying web form login",
+                    err_str
+                );
             } else {
                 return Ok(Json(TestResult {
                     success: false,
@@ -157,20 +162,23 @@ pub async fn setup_fshare(
             }
         }
     }
-    
+
     // Fallback: Web form login via www.fshare.vn/site/login
     tracing::info!("[SETUP] Attempting web form login for FShare credentials validation");
-    
+
     let web_client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
-    
+
     // Step 1: GET login page for CSRF token
     let login_page = match web_client
         .get("https://www.fshare.vn/site/login")
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        )
         .send()
         .await
     {
@@ -183,16 +191,17 @@ pub async fn setup_fshare(
             }));
         }
     };
-    
+
     // Extract cookies from login page
-    let initial_cookies: String = login_page.headers()
+    let initial_cookies: String = login_page
+        .headers()
         .get_all(reqwest::header::SET_COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .filter_map(|s| s.split(';').next().map(|c| c.trim().to_string()))
         .collect::<Vec<_>>()
         .join("; ");
-    
+
     let html = match login_page.text().await {
         Ok(h) => h,
         Err(_) => {
@@ -203,16 +212,18 @@ pub async fn setup_fshare(
             }));
         }
     };
-    
+
     // Extract CSRF token
     let csrf_token = {
         let marker = "name=\"csrf-token\" content=\"";
         html.find(marker).and_then(|pos| {
             let start = pos + marker.len();
-            html[start..].find('"').map(|end| html[start..start + end].to_string())
+            html[start..]
+                .find('"')
+                .map(|end| html[start..start + end].to_string())
         })
     };
-    
+
     let csrf_token = match csrf_token {
         Some(t) => t,
         None => {
@@ -223,7 +234,7 @@ pub async fn setup_fshare(
             }));
         }
     };
-    
+
     // Step 2: POST form login
     let form_body = format!(
         "_csrf-app={}&LoginForm%5Bemail%5D={}&LoginForm%5Bpassword%5D={}&LoginForm%5BrememberMe%5D=1",
@@ -231,10 +242,13 @@ pub async fn setup_fshare(
         urlencoding::encode(&payload.email),
         urlencoding::encode(&payload.password),
     );
-    
+
     match web_client
         .post("https://www.fshare.vn/site/login")
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        )
         .header("Content-Type", "application/x-www-form-urlencoded")
         .header("Referer", "https://www.fshare.vn/site/login")
         .header("Cookie", &initial_cookies)
@@ -244,10 +258,15 @@ pub async fn setup_fshare(
     {
         Ok(resp) => {
             let status = resp.status();
-            
-            if status == reqwest::StatusCode::FOUND || status == reqwest::StatusCode::MOVED_PERMANENTLY {
+
+            if status == reqwest::StatusCode::FOUND
+                || status == reqwest::StatusCode::MOVED_PERMANENTLY
+            {
                 // 302 redirect = successful login
-                if let Err(e) = state.db.save_fshare_credentials(&payload.email, &payload.password) {
+                if let Err(e) = state
+                    .db
+                    .save_fshare_credentials(&payload.email, &payload.password)
+                {
                     tracing::error!("Failed to save Fshare credentials: {}", e);
                     return Ok(Json(TestResult {
                         success: false,
@@ -275,13 +294,11 @@ pub async fn setup_fshare(
                 }))
             }
         }
-        Err(e) => {
-            Ok(Json(TestResult {
-                success: false,
-                message: format!("Both API and web login failed: {}", e),
-                version: None,
-            }))
-        }
+        Err(e) => Ok(Json(TestResult {
+            success: false,
+            message: format!("Both API and web login failed: {}", e),
+            version: None,
+        })),
     }
 }
 
@@ -290,7 +307,7 @@ pub async fn test_sonarr(Json(payload): Json<ArrConfig>) -> Json<TestResult> {
     // Test connection to Sonarr
     let client = &*HTTP_CLIENT;
     let url = format!("{}/api/v3/system/status", payload.url.trim_end_matches('/'));
-    
+
     match client
         .get(&url)
         .header("X-Api-Key", &payload.api_key)
@@ -334,7 +351,7 @@ pub async fn test_radarr(Json(payload): Json<ArrConfig>) -> Json<TestResult> {
     // Test connection to Radarr (same API as Sonarr)
     let client = &*HTTP_CLIENT;
     let url = format!("{}/api/v3/system/status", payload.url.trim_end_matches('/'));
-    
+
     match client
         .get(&url)
         .header("X-Api-Key", &payload.api_key)
@@ -377,7 +394,7 @@ pub async fn test_radarr(Json(payload): Json<ArrConfig>) -> Json<TestResult> {
 pub async fn test_jellyfin(Json(payload): Json<JellyfinConfig>) -> Json<TestResult> {
     let client = &*HTTP_CLIENT;
     let url = format!("{}/System/Info", payload.url.trim_end_matches('/'));
-    
+
     match client
         .get(&url)
         .header("X-Emby-Token", &payload.api_key)
@@ -419,16 +436,15 @@ pub async fn test_jellyfin(Json(payload): Json<JellyfinConfig>) -> Json<TestResu
 /// GET /api/setup/indexer/key - Get or generate indexer API key
 pub async fn get_indexer_key(State(state): State<Arc<AppState>>) -> Json<IndexerKeyResponse> {
     // Get existing key or generate new one
-    let api_key = state.db.get_indexer_api_key()
-        .unwrap_or_else(|_| {
-            // Generate new key using UUID
-            let key = uuid::Uuid::new_v4().to_string().replace("-", "");
-            
-            // Save to database
-            let _ = state.db.save_indexer_api_key(&key);
-            key
-        });
-    
+    let api_key = state.db.get_indexer_api_key().unwrap_or_else(|_| {
+        // Generate new key using UUID
+        let key = uuid::Uuid::new_v4().to_string().replace("-", "");
+
+        // Save to database
+        let _ = state.db.save_indexer_api_key(&key);
+        key
+    });
+
     Json(IndexerKeyResponse { api_key })
 }
 
@@ -438,7 +454,10 @@ pub async fn complete_setup(
     Json(payload): Json<CompleteSetupPayload>,
 ) -> Json<SuccessResponse> {
     // Save Fshare credentials
-    if let Err(e) = state.db.save_fshare_credentials(&payload.fshare.email, &payload.fshare.password) {
+    if let Err(e) = state
+        .db
+        .save_fshare_credentials(&payload.fshare.email, &payload.fshare.password)
+    {
         tracing::error!("Failed to save Fshare credentials: {}", e);
         return Json(SuccessResponse {
             success: false,
@@ -447,7 +466,10 @@ pub async fn complete_setup(
     }
 
     // Clear FShare session so it re-logs in with new credentials
-    if let Some(handler) = state.host_registry.get_handler_for_url("https://fshare.vn/file/test") {
+    if let Some(handler) = state
+        .host_registry
+        .get_handler_for_url("https://fshare.vn/file/test")
+    {
         if let Err(e) = handler.logout().await {
             tracing::warn!("Failed to clear FShare session: {}", e);
         } else {
@@ -456,7 +478,10 @@ pub async fn complete_setup(
     }
 
     // Save download settings
-    if let Err(e) = state.db.save_download_settings(&payload.downloads.directory, payload.downloads.max_concurrent) {
+    if let Err(e) = state.db.save_download_settings(
+        &payload.downloads.directory,
+        payload.downloads.max_concurrent,
+    ) {
         tracing::error!("Failed to save download settings: {}", e);
         return Json(SuccessResponse {
             success: false,
@@ -470,7 +495,10 @@ pub async fn complete_setup(
 
     // Save Sonarr config if provided
     if let Some(sonarr) = payload.sonarr {
-        if let Err(e) = state.db.save_arr_config("sonarr", &sonarr.url, &sonarr.api_key) {
+        if let Err(e) = state
+            .db
+            .save_arr_config("sonarr", &sonarr.url, &sonarr.api_key)
+        {
             tracing::error!("Failed to save Sonarr config: {}", e);
         } else {
             sonarr_config = Some(crate::config::ArrConfig {
@@ -484,7 +512,10 @@ pub async fn complete_setup(
 
     // Save Radarr config if provided
     if let Some(radarr) = payload.radarr {
-        if let Err(e) = state.db.save_arr_config("radarr", &radarr.url, &radarr.api_key) {
+        if let Err(e) = state
+            .db
+            .save_arr_config("radarr", &radarr.url, &radarr.api_key)
+        {
             tracing::error!("Failed to save Radarr config: {}", e);
         } else {
             radarr_config = Some(crate::config::ArrConfig {
@@ -498,13 +529,19 @@ pub async fn complete_setup(
 
     // Reload arr_client with new configurations
     if sonarr_config.is_some() || radarr_config.is_some() {
-        state.download_orchestrator.reload_arr_client(sonarr_config, radarr_config).await;
+        state
+            .download_orchestrator
+            .reload_arr_client(sonarr_config, radarr_config)
+            .await;
         tracing::info!("Reloaded *arr client with wizard settings");
     }
 
     // Save Jellyfin config if provided
     if let Some(jellyfin) = payload.jellyfin {
-        if let Err(e) = state.db.save_jellyfin_config(&jellyfin.url, &jellyfin.api_key) {
+        if let Err(e) = state
+            .db
+            .save_jellyfin_config(&jellyfin.url, &jellyfin.api_key)
+        {
             tracing::error!("Failed to save Jellyfin config: {}", e);
         }
     }

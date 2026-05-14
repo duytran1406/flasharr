@@ -7,9 +7,9 @@ use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CircuitState {
-    Closed,    // Normal operation
-    Open,      // Blocking requests (service down)
-    HalfOpen,  // Testing recovery
+    Closed,   // Normal operation
+    Open,     // Blocking requests (service down)
+    HalfOpen, // Testing recovery
 }
 
 pub struct CircuitBreaker {
@@ -20,10 +20,10 @@ pub struct CircuitBreaker {
 }
 
 impl CircuitBreaker {
-    const FAILURE_THRESHOLD: usize = 5;        // Open after 5 failures
+    const FAILURE_THRESHOLD: usize = 5; // Open after 5 failures
     const TIMEOUT: Duration = Duration::from_secs(60); // Wait 60s before half-open
     const HALF_OPEN_SUCCESS_THRESHOLD: usize = 2; // Close after 2 successes in half-open
-    
+
     pub fn new() -> Self {
         Self {
             state: Mutex::new(CircuitState::Closed),
@@ -32,11 +32,11 @@ impl CircuitBreaker {
             success_count: AtomicUsize::new(0),
         }
     }
-    
+
     /// Check if request is allowed
     pub async fn is_request_allowed(&self) -> Result<(), String> {
         let mut state = self.state.lock().await;
-        
+
         match *state {
             CircuitState::Closed => {
                 // Normal operation, allow request
@@ -50,7 +50,9 @@ impl CircuitBreaker {
                         // Timeout elapsed, transition to half-open
                         *state = CircuitState::HalfOpen;
                         self.success_count.store(0, Ordering::SeqCst);
-                        tracing::info!("[CIRCUIT_BREAKER] Transitioning to HALF_OPEN (testing recovery)");
+                        tracing::info!(
+                            "[CIRCUIT_BREAKER] Transitioning to HALF_OPEN (testing recovery)"
+                        );
                         drop(state);
                         drop(last_failure);
                         Ok(())
@@ -73,11 +75,11 @@ impl CircuitBreaker {
             }
         }
     }
-    
+
     /// Record successful request
     pub async fn record_success(&self) {
         let mut state = self.state.lock().await;
-        
+
         match *state {
             CircuitState::Closed => {
                 // Reset failure count on success
@@ -86,7 +88,7 @@ impl CircuitBreaker {
             CircuitState::HalfOpen => {
                 // Increment success count
                 let successes = self.success_count.fetch_add(1, Ordering::SeqCst) + 1;
-                
+
                 if successes >= Self::HALF_OPEN_SUCCESS_THRESHOLD {
                     // Enough successes, close circuit
                     *state = CircuitState::Closed;
@@ -107,16 +109,16 @@ impl CircuitBreaker {
             }
         }
     }
-    
+
     /// Record failed request
     pub async fn record_failure(&self) {
         let mut state = self.state.lock().await;
-        
+
         match *state {
             CircuitState::Closed => {
                 // Increment failure count
                 let failures = self.failure_count.fetch_add(1, Ordering::SeqCst) + 1;
-                
+
                 if failures >= Self::FAILURE_THRESHOLD {
                     // Too many failures, open circuit
                     *state = CircuitState::Open;

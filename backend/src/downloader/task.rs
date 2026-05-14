@@ -2,15 +2,15 @@
 //!
 //! Represents a single download task with state management.
 
-use serde::{Serialize, Deserialize};
-use uuid::Uuid;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
+use super::error_classifier::{ErrorCategory, ErrorClassifier};
 use super::state_machine::{TaskState, TaskStateFactory};
-use super::error_classifier::{ErrorClassifier, ErrorCategory};
 
 /// Download task state
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,46 +50,70 @@ impl Default for DownloadState {
 impl DownloadState {
     /// Check if pause action is available
     pub fn can_pause(&self) -> bool {
-        matches!(self, Self::Queued | Self::Starting | Self::Downloading | Self::Waiting)
+        matches!(
+            self,
+            Self::Queued | Self::Starting | Self::Downloading | Self::Waiting
+        )
     }
-    
+
     /// Check if resume action is available
     pub fn can_resume(&self) -> bool {
         matches!(self, Self::Paused | Self::Waiting | Self::Skipped)
     }
-    
+
     /// Check if cancel action is available
     pub fn can_cancel(&self) -> bool {
-        matches!(self,
-            Self::Queued | Self::Starting | Self::Downloading |
-            Self::Waiting | Self::Paused | Self::Extracting | Self::Importing
+        matches!(
+            self,
+            Self::Queued
+                | Self::Starting
+                | Self::Downloading
+                | Self::Waiting
+                | Self::Paused
+                | Self::Extracting
+                | Self::Importing
         )
     }
-    
+
     /// Check if retry action is available
     pub fn can_retry(&self) -> bool {
-        matches!(self, 
-            Self::Waiting | Self::Completed | Self::Failed | 
-            Self::Cancelled | Self::Skipped
+        matches!(
+            self,
+            Self::Waiting | Self::Completed | Self::Failed | Self::Cancelled | Self::Skipped
         )
     }
-    
+
     /// Check if delete action is available
     pub fn can_delete(&self) -> bool {
-        matches!(self, 
-            Self::Queued | Self::Paused | Self::Completed | 
-            Self::Failed | Self::Cancelled | Self::Skipped
+        matches!(
+            self,
+            Self::Queued
+                | Self::Paused
+                | Self::Completed
+                | Self::Failed
+                | Self::Cancelled
+                | Self::Skipped
         )
     }
-    
+
     /// Get list of available actions
     pub fn available_actions(&self) -> Vec<&'static str> {
         let mut actions = Vec::new();
-        if self.can_pause() { actions.push("pause"); }
-        if self.can_resume() { actions.push("resume"); }
-        if self.can_cancel() { actions.push("cancel"); }
-        if self.can_retry() { actions.push("retry"); }
-        if self.can_delete() { actions.push("delete"); }
+        if self.can_pause() {
+            actions.push("pause");
+        }
+        if self.can_resume() {
+            actions.push("resume");
+        }
+        if self.can_cancel() {
+            actions.push("cancel");
+        }
+        if self.can_retry() {
+            actions.push("retry");
+        }
+        if self.can_delete() {
+            actions.push("delete");
+        }
         actions
     }
 }
@@ -110,111 +134,111 @@ pub enum MediaType {
 pub struct DownloadTask {
     /// Unique task ID
     pub id: Uuid,
-    
+
     /// Download URL (may be direct or needs resolution)
     pub url: String,
-    
+
     /// Original URL (e.g., Fshare page URL)
     pub original_url: String,
-    
+
     /// Target filename
     pub filename: String,
-    
+
     /// Destination path
     pub destination: String,
-    
+
     /// Current state
     pub state: DownloadState,
-    
+
     /// Progress percentage (0.0 to 100.0)
     pub progress: f32,
-    
+
     /// Total file size in bytes
     pub size: u64,
-    
+
     /// Bytes downloaded so far
     #[serde(default)]
     pub downloaded: u64,
-    
+
     /// Current download speed in bytes/sec
     #[serde(default)]
     pub speed: f64,
-    
+
     /// Estimated time remaining in seconds
     #[serde(default)]
     pub eta: f64,
-    
+
     /// Host identifier (e.g., "fshare", "gdrive")
     pub host: String,
-    
+
     /// Category (e.g., "tv", "movies", "other")
     pub category: String,
-    
+
     /// Priority (0 = normal, higher = more priority)
     pub priority: i32,
-    
+
     /// Number of segments for this download
     pub segments: u32,
-    
+
     /// Retry count
     pub retry_count: u32,
-    
+
     /// Time when task was created
     pub created_at: DateTime<Utc>,
-    
+
     /// Time when download started
     pub started_at: Option<DateTime<Utc>>,
-    
+
     /// Time when download completed/failed
     pub completed_at: Option<DateTime<Utc>>,
-    
+
     /// Wait until this time before retrying
     pub wait_until: Option<DateTime<Utc>>,
-    
+
     /// Error message if failed
     pub error_message: Option<String>,
-    
+
     /// URL metadata for expiration tracking
     pub url_metadata: Option<UrlMetadata>,
-    
+
     /// Error history for debugging
     #[serde(default)]
     pub error_history: Vec<ErrorRecord>,
-    
+
     /// Fshare file code for duplicate detection (e.g., "8DW6WQOV5R551DL")
     pub fshare_code: Option<String>,
-    
+
     /// Batch ID for grouping related downloads (e.g., TV season episodes)
     /// Downloads with the same batch_id are displayed as a collapsible group
     pub batch_id: Option<String>,
-    
+
     /// Batch display name (e.g., "Breaking Bad S01")
     pub batch_name: Option<String>,
-    
+
     /// TMDB metadata for Sonarr/Radarr matching
-    pub tmdb_id: Option<i64>,          // TMDB ID for series/movie
-    pub tmdb_title: Option<String>,    // Series/Movie title
-    pub tmdb_season: Option<u32>,      // Season number (TV only)
-    pub tmdb_episode: Option<u32>,     // Episode number (TV only)
-    
+    pub tmdb_id: Option<i64>, // TMDB ID for series/movie
+    pub tmdb_title: Option<String>, // Series/Movie title
+    pub tmdb_season: Option<u32>,   // Season number (TV only)
+    pub tmdb_episode: Option<u32>,  // Episode number (TV only)
+
     /// Quality metadata (parsed from filename at creation time)
-    pub quality: Option<String>,       // e.g. "1080p WEB-DL"
-    pub resolution: Option<String>,    // e.g. "1080p", "2160p", "720p"
-    
+    pub quality: Option<String>, // e.g. "1080p WEB-DL"
+    pub resolution: Option<String>, // e.g. "1080p", "2160p", "720p"
+
     /// Arr integration IDs (populated by webhook when series/movie is added)
-    pub arr_series_id: Option<i64>,    // Sonarr series ID
-    pub arr_movie_id: Option<i64>,     // Radarr movie ID
-    pub arr_announced: bool,           // Whether Arr has been notified of completion
+    pub arr_series_id: Option<i64>, // Sonarr series ID
+    pub arr_movie_id: Option<i64>,          // Radarr movie ID
+    pub arr_announced: bool,                // Whether Arr has been notified of completion
     pub arr_announce_error: Option<String>, // Error message if Arr announcement failed
-    
+
     /// State machine object (not serialized)
     #[serde(skip, default = "default_state_obj")]
     pub state_obj: Arc<dyn TaskState>,
-    
+
     /// Cancellation token (not serialized)
     #[serde(skip)]
     pub cancel_token: CancellationToken,
-    
+
     /// Pause notification (not serialized)
     #[serde(skip)]
     pub pause_notify: Arc<Notify>,
@@ -234,7 +258,7 @@ pub struct ErrorRecord {
 pub struct UrlMetadata {
     /// When the URL was resolved
     pub resolved_at: DateTime<Utc>,
-    
+
     /// When the URL expires
     pub expires_at: DateTime<Utc>,
 }
@@ -290,7 +314,7 @@ impl DownloadTask {
             pause_notify: Arc::new(Notify::new()),
         }
     }
-    
+
     /// Transition to new state with validation
     pub fn transition_to(&mut self, new_state: DownloadState) -> Result<(), String> {
         if !self.state_obj.can_transition_to(new_state) {
@@ -299,17 +323,17 @@ impl DownloadTask {
                 self.state, new_state
             ));
         }
-        
+
         self.state = new_state;
         self.state_obj = TaskStateFactory::get_state(new_state);
-        
+
         Ok(())
     }
-    
+
     /// Handle error and return recovery action
     pub fn on_error(&mut self, error: &anyhow::Error) -> ErrorCategory {
         let category = ErrorClassifier::classify(error);
-        
+
         // Log error to history
         self.error_history.push(ErrorRecord {
             timestamp: Utc::now(),
@@ -317,22 +341,22 @@ impl DownloadTask {
             error_category: format!("{:?}", category),
             retry_attempt: self.retry_count,
         });
-        
+
         category
     }
-    
+
     /// Check if task is cancelled
     pub fn is_cancelled(&self) -> bool {
         self.cancel_token.is_cancelled()
     }
-    
+
     /// Cancel the task
     pub fn cancel(&self) {
         self.cancel_token.cancel();
     }
-    
+
     /// Detect media type for Arr integration routing
-    /// 
+    ///
     /// Logic:
     /// - Has tmdb_season + tmdb_episode → TvEpisode (single episode)
     /// - Has batch_id → TvSeries (batch of episodes)
@@ -343,27 +367,27 @@ impl DownloadTask {
         if self.tmdb_season.is_some() && self.tmdb_episode.is_some() {
             return MediaType::TvEpisode;
         }
-        
+
         // Batch download (multiple episodes)
         if self.batch_id.is_some() {
             return MediaType::TvSeries;
         }
-        
+
         // Category-based detection
         let category_lower = self.category.to_lowercase();
         if category_lower.contains("movie") || category_lower.contains("radarr") {
             return MediaType::Movie;
         }
-        
+
         if category_lower.contains("tv") || category_lower.contains("sonarr") {
             // Default to single episode for TV category
             return MediaType::TvEpisode;
         }
-        
+
         // Default fallback: Movie
         MediaType::Movie
     }
-    
+
     /// Get available actions for current state
     pub fn get_available_actions(&self) -> Vec<&'static str> {
         self.state_obj.available_actions()

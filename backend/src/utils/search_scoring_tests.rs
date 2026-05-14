@@ -1,5 +1,5 @@
-use crate::utils::unified_scorer::calculate_match_score;
 use crate::utils::title_matcher::calculate_unified_similarity;
+use crate::utils::unified_scorer::calculate_match_score;
 
 /// Test cases based on real-world successes and failures
 #[cfg(test)]
@@ -22,7 +22,11 @@ mod search_scoring_tests {
             true, // TV series
         );
         println!("Scarlet Heart (VN alias) score: {:.3}", score);
-        assert!(score >= 0.80, "Vietnamese alias match should score high: got {}", score);
+        assert!(
+            score >= 0.80,
+            "Vietnamese alias match should score high: got {}",
+            score
+        );
     }
 
     #[test]
@@ -37,7 +41,11 @@ mod search_scoring_tests {
             false, // Movie
         );
         println!("Doraemon collection score: {:.3}", score);
-        assert!(score >= 0.85, "Exact title+year match should score very high: got {}", score);
+        assert!(
+            score >= 0.85,
+            "Exact title+year match should score very high: got {}",
+            score
+        );
     }
 
     // ============================================================================
@@ -57,7 +65,11 @@ mod search_scoring_tests {
             false,
         );
         println!("Bride of Covenant (year off by 1) score: {:.3}", score_2024);
-        assert!(score_2024 >= 0.75, "Off-by-one year should still be valid: got {}", score_2024);
+        assert!(
+            score_2024 >= 0.75,
+            "Off-by-one year should still be valid: got {}",
+            score_2024
+        );
     }
 
     #[test]
@@ -72,7 +84,11 @@ mod search_scoring_tests {
             false,
         );
         println!("Gia Sư Nữ Quái score: {:.3}", score);
-        assert!(score >= 0.80, "Exact Vietnamese title match should score high: got {}", score);
+        assert!(
+            score >= 0.80,
+            "Exact Vietnamese title match should score high: got {}",
+            score
+        );
     }
 
     #[test]
@@ -87,7 +103,11 @@ mod search_scoring_tests {
             false,
         );
         println!("Avatar Fire and Ash score: {:.3}", score);
-        assert!(score >= 0.80, "Exact match with WEBSCREENER should score high: got {}", score);
+        assert!(
+            score >= 0.80,
+            "Exact match with WEBSCREENER should score high: got {}",
+            score
+        );
     }
 
     #[test]
@@ -102,13 +122,17 @@ mod search_scoring_tests {
             false,
         );
         println!("Làm Giàu Với Ma (with subtitle) score: {:.3}", score);
-        assert!(score >= 0.75, "Title with subtitle should still match: got {}", score);
+        assert!(
+            score >= 0.75,
+            "Title with subtitle should still match: got {}",
+            score
+        );
     }
 
     #[test]
     fn test_failure_fnaf_sequel_confusion() {
         // FAILURE: Five Nights at Freddy's 2025 was matching 2019 fan film
-        
+
         // Correct match: 2025 movie
         let score_2025 = calculate_match_score(
             "Five Nights at Freddy's",
@@ -118,7 +142,7 @@ mod search_scoring_tests {
             &[],
             false,
         );
-        
+
         // Wrong match: 2019 short film "The Interview"
         let score_2019 = calculate_match_score(
             "Five Nights at Freddy's",
@@ -128,15 +152,21 @@ mod search_scoring_tests {
             &[],
             false,
         );
-        
+
         println!("FNAF 2025 (correct) score: {:.3}", score_2025);
         println!("FNAF 2019 (wrong) score: {:.3}", score_2019);
-        
-        assert!(score_2025 > score_2019, 
-            "2025 version should score higher than 2019: {:.3} vs {:.3}", 
-            score_2025, score_2019);
-        assert!(score_2019 < 0.70, 
-            "6-year mismatch should be invalid: got {:.3}", score_2019);
+
+        assert!(
+            score_2025 > score_2019,
+            "2025 version should score higher than 2019: {:.3} vs {:.3}",
+            score_2025,
+            score_2019
+        );
+        assert!(
+            score_2019 < 0.70,
+            "6-year mismatch should be invalid: got {:.3}",
+            score_2019
+        );
     }
 
     // ============================================================================
@@ -155,7 +185,11 @@ mod search_scoring_tests {
             true,
         );
         println!("TV series year tolerance score: {:.3}", score);
-        assert!(score >= 0.65, "TV series should tolerate year mismatch: got {}", score);
+        assert!(
+            score >= 0.65,
+            "TV series should tolerate year mismatch: got {}",
+            score
+        );
     }
 
     #[test]
@@ -170,7 +204,11 @@ mod search_scoring_tests {
             false,
         );
         println!("District 9 (numeric title) score: {:.3}", score);
-        assert!(score >= 0.90, "Exact numeric title match should score very high: got {}", score);
+        assert!(
+            score >= 0.90,
+            "Exact numeric title match should score very high: got {}",
+            score
+        );
     }
 
     // ============================================================================
@@ -181,7 +219,7 @@ mod search_scoring_tests {
     fn test_approach_comparison_year_weight() {
         // Compare: High year weight (30%) vs Low year weight (10%)
         let filename = "Five.Nights.at.Freddys.2019.720p.mkv";
-        
+
         // Approach A: Current (30% year weight for movies)
         let score_high_year = calculate_match_score(
             "Five Nights at Freddy's",
@@ -191,7 +229,7 @@ mod search_scoring_tests {
             &[],
             false,
         );
-        
+
         // Approach B: Low year weight (treat like TV)
         let score_low_year = calculate_match_score(
             "Five Nights at Freddy's",
@@ -201,19 +239,21 @@ mod search_scoring_tests {
             &[],
             true, // Simulate low year weight
         );
-        
+
         println!("High year weight (30%): {:.3}", score_high_year);
         println!("Low year weight (10%): {:.3}", score_low_year);
-        
+
         // High year weight should penalize more
-        assert!(score_high_year < score_low_year, 
-            "High year weight should penalize year mismatch more");
+        assert!(
+            score_high_year < score_low_year,
+            "High year weight should penalize year mismatch more"
+        );
     }
 
     #[test]
     fn test_old_vs_new_similarity_algorithm() {
         let filename = "Làm.Giàu.Với.Ma.-.Cuộc.Chiến.Hột.Xoàn.2025.1080p.mkv";
-        
+
         // New unified approach
         let new_score = calculate_match_score(
             "Làm Giàu Với Ma",
@@ -223,18 +263,18 @@ mod search_scoring_tests {
             &[],
             false,
         );
-        
+
         // Old approach (for comparison)
-        let old_sim = calculate_unified_similarity(
-            "Làm Giàu Với Ma",
-            filename,
-            &[],
-        );
-        
+        let old_sim = calculate_unified_similarity("Làm Giàu Với Ma", filename, &[]);
+
         println!("New unified score: {:.3}", new_score);
         println!("Old similarity score: {:.3}", old_sim.score);
-        
+
         // New approach should handle long titles better
-        assert!(new_score >= 0.75, "New approach should handle subtitles: got {}", new_score);
+        assert!(
+            new_score >= 0.75,
+            "New approach should handle subtitles: got {}",
+            new_score
+        );
     }
 }

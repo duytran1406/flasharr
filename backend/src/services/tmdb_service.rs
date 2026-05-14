@@ -86,11 +86,12 @@ impl TmdbService {
         Self {
             client: Arc::new(
                 Client::builder()
+                    .no_proxy()
                     .timeout(Duration::from_secs(8))
                     .pool_max_idle_per_host(10)
                     .pool_idle_timeout(Duration::from_secs(90))
                     .build()
-                    .unwrap_or_else(|_| Client::new())
+                    .unwrap_or_else(|_| Client::new()),
             ),
         }
     }
@@ -102,11 +103,9 @@ impl TmdbService {
     /// Make a GET request to TMDB API
     async fn get(&self, path: &str) -> Option<Value> {
         let url = format!("{}{}?api_key={}", TMDB_API_BASE, path, TMDB_API_KEY);
-        
+
         match self.client.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                resp.json::<Value>().await.ok()
-            }
+            Ok(resp) if resp.status().is_success() => resp.json::<Value>().await.ok(),
             Ok(resp) => {
                 warn!("TMDB API returned {}: {}", resp.status(), path);
                 None
@@ -124,11 +123,9 @@ impl TmdbService {
         for (key, value) in params {
             url.push_str(&format!("&{}={}", key, value));
         }
-        
+
         match self.client.get(&url).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                resp.json::<Value>().await.ok()
-            }
+            Ok(resp) if resp.status().is_success() => resp.json::<Value>().await.ok(),
             _ => None,
         }
     }
@@ -145,13 +142,13 @@ impl TmdbService {
     /// Get TV show alternative titles
     pub async fn get_tv_alternative_titles(&self, tmdb_id: i64) -> Vec<AlternativeTitle> {
         let path = format!("/tv/{}/alternative_titles", tmdb_id);
-        
+
         if let Some(data) = self.get(&path).await {
             if let Some(results) = data["results"].as_array() {
-                return results.iter()
+                return results
+                    .iter()
                     .filter_map(|t| {
-                        let title = t["title"].as_str()
-                            .or(t["name"].as_str())?;
+                        let title = t["title"].as_str().or(t["name"].as_str())?;
                         let iso = t["iso_3166_1"].as_str().unwrap_or("");
                         Some(AlternativeTitle {
                             title: title.to_string(),
@@ -167,14 +164,14 @@ impl TmdbService {
     /// Get TV show translations
     pub async fn get_tv_translations(&self, tmdb_id: i64) -> Vec<Translation> {
         let path = format!("/tv/{}/translations", tmdb_id);
-        
+
         if let Some(data) = self.get(&path).await {
             if let Some(translations) = data["translations"].as_array() {
-                return translations.iter()
+                return translations
+                    .iter()
                     .filter_map(|t| {
                         let iso = t["iso_3166_1"].as_str().unwrap_or("");
-                        let name = t["data"]["name"].as_str()
-                            .filter(|n| !n.is_empty())?;
+                        let name = t["data"]["name"].as_str().filter(|n| !n.is_empty())?;
                         Some(Translation {
                             name: name.to_string(),
                             iso_3166_1: iso.to_string(),
@@ -188,7 +185,8 @@ impl TmdbService {
 
     /// Get TV season details
     pub async fn get_season_details(&self, tmdb_id: i64, season: i32) -> Option<Value> {
-        self.get(&format!("/tv/{}/season/{}", tmdb_id, season)).await
+        self.get(&format!("/tv/{}/season/{}", tmdb_id, season))
+            .await
     }
 
     /// Get full TV enrichment in ONE API call using append_to_response.
@@ -197,21 +195,25 @@ impl TmdbService {
         let mut enrichment = MediaEnrichment::default();
 
         // Single API call: details + alternative_titles + translations
-        let data = self.get_with_params(
-            &format!("/tv/{}", tmdb_id),
-            &[("append_to_response", "alternative_titles,translations")],
-        ).await;
+        let data = self
+            .get_with_params(
+                &format!("/tv/{}", tmdb_id),
+                &[("append_to_response", "alternative_titles,translations")],
+            )
+            .await;
 
         if let Some(data) = data {
             // Parse details
             enrichment.official_name = data["name"].as_str().map(|s| s.to_string());
             enrichment.original_name = data["original_name"].as_str().map(|s| s.to_string());
-            enrichment.original_language = data["original_language"].as_str().map(|s| s.to_string());
+            enrichment.original_language =
+                data["original_language"].as_str().map(|s| s.to_string());
             enrichment.poster_path = data["poster_path"].as_str().map(|s| s.to_string());
 
             // Parse alternative titles from appended response
             if let Some(results) = data["alternative_titles"]["results"].as_array() {
-                enrichment.alternative_titles = results.iter()
+                enrichment.alternative_titles = results
+                    .iter()
                     .filter_map(|t| {
                         let title = t["title"].as_str().or(t["name"].as_str())?;
                         let iso = t["iso_3166_1"].as_str().unwrap_or("");
@@ -225,11 +227,11 @@ impl TmdbService {
 
             // Parse translations from appended response
             if let Some(translations) = data["translations"]["translations"].as_array() {
-                enrichment.translations = translations.iter()
+                enrichment.translations = translations
+                    .iter()
                     .filter_map(|t| {
                         let iso = t["iso_3166_1"].as_str().unwrap_or("");
-                        let name = t["data"]["name"].as_str()
-                            .filter(|n| !n.is_empty())?;
+                        let name = t["data"]["name"].as_str().filter(|n| !n.is_empty())?;
                         Some(Translation {
                             name: name.to_string(),
                             iso_3166_1: iso.to_string(),
@@ -251,16 +253,18 @@ impl TmdbService {
         self.get_with_params(
             &format!("/movie/{}", tmdb_id),
             &[("append_to_response", "belongs_to_collection")],
-        ).await
+        )
+        .await
     }
 
     /// Get movie alternative titles
     pub async fn get_movie_alternative_titles(&self, tmdb_id: i64) -> Vec<AlternativeTitle> {
         let path = format!("/movie/{}/alternative_titles", tmdb_id);
-        
+
         if let Some(data) = self.get(&path).await {
             if let Some(titles) = data["titles"].as_array() {
-                return titles.iter()
+                return titles
+                    .iter()
                     .filter_map(|t| {
                         let title = t["title"].as_str()?;
                         let iso = t["iso_3166_1"].as_str().unwrap_or("");
@@ -278,9 +282,10 @@ impl TmdbService {
     /// Get collection details
     pub async fn get_collection(&self, collection_id: i64) -> Option<CollectionInfo> {
         let data = self.get(&format!("/collection/{}", collection_id)).await?;
-        
+
         let name = data["name"].as_str()?.to_string();
-        let parts = data["parts"].as_array()
+        let parts = data["parts"]
+            .as_array()
             .map(|arr| {
                 arr.iter()
                     .filter_map(|p| {
@@ -306,21 +311,25 @@ impl TmdbService {
         let mut enrichment = MediaEnrichment::default();
 
         // Single API call: details + alternative_titles + belongs_to_collection
-        let data = self.get_with_params(
-            &format!("/movie/{}", tmdb_id),
-            &[("append_to_response", "alternative_titles")],
-        ).await;
+        let data = self
+            .get_with_params(
+                &format!("/movie/{}", tmdb_id),
+                &[("append_to_response", "alternative_titles")],
+            )
+            .await;
 
         if let Some(data) = data {
             // Parse details
             enrichment.official_name = data["title"].as_str().map(|s| s.to_string());
             enrichment.original_name = data["original_title"].as_str().map(|s| s.to_string());
-            enrichment.original_language = data["original_language"].as_str().map(|s| s.to_string());
+            enrichment.original_language =
+                data["original_language"].as_str().map(|s| s.to_string());
             enrichment.poster_path = data["poster_path"].as_str().map(|s| s.to_string());
 
             // Parse alternative titles from appended response
             if let Some(titles) = data["alternative_titles"]["titles"].as_array() {
-                enrichment.alternative_titles = titles.iter()
+                enrichment.alternative_titles = titles
+                    .iter()
                     .filter_map(|t| {
                         let title = t["title"].as_str()?;
                         let iso = t["iso_3166_1"].as_str().unwrap_or("");
@@ -350,13 +359,14 @@ impl TmdbService {
         self.get_with_params(
             &format!("/find/{}", external_id),
             &[("external_source", source)],
-        ).await
+        )
+        .await
     }
 
     /// Get external IDs for a TV show
     pub async fn get_tv_external_ids(&self, tmdb_id: i64) -> ExternalIds {
         let path = format!("/tv/{}/external_ids", tmdb_id);
-        
+
         if let Some(data) = self.get(&path).await {
             return ExternalIds {
                 imdb_id: data["imdb_id"].as_str().map(|s| s.to_string()),
@@ -372,15 +382,14 @@ impl TmdbService {
 
     /// Search for movies/TV shows
     pub async fn search(&self, media_type: &str, query: &str) -> Option<Value> {
-        self.get_with_params(
-            &format!("/search/{}", media_type),
-            &[("query", query)],
-        ).await
+        self.get_with_params(&format!("/search/{}", media_type), &[("query", query)])
+            .await
     }
 
     /// Search collections
     pub async fn search_collection(&self, query: &str) -> Option<Value> {
-        self.get_with_params("/search/collection", &[("query", query)]).await
+        self.get_with_params("/search/collection", &[("query", query)])
+            .await
     }
 }
 

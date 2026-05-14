@@ -1,14 +1,14 @@
-pub mod registry;
 pub mod base;
-pub mod fshare;
 pub mod circuit_breaker;
+pub mod fshare;
+pub mod registry;
 
-use std::sync::Arc;
-use reqwest::Client;
+use self::fshare::FshareHandler;
+use self::registry::HostRegistry;
 use crate::config::Config;
 use crate::db::Db;
-use self::registry::HostRegistry;
-use self::fshare::FshareHandler;
+use reqwest::Client;
+use std::sync::Arc;
 
 /// Create a shared HTTP client for all host handlers
 pub fn create_shared_client() -> Arc<Client> {
@@ -25,8 +25,7 @@ pub fn create_shared_client() -> Arc<Client> {
 pub fn create_registry(config: &Config, client: Arc<Client>, db: Arc<Db>) -> HostRegistry {
     let mut registry = HostRegistry::new();
     registry.register(Box::new(
-        FshareHandler::new(config.fshare.clone(), client)
-            .with_db(db)
+        FshareHandler::new(config.fshare.clone(), client).with_db(db),
     ));
     registry
 }

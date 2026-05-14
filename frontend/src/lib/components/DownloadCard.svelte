@@ -47,9 +47,12 @@
     Queued: { color: "text-yellow-400", bg: "bg-yellow-500/20" },
     Completed: { color: "text-green-400", bg: "bg-green-500/20" },
     Failed: { color: "text-red-400", bg: "bg-red-500/20" },
-    Paused: { color: "text-slate-400", bg: "bg-slate-500/20" },
-    Starting: { color: "text-cyan-400", bg: "bg-cyan-500/20" },
+    Extracting: { color: "text-amber-400", bg: "bg-amber-500/20" },
+    Importing: { color: "text-purple-400", bg: "bg-purple-500/20" },
+    IMPORTING: { color: "text-purple-400", bg: "bg-purple-500/20" },
+    Starting: { color: "text-blue-300", bg: "bg-blue-500/10" },
     Waiting: { color: "text-orange-400", bg: "bg-orange-500/20" },
+    Paused: { color: "text-slate-400", bg: "bg-slate-500/20" },
   };
 
   const config = $derived(stateConfig[download.state] || stateConfig["Queued"]);

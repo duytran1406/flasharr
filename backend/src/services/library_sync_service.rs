@@ -4,12 +4,11 @@
 //! This ensures that the Flasharr UI correctly reflects the state of the Arr suite
 //! even for items added or downloaded outside of Flasharr.
 
-use std::sync::Arc;
-use tokio::time::{Duration, interval};
-use tracing::{info, error, warn};
 use crate::arr::ArrClient;
+use crate::db::media::{MediaEpisode, MediaItem};
 use crate::db::Db;
-use crate::db::media::{MediaItem, MediaEpisode};
+use std::sync::Arc;
+use tracing::{error, info, warn};
 
 pub struct LibrarySyncService {
     db: Arc<Db>,
@@ -19,24 +18,6 @@ pub struct LibrarySyncService {
 impl LibrarySyncService {
     pub fn new(db: Arc<Db>, arr_client: Arc<ArrClient>) -> Self {
         Self { db, arr_client }
-    }
-
-    /// Run the sync loop periodically
-    pub async fn start_background_sync(self: Arc<Self>, interval_hours: u64) {
-        let mut interval = interval(Duration::from_secs(interval_hours * 3600));
-        
-        info!("Starting background library sync (every {} hours)", interval_hours);
-        
-        loop {
-            interval.tick().await;
-            info!("Starting scheduled library sync from Sonarr/Radarr");
-            
-            if let Err(e) = self.sync_all().await {
-                error!("Library sync failed: {}", e);
-            } else {
-                info!("Library sync completed metadata update");
-            }
-        }
     }
 
     /// Full synchronization of all series and movies
@@ -53,7 +34,10 @@ impl LibrarySyncService {
                             Some(id) => id as i64,
                             None => {
                                 // Try to find by TVDB if TMDB is missing in Sonarr record
-                                warn!("[SYNC] Series '{}' missing tmdb_id in Sonarr. Skipping.", sonarr_series.title);
+                                warn!(
+                                    "[SYNC] Series '{}' missing tmdb_id in Sonarr. Skipping.",
+                                    sonarr_series.title
+                                );
                                 continue;
                             }
                         };
@@ -70,14 +54,15 @@ impl LibrarySyncService {
                         item.arr_status = sonarr_series.status.clone();
                         item.arr_quality_profile_id = sonarr_series.quality_profile_id;
                         item.arr_synced_at = Some(chrono::Utc::now().to_rfc3339());
-                        
+
                         if let Some(stats) = sonarr_series.statistics {
                             // Use episode counts when available — more reliable than the
                             // percent_of_episodes float (99.4% rounds down, 99.0 threshold missed).
-                            item.arr_has_file = match (stats.episode_file_count, stats.episode_count) {
-                                (Some(files), Some(total)) if total > 0 => files >= total,
-                                _ => stats.percent_of_episodes.unwrap_or(0.0) >= 100.0,
-                            };
+                            item.arr_has_file =
+                                match (stats.episode_file_count, stats.episode_count) {
+                                    (Some(files), Some(total)) if total > 0 => files >= total,
+                                    _ => stats.percent_of_episodes.unwrap_or(0.0) >= 100.0,
+                                };
                             item.arr_size_on_disk = stats.size_on_disk.unwrap_or(0);
                             item.total_seasons = stats.season_count;
                         }
@@ -99,7 +84,10 @@ impl LibrarySyncService {
 
                         // Sync Episodes
                         if let Err(e) = self.sync_series_episodes(tmdb_id, sonarr_series.id).await {
-                            warn!("[SYNC] Failed to sync episodes for series {}: {}", item.title, e);
+                            warn!(
+                                "[SYNC] Failed to sync episodes for series {}: {}",
+                                item.title, e
+                            );
                         }
 
                         total_updated += 1;
@@ -120,7 +108,10 @@ impl LibrarySyncService {
 
                         // Skip movies without TMDB ID as they can't be properly tracked
                         if tmdb_id == 0 {
-                            tracing::warn!("Radarr movie '{}' has no TMDB ID, skipping sync", radarr_movie.title);
+                            tracing::warn!(
+                                "Radarr movie '{}' has no TMDB ID, skipping sync",
+                                radarr_movie.title
+                            );
                             continue;
                         }
 
@@ -166,9 +157,10 @@ impl LibrarySyncService {
     /// Sync episodes for a specific series
     async fn sync_series_episodes(&self, tmdb_id: i64, sonarr_id: i32) -> anyhow::Result<()> {
         let episodes = self.arr_client.get_episodes(sonarr_id).await?;
-        
+
         for sonarr_ep in episodes {
-            let mut ep = MediaEpisode::new(tmdb_id, sonarr_ep.season_number, sonarr_ep.episode_number);
+            let mut ep =
+                MediaEpisode::new(tmdb_id, sonarr_ep.season_number, sonarr_ep.episode_number);
             ep.title = sonarr_ep.title;
             ep.overview = sonarr_ep.overview;
             ep.air_date = sonarr_ep.air_date_utc;
@@ -177,12 +169,13 @@ impl LibrarySyncService {
             ep.arr_monitored = sonarr_ep.monitored;
 
             if let Err(e) = self.db.upsert_media_episode(&ep) {
-                error!("[SYNC] Failed to upsert episode S{:02}E{:02} for TMDB {}: {}", 
-                    ep.season_number, ep.episode_number, tmdb_id, e);
+                error!(
+                    "[SYNC] Failed to upsert episode S{:02}E{:02} for TMDB {}: {}",
+                    ep.season_number, ep.episode_number, tmdb_id, e
+                );
             }
         }
-        
+
         Ok(())
     }
-
 }

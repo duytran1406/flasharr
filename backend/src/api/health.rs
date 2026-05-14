@@ -2,14 +2,10 @@
 //!
 //! Provides comprehensive health status for all system components
 
-use axum::{
-    extract::State,
-    Json,
-    http::StatusCode,
-};
-use serde::{Serialize, Deserialize};
-use std::sync::Arc;
 use crate::AppState;
+use axum::{extract::State, http::StatusCode, Json};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]
@@ -43,7 +39,6 @@ pub struct HealthCheckResponse {
 pub async fn health_status(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<HealthCheckResponse>, StatusCode> {
-    
     // Check WebSocket (enhanced - check if broadcast channel is working)
     let websocket = check_websocket(&state).await;
 
@@ -72,8 +67,14 @@ pub async fn health_status(
     let overall_status = determine_overall_status(&[
         &websocket.status,
         &webhook.status,
-        &sonarr.as_ref().map(|s| &s.status).unwrap_or(&HealthStatus::Healthy),
-        &radarr.as_ref().map(|s| &s.status).unwrap_or(&HealthStatus::Healthy),
+        &sonarr
+            .as_ref()
+            .map(|s| &s.status)
+            .unwrap_or(&HealthStatus::Healthy),
+        &radarr
+            .as_ref()
+            .map(|s| &s.status)
+            .unwrap_or(&HealthStatus::Healthy),
         &fshare.status,
         &fshare_ping.status,
         &database.status,
@@ -95,10 +96,11 @@ pub async fn health_status(
 async fn check_arr_service(state: &AppState, service_type: &str) -> Option<ServiceHealth> {
     // Get settings from database
     let db = &state.db;
-    
+
     let (enabled, url, api_key) = match service_type {
         "sonarr" => {
-            let enabled = db.get_setting("sonarr_enabled")
+            let enabled = db
+                .get_setting("sonarr_enabled")
                 .ok()
                 .flatten()
                 .and_then(|v| v.parse::<bool>().ok())
@@ -106,9 +108,10 @@ async fn check_arr_service(state: &AppState, service_type: &str) -> Option<Servi
             let url = db.get_setting("sonarr_url").ok().flatten();
             let api_key = db.get_setting("sonarr_api_key").ok().flatten();
             (enabled, url, api_key)
-        },
+        }
         "radarr" => {
-            let enabled = db.get_setting("radarr_enabled")
+            let enabled = db
+                .get_setting("radarr_enabled")
                 .ok()
                 .flatten()
                 .and_then(|v| v.parse::<bool>().ok())
@@ -116,7 +119,7 @@ async fn check_arr_service(state: &AppState, service_type: &str) -> Option<Servi
             let url = db.get_setting("radarr_url").ok().flatten();
             let api_key = db.get_setting("radarr_api_key").ok().flatten();
             (enabled, url, api_key)
-        },
+        }
         _ => return None,
     };
 
@@ -131,7 +134,7 @@ async fn check_arr_service(state: &AppState, service_type: &str) -> Option<Servi
     let start = std::time::Instant::now();
     let client = reqwest::Client::new();
     let test_url = format!("{}/api/v3/system/status", url.trim_end_matches('/'));
-    
+
     match client
         .get(&test_url)
         .header("X-Api-Key", api_key)
@@ -155,13 +158,11 @@ async fn check_arr_service(state: &AppState, service_type: &str) -> Option<Servi
                 })
             }
         }
-        Err(e) => {
-            Some(ServiceHealth {
-                status: HealthStatus::Unhealthy,
-                message: Some(format!("Connection failed: {}", e)),
-                response_time_ms: None,
-            })
-        }
+        Err(e) => Some(ServiceHealth {
+            status: HealthStatus::Unhealthy,
+            message: Some(format!("Connection failed: {}", e)),
+            response_time_ms: None,
+        }),
     }
 }
 
@@ -193,7 +194,10 @@ async fn check_database(_state: &AppState) -> ServiceHealth {
 }
 
 fn determine_overall_status(statuses: &[&HealthStatus]) -> HealthStatus {
-    if statuses.iter().any(|s| matches!(s, HealthStatus::Unhealthy)) {
+    if statuses
+        .iter()
+        .any(|s| matches!(s, HealthStatus::Unhealthy))
+    {
         HealthStatus::Degraded
     } else if statuses.iter().any(|s| matches!(s, HealthStatus::Degraded)) {
         HealthStatus::Degraded
@@ -207,9 +211,9 @@ async fn check_websocket(state: &AppState) -> ServiceHealth {
     // receiver_count() doesn't accurately reflect active WS connections
     // since WS handlers don't directly subscribe to the channel
     // For now, we'll report as healthy if the infrastructure is available
-    
+
     let receiver_count = state.tx_broadcast.receiver_count();
-    
+
     ServiceHealth {
         status: HealthStatus::Healthy,
         message: Some(if receiver_count > 0 {
@@ -223,7 +227,7 @@ async fn check_websocket(state: &AppState) -> ServiceHealth {
 
 async fn check_webhook(_state: &AppState) -> ServiceHealth {
     // Check if SABnzbd API bridge is available for *arr integration
-    
+
     ServiceHealth {
         status: HealthStatus::Healthy,
         message: Some("Ready".to_string()),
@@ -235,7 +239,7 @@ async fn check_fshare_ping(_state: &AppState) -> ServiceHealth {
     // Actual ping to Fshare to test connectivity
     let start = std::time::Instant::now();
     let client = reqwest::Client::new();
-    
+
     match client
         .get("https://www.fshare.vn")
         .timeout(std::time::Duration::from_secs(5))
@@ -258,20 +262,18 @@ async fn check_fshare_ping(_state: &AppState) -> ServiceHealth {
                 }
             }
         }
-        Err(e) => {
-            ServiceHealth {
-                status: HealthStatus::Unhealthy,
-                message: Some(format!("Failed: {}", e)),
-                response_time_ms: None,
-            }
-        }
+        Err(e) => ServiceHealth {
+            status: HealthStatus::Unhealthy,
+            message: Some(format!("Failed: {}", e)),
+            response_time_ms: None,
+        },
     }
 }
 
 async fn check_internet_speed() -> ServiceHealth {
     // Placeholder for internet speed check
     // TODO: Integrate with myspeedtest later
-    
+
     ServiceHealth {
         status: HealthStatus::Healthy,
         message: Some("Not configured".to_string()),

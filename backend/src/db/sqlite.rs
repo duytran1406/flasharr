@@ -1,15 +1,15 @@
-use rusqlite::{params, Result, OptionalExtension};
-use std::path::Path;
-use uuid::Uuid;
+use super::media::{MediaEpisode, MediaItem};
+use crate::downloader::task::{DownloadState, DownloadTask};
 use chrono::{DateTime, Utc};
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::{params, OptionalExtension, Result};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
-use serde::{Deserialize, Serialize};
-use super::media::{MediaItem, MediaEpisode};
-use crate::downloader::task::{DownloadTask, DownloadState};
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
+use uuid::Uuid;
 
 pub struct Db {
     pool: Pool<SqliteConnectionManager>,
@@ -17,14 +17,13 @@ pub struct Db {
 
 impl Db {
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let manager = SqliteConnectionManager::file(path)
-            .with_init(|conn| {
-                conn.execute_batch(
-                    "PRAGMA journal_mode=WAL;
+        let manager = SqliteConnectionManager::file(path).with_init(|conn| {
+            conn.execute_batch(
+                "PRAGMA journal_mode=WAL;
                      PRAGMA busy_timeout=5000;
-                     PRAGMA synchronous=NORMAL;"
-                )
-            });
+                     PRAGMA synchronous=NORMAL;",
+            )
+        });
         let pool = Pool::builder()
             .max_size(5)
             .build(manager)
@@ -38,9 +37,11 @@ impl Db {
     }
 
     fn init(&self) -> Result<()> {
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        
+
         // Downloads table (also known as tasks table)
         conn.execute(
             "CREATE TABLE IF NOT EXISTS downloads (
@@ -68,7 +69,7 @@ impl Db {
             )",
             [],
         )?;
-        
+
         // Migrate existing downloads table if needed (add new columns)
         // This is safe - ALTER TABLE ADD COLUMN is idempotent in SQLite
         let _ = conn.execute("ALTER TABLE downloads ADD COLUMN downloaded INTEGER", []);
@@ -83,32 +84,44 @@ impl Db {
         let _ = conn.execute("ALTER TABLE downloads ADD COLUMN tmdb_season INTEGER", []);
         let _ = conn.execute("ALTER TABLE downloads ADD COLUMN tmdb_episode INTEGER", []);
         // Arr sync tracking columns (v2.1.0)
-        let _ = conn.execute("ALTER TABLE downloads ADD COLUMN arr_announced BOOLEAN DEFAULT 0", []);
+        let _ = conn.execute(
+            "ALTER TABLE downloads ADD COLUMN arr_announced BOOLEAN DEFAULT 0",
+            [],
+        );
         let _ = conn.execute("ALTER TABLE downloads ADD COLUMN arr_series_id INTEGER", []);
         let _ = conn.execute("ALTER TABLE downloads ADD COLUMN arr_movie_id INTEGER", []);
-        let _ = conn.execute("ALTER TABLE downloads ADD COLUMN arr_announce_error TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE downloads ADD COLUMN arr_announce_error TEXT",
+            [],
+        );
         // Fshare code for duplicate detection (v2.2.0)
         let _ = conn.execute("ALTER TABLE downloads ADD COLUMN fshare_code TEXT", []);
         // Quality metadata columns (v2.3.0)
         let _ = conn.execute("ALTER TABLE downloads ADD COLUMN quality TEXT", []);
         let _ = conn.execute("ALTER TABLE downloads ADD COLUMN resolution TEXT", []);
-        
+
         // Backfill quality/resolution from filenames for existing records
         {
             let mut stmt = conn.prepare(
-                "SELECT id, filename FROM downloads WHERE quality IS NULL AND filename IS NOT NULL"
+                "SELECT id, filename FROM downloads WHERE quality IS NULL AND filename IS NOT NULL",
             )?;
-            let rows: Vec<(String, String)> = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?.filter_map(|r| r.ok()).collect();
-            
+            let rows: Vec<(String, String)> = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+
             if !rows.is_empty() {
-                tracing::info!("[DB] Backfilling quality metadata for {} downloads", rows.len());
-                let mut update_stmt = conn.prepare(
-                    "UPDATE downloads SET quality = ?1, resolution = ?2 WHERE id = ?3"
-                )?;
+                tracing::info!(
+                    "[DB] Backfilling quality metadata for {} downloads",
+                    rows.len()
+                );
+                let mut update_stmt = conn
+                    .prepare("UPDATE downloads SET quality = ?1, resolution = ?2 WHERE id = ?3")?;
                 for (id, filename) in &rows {
-                    let attrs = crate::utils::parser::FilenameParser::extract_quality_attributes(filename);
+                    let attrs =
+                        crate::utils::parser::FilenameParser::extract_quality_attributes(filename);
                     let quality = attrs.quality_name();
                     let resolution = attrs.resolution.clone();
                     let _ = update_stmt.execute(rusqlite::params![quality, resolution, id]);
@@ -116,7 +129,7 @@ impl Db {
                 tracing::info!("[DB] Quality backfill complete");
             }
         }
-        
+
         // Create indexes for performance
         // Single-column indexes
         conn.execute(
@@ -139,7 +152,7 @@ impl Db {
             "CREATE INDEX IF NOT EXISTS idx_downloads_category ON downloads(category)",
             [],
         )?;
-        
+
         // Composite indexes for common query patterns
         // Query: Get active/queued downloads sorted by creation time
         conn.execute(
@@ -170,7 +183,7 @@ impl Db {
             "CREATE INDEX IF NOT EXISTS idx_downloads_tmdb_id ON downloads(tmdb_id)",
             [],
         )?;
-        
+
         // ── media_items table (TMDB-centric) ─────────────────────────────
         conn.execute(
             "CREATE TABLE IF NOT EXISTS media_items (
@@ -213,7 +226,7 @@ impl Db {
             "CREATE INDEX IF NOT EXISTS idx_media_items_tvdb_id ON media_items(tvdb_id)",
             [],
         )?;
-        
+
         // ── media_episodes table ──────────────────────────────────────────
         conn.execute(
             "CREATE TABLE IF NOT EXISTS media_episodes (
@@ -241,14 +254,14 @@ impl Db {
             "CREATE INDEX IF NOT EXISTS idx_media_episodes_lookup ON media_episodes(tmdb_id, season_number, episode_number)",
             [],
         )?;
-        
+
         tracing::info!("Database indexes created successfully");
-        
+
         // Run ANALYZE to update query planner statistics
         // This helps SQLite choose the best indexes for queries
         conn.execute("ANALYZE", [])?;
         tracing::info!("Database statistics updated (ANALYZE complete)");
-        
+
         // Accounts table
         conn.execute(
             "CREATE TABLE IF NOT EXISTS accounts (
@@ -260,7 +273,7 @@ impl Db {
             )",
             [],
         )?;
-        
+
         // Settings table
         conn.execute(
             "CREATE TABLE IF NOT EXISTS settings (
@@ -270,7 +283,7 @@ impl Db {
             )",
             [],
         )?;
-        
+
         // FTS5 virtual table for folder cache full-text search
         conn.execute_batch(
             "CREATE VIRTUAL TABLE IF NOT EXISTS folder_cache USING fts5(
@@ -301,15 +314,18 @@ impl Db {
                 media_type TEXT NOT NULL DEFAULT '',
                 poster_path TEXT DEFAULT '',
                 mapped_at TEXT DEFAULT ''
-            );"
+            );",
         )?;
-        
+
         Ok(())
     }
 
     pub fn save_task(&self, task: &DownloadTask) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        conn.execute(
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        if let Err(e) = conn.execute(
             "INSERT OR REPLACE INTO downloads (
                 id, url, original_url, filename, destination, state, progress, size, 
                 downloaded, speed, eta, host, category, priority, segments, retry_count, 
@@ -354,14 +370,17 @@ impl Db {
                 &task.quality,
                 &task.resolution,
             ],
-        )?;
+        ) {
+            tracing::error!("Failed to save task {} to DB: {}", task.id, e);
+            return Err(e.into());
+        }
         Ok(())
     }
 
     fn parse_task_from_row(row: &rusqlite::Row) -> rusqlite::Result<DownloadTask> {
         let id_str: String = row.get(0)?;
         let id = Uuid::parse_str(&id_str).map_err(|_| rusqlite::Error::InvalidQuery)?;
-        
+
         let state_str: String = row.get(5)?;
         // Note: columns 8, 9, 10 are downloaded, speed, eta (skipped for now)
         let state = match state_str.as_str() {
@@ -375,6 +394,7 @@ impl Db {
             "CANCELLED" => DownloadState::Cancelled,
             "EXTRACTING" => DownloadState::Extracting,
             "SKIPPED" => DownloadState::Skipped,
+            "IMPORTING" => DownloadState::Importing,
             _ => DownloadState::Queued,
         };
 
@@ -430,9 +450,21 @@ impl Db {
             batch_name: row.get(22).ok().flatten(),
             tmdb_id: row.get::<_, Option<i64>>(23).ok().flatten(),
             tmdb_title: row.get(24).ok().flatten(),
-            tmdb_season: row.get::<_, Option<i64>>(25).ok().flatten().map(|s| s as u32),
-            tmdb_episode: row.get::<_, Option<i64>>(26).ok().flatten().map(|e| e as u32),
-            arr_announced: row.get::<_, Option<bool>>(27).ok().flatten().unwrap_or(false),
+            tmdb_season: row
+                .get::<_, Option<i64>>(25)
+                .ok()
+                .flatten()
+                .map(|s| s as u32),
+            tmdb_episode: row
+                .get::<_, Option<i64>>(26)
+                .ok()
+                .flatten()
+                .map(|e| e as u32),
+            arr_announced: row
+                .get::<_, Option<bool>>(27)
+                .ok()
+                .flatten()
+                .unwrap_or(false),
             arr_series_id: row.get::<_, Option<i64>>(28).ok().flatten(),
             arr_movie_id: row.get::<_, Option<i64>>(29).ok().flatten(),
             arr_announce_error: row.get::<_, Option<String>>(30).ok().flatten(),
@@ -448,7 +480,10 @@ impl Db {
     }
 
     pub fn get_all_tasks(&self) -> Result<Vec<DownloadTask>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut stmt = conn.prepare(
             "SELECT id, url, original_url, filename, destination, state, progress, size, 
              downloaded, speed, eta, host, category, priority, segments, retry_count,
@@ -456,7 +491,7 @@ impl Db {
              batch_id, batch_name, tmdb_id, tmdb_title, tmdb_season, tmdb_episode,
              arr_announced, arr_series_id, arr_movie_id, arr_announce_error, fshare_code,
              quality, resolution
-             FROM downloads"
+             FROM downloads",
         )?;
         let task_iter = stmt.query_map([], |row| Self::parse_task_from_row(row))?;
 
@@ -470,7 +505,10 @@ impl Db {
     }
 
     pub fn get_task_by_id(&self, id: Uuid) -> Result<Option<DownloadTask>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut stmt = conn.prepare(
             "SELECT id, url, original_url, filename, destination, state, progress, size, 
              downloaded, speed, eta, host, category, priority, segments, retry_count,
@@ -478,9 +516,11 @@ impl Db {
              batch_id, batch_name, tmdb_id, tmdb_title, tmdb_season, tmdb_episode,
              arr_announced, arr_series_id, arr_movie_id, arr_announce_error, fshare_code,
              quality, resolution
-             FROM downloads WHERE id = ?1"
+             FROM downloads WHERE id = ?1",
         )?;
-        let mut task_iter = stmt.query_map(params![id.to_string()], |row| Self::parse_task_from_row(row))?;
+        let mut task_iter = stmt.query_map(params![id.to_string()], |row| {
+            Self::parse_task_from_row(row)
+        })?;
 
         match task_iter.next() {
             Some(task) => Ok(Some(task?)),
@@ -491,18 +531,17 @@ impl Db {
     /// Get tasks with pagination, sorted by created_at DESC
     /// Returns (tasks, total_count)
     pub fn get_tasks_paginated(&self, page: u32, limit: u32) -> Result<(Vec<DownloadTask>, u64)> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
         // Get total count
-        let total: u64 = conn.query_row(
-            "SELECT COUNT(*) FROM downloads",
-            [],
-            |row| row.get(0),
-        )?;
-        
+        let total: u64 = conn.query_row("SELECT COUNT(*) FROM downloads", [], |row| row.get(0))?;
+
         // Calculate offset
         let offset = (page.saturating_sub(1)) * limit;
-        
+
         // Get paginated tasks (active states first, then by created_at DESC)
         let mut stmt = conn.prepare(
             "SELECT id, url, original_url, filename, destination, state, progress, size, 
@@ -522,10 +561,12 @@ impl Db {
                     ELSE 5 
                 END,
                 created_at DESC
-             LIMIT ?1 OFFSET ?2"
+             LIMIT ?1 OFFSET ?2",
         )?;
-        
-        let task_iter = stmt.query_map(params![limit as i64, offset as i64], |row| Self::parse_task_from_row(row))?;
+
+        let task_iter = stmt.query_map(params![limit as i64, offset as i64], |row| {
+            Self::parse_task_from_row(row)
+        })?;
 
         let mut tasks = Vec::new();
         for task in task_iter {
@@ -533,7 +574,7 @@ impl Db {
                 tasks.push(t);
             }
         }
-        
+
         Ok((tasks, total))
     }
 
@@ -542,7 +583,9 @@ impl Db {
         let db = self.pool.clone();
         let host = host.to_string();
         tokio::task::spawn_blocking(move || {
-            let conn = db.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            let conn = db
+                .get()
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             let mut stmt = conn.prepare(
                 "SELECT id, url, original_url, filename, destination, state, progress, size, 
                  downloaded, speed, eta, host, category, priority, segments, retry_count,
@@ -553,7 +596,7 @@ impl Db {
                  FROM downloads 
                  WHERE host = ?1
                  ORDER BY created_at DESC
-                 LIMIT 100"
+                 LIMIT 100",
             )?;
             let task_iter = stmt.query_map(params![host], |row| Db::parse_task_from_row(row))?;
             let mut tasks = Vec::new();
@@ -563,12 +606,17 @@ impl Db {
                 }
             }
             Ok(tasks)
-        }).await.map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
+        })
+        .await
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
     }
 
     /// Get the next queued task for workers to process (FIFO with priority)
     pub fn get_next_queued_task(&self) -> Result<Option<DownloadTask>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut stmt = conn.prepare(
             "SELECT id, url, original_url, filename, destination, state, progress, size, 
              downloaded, speed, eta, host, category, priority, segments, retry_count,
@@ -579,11 +627,11 @@ impl Db {
              FROM downloads 
              WHERE state = 'QUEUED'
              ORDER BY priority DESC, created_at ASC
-             LIMIT 1"
+             LIMIT 1",
         )?;
-        
+
         let mut task_iter = stmt.query_map([], |row| Self::parse_task_from_row(row))?;
-        
+
         match task_iter.next() {
             Some(task) => Ok(Some(task?)),
             None => Ok(None),
@@ -592,9 +640,12 @@ impl Db {
 
     /// Get tasks waiting for retry that are past their wait_until time
     pub fn get_ready_waiting_tasks(&self) -> Result<Vec<DownloadTask>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let now = chrono::Utc::now().to_rfc3339();
-        
+
         let mut stmt = conn.prepare(
             "SELECT id, url, original_url, filename, destination, state, progress, size, 
              downloaded, speed, eta, host, category, priority, segments, retry_count,
@@ -604,9 +655,9 @@ impl Db {
              quality, resolution
              FROM downloads 
              WHERE state = 'WAITING' AND (wait_until IS NULL OR wait_until <= ?1)
-             ORDER BY created_at ASC"
+             ORDER BY created_at ASC",
         )?;
-        
+
         let task_iter = stmt.query_map(params![now], |row| Self::parse_task_from_row(row))?;
 
         let mut tasks = Vec::new();
@@ -620,7 +671,10 @@ impl Db {
 
     /// Update task state in database
     pub fn update_task_state(&self, id: Uuid, state: &str) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "UPDATE downloads SET state = ?1 WHERE id = ?2",
             params![state, id.to_string()],
@@ -630,8 +684,18 @@ impl Db {
 
     /// Update only progress-related fields (narrow update to avoid data races)
     /// This should be used during active downloads instead of save_task
-    pub fn update_task_progress(&self, id: Uuid, downloaded: u64, speed: f64, eta: f64, progress: f32) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    pub fn update_task_progress(
+        &self,
+        id: Uuid,
+        downloaded: u64,
+        speed: f64,
+        eta: f64,
+        progress: f32,
+    ) -> Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "UPDATE downloads SET downloaded = ?1, speed = ?2, eta = ?3, progress = ?4 WHERE id = ?5",
             params![downloaded as i64, speed, eta as i64, progress, id.to_string()],
@@ -640,7 +704,14 @@ impl Db {
     }
 
     /// Async version of update_task_progress
-    pub async fn update_task_progress_async(&self, id: Uuid, downloaded: u64, speed: f64, eta: f64, progress: f32) -> Result<()> {
+    pub async fn update_task_progress_async(
+        &self,
+        id: Uuid,
+        downloaded: u64,
+        speed: f64,
+        eta: f64,
+        progress: f32,
+    ) -> Result<()> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
             let conn = pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
@@ -654,7 +725,10 @@ impl Db {
 
     /// Get count of tasks by state
     pub fn count_tasks_by_state(&self, state: &str) -> Result<u64> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let count: u64 = conn.query_row(
             "SELECT COUNT(*) FROM downloads WHERE state = ?1",
             params![state],
@@ -664,8 +738,14 @@ impl Db {
     }
 
     pub fn delete_task(&self, id: Uuid) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        conn.execute("DELETE FROM downloads WHERE id = ?1", params![id.to_string()])?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        conn.execute(
+            "DELETE FROM downloads WHERE id = ?1",
+            params![id.to_string()],
+        )?;
         Ok(())
     }
 
@@ -674,30 +754,49 @@ impl Db {
     // ============================================================================
 
     /// Async version of get_tasks_paginated - uses spawn_blocking
-    pub async fn get_tasks_paginated_async(&self, page: u32, limit: u32) -> Result<(Vec<DownloadTask>, u64)> {
-        self.get_tasks_paginated_sorted_async(page, limit, "added", "desc").await
+    pub async fn get_tasks_paginated_async(
+        &self,
+        page: u32,
+        limit: u32,
+    ) -> Result<(Vec<DownloadTask>, u64)> {
+        self.get_tasks_paginated_sorted_async(page, limit, "added", "desc")
+            .await
     }
 
     /// Async version with sorting - uses spawn_blocking
     /// sort_by: "added", "status", "filename", "size", "progress"
     /// sort_dir: "asc" or "desc"
-    pub async fn get_tasks_paginated_sorted_async(&self, page: u32, limit: u32, sort_by: &str, sort_dir: &str) -> Result<(Vec<DownloadTask>, u64)> {
-        self.get_tasks_paginated_sorted_filtered_async(page, limit, sort_by, sort_dir, None).await
+    pub async fn get_tasks_paginated_sorted_async(
+        &self,
+        page: u32,
+        limit: u32,
+        sort_by: &str,
+        sort_dir: &str,
+    ) -> Result<(Vec<DownloadTask>, u64)> {
+        self.get_tasks_paginated_sorted_filtered_async(page, limit, sort_by, sort_dir, None)
+            .await
     }
 
     /// Async version with sorting and optional status filter - uses spawn_blocking
     /// sort_by: "added", "status", "filename", "size", "progress"
     /// sort_dir: "asc" or "desc"
     /// status_filter: Optional status to filter by (e.g., "DOWNLOADING", "QUEUED", "COMPLETED", "FAILED")
-    /// 
+    ///
     /// IMPORTANT: This function ensures batches are never split across pages.
     /// All downloads with the same batch_id will always appear together.
-    pub async fn get_tasks_paginated_sorted_filtered_async(&self, page: u32, limit: u32, sort_by: &str, sort_dir: &str, status_filter: Option<&str>) -> Result<(Vec<DownloadTask>, u64)> {
+    pub async fn get_tasks_paginated_sorted_filtered_async(
+        &self,
+        page: u32,
+        limit: u32,
+        sort_by: &str,
+        sort_dir: &str,
+        status_filter: Option<&str>,
+    ) -> Result<(Vec<DownloadTask>, u64)> {
         let pool = self.pool.clone();
         let sort_by = sort_by.to_string();
         let sort_dir = sort_dir.to_string();
         let status_filter = status_filter.map(|s| s.to_uppercase());
-        
+
         tokio::task::spawn_blocking(move || {
             let conn = pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             
@@ -817,34 +916,46 @@ impl Db {
         tokio::task::spawn_blocking(move || {
             let db = Db { pool };
             db.save_task(&task)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Async version of update_task_state
     pub async fn update_task_state_async(&self, id: Uuid, state: String) -> Result<()> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            let conn = pool
+                .get()
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             conn.execute(
                 "UPDATE downloads SET state = ?1 WHERE id = ?2",
                 params![state, id.to_string()],
             )?;
             Ok(())
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Batch update task states atomically in a single transaction
     /// Used by pause_all, resume_all for atomic operations
-    pub async fn batch_update_states_async(&self, task_ids: Vec<Uuid>, new_state: String) -> Result<usize> {
+    pub async fn batch_update_states_async(
+        &self,
+        task_ids: Vec<Uuid>,
+        new_state: String,
+    ) -> Result<usize> {
         if task_ids.is_empty() {
             return Ok(0);
         }
-        
+
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            let mut conn = pool
+                .get()
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             let tx = conn.transaction()?;
-            
+
             let mut affected = 0;
             for task_id in &task_ids {
                 let rows = tx.execute(
@@ -853,29 +964,38 @@ impl Db {
                 )?;
                 affected += rows;
             }
-            
+
             tx.commit()?;
             Ok(affected)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Get all tasks matching any of the provided states (async)
     /// Used for bulk operations like pause_all, resume_all
-    pub async fn get_tasks_by_states_async(&self, states: Vec<String>) -> Result<Vec<DownloadTask>> {
+    pub async fn get_tasks_by_states_async(
+        &self,
+        states: Vec<String>,
+    ) -> Result<Vec<DownloadTask>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            
+            let conn = pool
+                .get()
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
             if states.is_empty() {
                 return Ok(Vec::new());
             }
-            
+
             // Build IN clause with placeholders
-            let placeholders: Vec<String> = states.iter().enumerate()
+            let placeholders: Vec<String> = states
+                .iter()
+                .enumerate()
                 .map(|(i, _)| format!("?{}", i + 1))
                 .collect();
             let in_clause = placeholders.join(", ");
-            
+
             let sql = format!(
                 "SELECT id, url, original_url, filename, destination, state, progress, size, 
                         downloaded, speed, eta, host, category, priority, segments, retry_count,
@@ -888,69 +1008,76 @@ impl Db {
                  ORDER BY priority DESC, created_at ASC",
                 in_clause
             );
-            
+
             let mut stmt = conn.prepare(&sql)?;
-            
+
             // Convert states to params
-            let params: Vec<&dyn rusqlite::ToSql> = states.iter()
-                .map(|s| s as &dyn rusqlite::ToSql)
-                .collect();
-            
+            let params: Vec<&dyn rusqlite::ToSql> =
+                states.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
+
             let task_iter = stmt.query_map(params.as_slice(), |row| {
                 Self::parse_task_from_row_static(row)
             })?;
-            
+
             let mut tasks = Vec::new();
             for task_result in task_iter {
                 tasks.push(task_result?);
             }
             Ok(tasks)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Get counts of downloads by status from database
-    pub async fn get_status_counts_async(&self) -> Result<std::collections::HashMap<String, usize>> {
+    pub async fn get_status_counts_async(
+        &self,
+    ) -> Result<std::collections::HashMap<String, usize>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            let mut stmt = conn.prepare(
-                "SELECT state, COUNT(*) as count FROM downloads GROUP BY state"
-            )?;
-            
+            let conn = pool
+                .get()
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            let mut stmt =
+                conn.prepare("SELECT state, COUNT(*) as count FROM downloads GROUP BY state")?;
+
             let mut counts = std::collections::HashMap::new();
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })?;
-            
+
             for row in rows {
                 if let Ok((state, count)) = row {
                     counts.insert(state, count as usize);
                 }
             }
-            
-            Ok(counts)
-        }).await.unwrap()
-    }
 
+            Ok(counts)
+        })
+        .await
+        .unwrap()
+    }
 
     /// Get counts of downloads by status from database (synchronous version)
     pub fn get_status_counts(&self) -> Result<std::collections::HashMap<String, usize>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        let mut stmt = conn.prepare(
-            "SELECT state, COUNT(*) as count FROM downloads GROUP BY state"
-        )?;
-        
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let mut stmt =
+            conn.prepare("SELECT state, COUNT(*) as count FROM downloads GROUP BY state")?;
+
         let mut counts = std::collections::HashMap::new();
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?;
-        
+
         for row in rows {
             if let Ok((state, count)) = row {
                 counts.insert(state, count as usize);
             }
         }
-        
+
         Ok(counts)
     }
 
@@ -958,8 +1085,10 @@ impl Db {
     pub async fn get_tasks_by_batch_id_async(&self, batch_id: String) -> Result<Vec<DownloadTask>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            
+            let conn = pool
+                .get()
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
             let mut stmt = conn.prepare(
                 "SELECT id, url, original_url, filename, destination, state, progress, size, 
                         downloaded, speed, eta, host, category, priority, segments, retry_count,
@@ -968,49 +1097,64 @@ impl Db {
                         quality, resolution, arr_series_id, arr_movie_id
                  FROM downloads 
                  WHERE batch_id = ?1
-                 ORDER BY created_at ASC"
+                 ORDER BY created_at ASC",
             )?;
-            
+
             let task_iter = stmt.query_map(params![&batch_id], |row| {
                 Self::parse_task_from_row_static(row)
             })?;
-            
+
             let mut tasks = Vec::new();
             for task_result in task_iter {
                 tasks.push(task_result?);
             }
             Ok(tasks)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Delete all tasks with a specific batch_id (async)
     pub async fn delete_tasks_by_batch_id_async(&self, batch_id: String) -> Result<usize> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            let conn = pool
+                .get()
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             let affected = conn.execute(
                 "DELETE FROM downloads WHERE batch_id = ?1",
-                params![&batch_id]
+                params![&batch_id],
             )?;
             Ok(affected)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Find an existing task by Fshare code (for duplicate detection)
     /// Uses exact match on the dedicated fshare_code column
     /// Returns the task state and id if found, so we can decide whether to skip or replace
-    pub async fn find_task_by_fshare_code_async(&self, fshare_code: &str) -> Result<Option<(String, String)>> {
+    pub async fn find_task_by_fshare_code_async(
+        &self,
+        fshare_code: &str,
+    ) -> Result<Option<(String, String)>> {
         let pool = self.pool.clone();
         let code = fshare_code.to_string();
         tokio::task::spawn_blocking(move || {
-            let conn = pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            let result: Option<(String, String)> = conn.query_row(
-                "SELECT id, state FROM downloads WHERE fshare_code = ?1 LIMIT 1",
-                params![&code],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            ).optional()?;
+            let conn = pool
+                .get()
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            let result: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT id, state FROM downloads WHERE fshare_code = ?1 LIMIT 1",
+                    params![&code],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
             Ok(result)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Get batch_id for an existing batch by batch_name (async)
@@ -1019,14 +1163,20 @@ impl Db {
         let pool = self.pool.clone();
         let batch_name = batch_name.to_string();
         tokio::task::spawn_blocking(move || {
-            let conn = pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            let result: Option<String> = conn.query_row(
-                "SELECT batch_id FROM downloads WHERE batch_name = ?1 LIMIT 1",
-                params![&batch_name],
-                |row| row.get(0)
-            ).optional()?;
+            let conn = pool
+                .get()
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            let result: Option<String> = conn
+                .query_row(
+                    "SELECT batch_id FROM downloads WHERE batch_name = ?1 LIMIT 1",
+                    params![&batch_name],
+                    |row| row.get(0),
+                )
+                .optional()?;
             Ok(result)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Get batch_id for an existing batch by tmdb_id (async)
@@ -1056,10 +1206,15 @@ impl Db {
         page: u32,
         limit: u32,
         status_filter: Option<&str>,
-    ) -> Result<(Vec<crate::api::downloads::BatchSummary>, Vec<DownloadTask>, u64, u64)> {
+    ) -> Result<(
+        Vec<crate::api::downloads::BatchSummary>,
+        Vec<DownloadTask>,
+        u64,
+        u64,
+    )> {
         let pool = self.pool.clone();
         let status_filter = status_filter.map(|s| s.to_uppercase());
-        
+
         tokio::task::spawn_blocking(move || {
             let conn = pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
             
@@ -1239,8 +1394,17 @@ impl Db {
     // ============================================================================
 
     /// Save or update an account
-    pub fn save_account(&self, email: &str, session_id: Option<&str>, token: Option<&str>, expires_at: Option<i64>) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    pub fn save_account(
+        &self,
+        email: &str,
+        session_id: Option<&str>,
+        token: Option<&str>,
+        expires_at: Option<i64>,
+    ) -> Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO accounts (email, session_id, token, expires_at) 
              VALUES (?1, ?2, ?3, ?4)",
@@ -1251,11 +1415,14 @@ impl Db {
 
     /// Get account by email
     pub fn get_account(&self, email: &str) -> Result<Option<Account>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut stmt = conn.prepare(
             "SELECT email, session_id, token, expires_at, created_at FROM accounts WHERE email = ?1"
         )?;
-        
+
         stmt.query_row(params![email], |row| {
             Ok(Account {
                 email: row.get(0)?,
@@ -1264,16 +1431,19 @@ impl Db {
                 expires_at: row.get(3)?,
                 created_at: row.get(4)?,
             })
-        }).optional()
+        })
+        .optional()
     }
 
     /// Get all accounts
     pub fn get_all_accounts(&self) -> Result<Vec<Account>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        let mut stmt = conn.prepare(
-            "SELECT email, session_id, token, expires_at, created_at FROM accounts"
-        )?;
-        
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let mut stmt =
+            conn.prepare("SELECT email, session_id, token, expires_at, created_at FROM accounts")?;
+
         let account_iter = stmt.query_map([], |row| {
             Ok(Account {
                 email: row.get(0)?,
@@ -1295,7 +1465,10 @@ impl Db {
 
     /// Delete account by email
     pub fn delete_account(&self, email: &str) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute("DELETE FROM accounts WHERE email = ?1", params![email])?;
         Ok(())
     }
@@ -1306,7 +1479,10 @@ impl Db {
 
     /// Save or update a setting
     pub fn save_setting(&self, key: &str, value: &str) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value, updated_at) 
              VALUES (?1, ?2, strftime('%s', 'now'))",
@@ -1317,14 +1493,20 @@ impl Db {
 
     /// Get setting by key
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?1")?;
         stmt.query_row(params![key], |row| row.get(0)).optional()
     }
 
     /// Get all settings as a HashMap
     pub fn get_all_settings(&self) -> Result<std::collections::HashMap<String, String>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
         let setting_iter = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -1341,14 +1523,20 @@ impl Db {
 
     /// Delete setting by key
     pub fn delete_setting(&self, key: &str) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute("DELETE FROM settings WHERE key = ?1", params![key])?;
         Ok(())
     }
-    
+
     /// Check if onboarding is complete
     pub fn is_onboarding_complete(&self) -> Result<bool> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let result: Option<String> = conn
             .query_row(
                 "SELECT value FROM settings WHERE key = 'onboarding_complete'",
@@ -1356,23 +1544,29 @@ impl Db {
                 |row| row.get(0),
             )
             .optional()?;
-        
+
         Ok(result.map(|v| v == "true").unwrap_or(false))
     }
-    
+
     /// Mark onboarding as complete
     pub fn mark_onboarding_complete(&self) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('onboarding_complete', 'true')",
             [],
         )?;
         Ok(())
     }
-    
+
     /// Save Fshare credentials
     pub fn save_fshare_credentials(&self, email: &str, password: &str) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('fshare_email', ?1)",
             params![email],
@@ -1383,10 +1577,13 @@ impl Db {
         )?;
         Ok(())
     }
-    
+
     /// Save download settings
     pub fn save_download_settings(&self, directory: &str, max_concurrent: u32) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('download_directory', ?1)",
             params![directory],
@@ -1397,24 +1594,36 @@ impl Db {
         )?;
         Ok(())
     }
-    
+
     /// Save Arr (Sonarr/Radarr) configuration
     pub fn save_arr_config(&self, service: &str, url: &str, api_key: &str) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
-            &format!("INSERT OR REPLACE INTO settings (key, value) VALUES ('{}_url', ?1)", service),
+            &format!(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('{}_url', ?1)",
+                service
+            ),
             params![url],
         )?;
         conn.execute(
-            &format!("INSERT OR REPLACE INTO settings (key, value) VALUES ('{}_api_key', ?1)", service),
+            &format!(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('{}_api_key', ?1)",
+                service
+            ),
             params![api_key],
         )?;
         Ok(())
     }
-    
+
     /// Save Jellyfin configuration
     pub fn save_jellyfin_config(&self, url: &str, api_key: &str) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('jellyfin_url', ?1)",
             params![url],
@@ -1425,10 +1634,13 @@ impl Db {
         )?;
         Ok(())
     }
-    
+
     /// Get indexer API key (or generate if not exists)
     pub fn get_indexer_api_key(&self) -> Result<String> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let result: Option<String> = conn
             .query_row(
                 "SELECT value FROM settings WHERE key = 'indexer_api_key'",
@@ -1436,16 +1648,19 @@ impl Db {
                 |row| row.get(0),
             )
             .optional()?;
-        
+
         match result {
             Some(key) => Ok(key),
             None => Err(rusqlite::Error::QueryReturnedNoRows),
         }
     }
-    
+
     /// Save indexer API key
     pub fn save_indexer_api_key(&self, api_key: &str) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('indexer_api_key', ?1)",
             params![api_key],
@@ -1465,7 +1680,10 @@ impl Db {
         series_id: Option<i32>,
         movie_id: Option<i32>,
     ) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "UPDATE downloads SET arr_announced = ?1, arr_series_id = ?2, arr_movie_id = ?3, arr_announce_error = NULL WHERE id = ?4",
             params![announced as i32, series_id, movie_id, download_id],
@@ -1476,43 +1694,64 @@ impl Db {
     /// Update arr_series_id for all downloads with the same TMDB ID
     /// This ensures all episodes in a series batch get the series ID for auto-import
     pub fn update_arr_series_id_by_tmdb(&self, tmdb_id: i64, series_id: i64) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let updated = conn.execute(
             "UPDATE downloads SET arr_series_id = ?1, arr_announced = 1 WHERE tmdb_id = ?2",
             params![series_id, tmdb_id],
         )?;
-        
+
         if updated == 0 {
-            tracing::warn!("No downloads found with tmdb_id={} to update arr_series_id", tmdb_id);
+            tracing::warn!(
+                "No downloads found with tmdb_id={} to update arr_series_id",
+                tmdb_id
+            );
         } else {
-            tracing::info!("Updated {} downloads with tmdb_id={} to arr_series_id={}", updated, tmdb_id, series_id);
+            tracing::info!(
+                "Updated {} downloads with tmdb_id={} to arr_series_id={}",
+                updated,
+                tmdb_id,
+                series_id
+            );
         }
         Ok(())
     }
 
     /// Update Radarr movie ID for all downloads with given TMDB ID
     pub fn update_arr_movie_id_by_tmdb(&self, tmdb_id: i64, movie_id: i64) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let updated = conn.execute(
             "UPDATE downloads SET arr_movie_id = ?1, arr_announced = 1 WHERE tmdb_id = ?2",
             params![movie_id, tmdb_id],
         )?;
-        
+
         if updated == 0 {
-            tracing::warn!("No downloads found with tmdb_id={} to update arr_movie_id", tmdb_id);
+            tracing::warn!(
+                "No downloads found with tmdb_id={} to update arr_movie_id",
+                tmdb_id
+            );
         } else {
-            tracing::info!("Updated {} downloads with tmdb_id={} to arr_movie_id={}", updated, tmdb_id, movie_id);
+            tracing::info!(
+                "Updated {} downloads with tmdb_id={} to arr_movie_id={}",
+                updated,
+                tmdb_id,
+                movie_id
+            );
         }
         Ok(())
     }
 
     /// Update Arr announcement error for a download
-    pub fn update_download_arr_error(
-        &self,
-        download_id: &str,
-        error: &str,
-    ) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    pub fn update_download_arr_error(&self, download_id: &str, error: &str) -> Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "UPDATE downloads SET arr_announced = 0, arr_announce_error = ?1 WHERE id = ?2",
             params![error, download_id],
@@ -1526,7 +1765,10 @@ impl Db {
 
     /// Upsert a media item (INSERT OR REPLACE by tmdb_id)
     pub fn upsert_media_item(&self, item: &MediaItem) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO media_items (
                 tmdb_id, media_type, title, original_title, year, overview,
@@ -1577,21 +1819,27 @@ impl Db {
         tokio::task::spawn_blocking(move || {
             let db = Db { pool };
             db.upsert_media_item(&item)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Get a media item by TMDB ID
     pub fn get_media_item(&self, tmdb_id: i64) -> Result<Option<MediaItem>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut stmt = conn.prepare(
             "SELECT tmdb_id, media_type, title, original_title, year, overview,
                     poster_path, backdrop_path, genres, runtime, total_seasons,
                     arr_id, arr_type, arr_path, arr_monitored, arr_status,
                     arr_quality_profile_id, arr_has_file, arr_size_on_disk,
                     tvdb_id, imdb_id, created_at, updated_at, arr_synced_at
-             FROM media_items WHERE tmdb_id = ?1"
+             FROM media_items WHERE tmdb_id = ?1",
         )?;
-        stmt.query_row(params![tmdb_id], |row| Self::parse_media_item(row)).optional()
+        stmt.query_row(params![tmdb_id], |row| Self::parse_media_item(row))
+            .optional()
     }
 
     /// Async get media item
@@ -1600,19 +1848,24 @@ impl Db {
         tokio::task::spawn_blocking(move || {
             let db = Db { pool };
             db.get_media_item(tmdb_id)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Get all media items, ordered by updated_at DESC
     pub fn get_all_media_items(&self) -> Result<Vec<MediaItem>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut stmt = conn.prepare(
             "SELECT tmdb_id, media_type, title, original_title, year, overview,
                     poster_path, backdrop_path, genres, runtime, total_seasons,
                     arr_id, arr_type, arr_path, arr_monitored, arr_status,
                     arr_quality_profile_id, arr_has_file, arr_size_on_disk,
                     tvdb_id, imdb_id, created_at, updated_at, arr_synced_at
-             FROM media_items ORDER BY updated_at DESC"
+             FROM media_items ORDER BY updated_at DESC",
         )?;
         let iter = stmt.query_map([], |row| Self::parse_media_item(row))?;
         let mut items = Vec::new();
@@ -1628,19 +1881,24 @@ impl Db {
         tokio::task::spawn_blocking(move || {
             let db = Db { pool };
             db.get_all_media_items()
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Get media items by type ("movie" or "tv")
     pub fn get_media_items_by_type(&self, media_type: &str) -> Result<Vec<MediaItem>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut stmt = conn.prepare(
             "SELECT tmdb_id, media_type, title, original_title, year, overview,
                     poster_path, backdrop_path, genres, runtime, total_seasons,
                     arr_id, arr_type, arr_path, arr_monitored, arr_status,
                     arr_quality_profile_id, arr_has_file, arr_size_on_disk,
                     tvdb_id, imdb_id, created_at, updated_at, arr_synced_at
-             FROM media_items WHERE media_type = ?1 ORDER BY updated_at DESC"
+             FROM media_items WHERE media_type = ?1 ORDER BY updated_at DESC",
         )?;
         let iter = stmt.query_map(params![media_type], |row| Self::parse_media_item(row))?;
         let mut items = Vec::new();
@@ -1661,7 +1919,10 @@ impl Db {
         arr_status: Option<&str>,
         arr_quality_profile_id: Option<i32>,
     ) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let now = chrono::Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE media_items SET 
@@ -1685,21 +1946,31 @@ impl Db {
 
     /// Delete a media item and its episodes
     pub fn delete_media_item(&self, tmdb_id: i64) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        conn.execute("DELETE FROM media_episodes WHERE tmdb_id = ?1", params![tmdb_id])?;
-        conn.execute("DELETE FROM media_items WHERE tmdb_id = ?1", params![tmdb_id])?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        conn.execute(
+            "DELETE FROM media_episodes WHERE tmdb_id = ?1",
+            params![tmdb_id],
+        )?;
+        conn.execute(
+            "DELETE FROM media_items WHERE tmdb_id = ?1",
+            params![tmdb_id],
+        )?;
         Ok(())
     }
 
     /// Get download count per media item (for library display)
     pub fn get_media_download_counts(&self) -> Result<std::collections::HashMap<i64, usize>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut stmt = conn.prepare(
-            "SELECT tmdb_id, COUNT(*) FROM downloads WHERE tmdb_id IS NOT NULL GROUP BY tmdb_id"
+            "SELECT tmdb_id, COUNT(*) FROM downloads WHERE tmdb_id IS NOT NULL GROUP BY tmdb_id",
         )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-        })?;
+        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
         let mut counts = std::collections::HashMap::new();
         for row in rows {
             if let Ok((id, count)) = row {
@@ -1715,7 +1986,10 @@ impl Db {
 
     /// Upsert a media episode (INSERT OR REPLACE on UNIQUE constraint)
     pub fn upsert_media_episode(&self, ep: &MediaEpisode) -> Result<()> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO media_episodes (
                 tmdb_id, season_number, episode_number, title, overview, air_date,
@@ -1740,12 +2014,15 @@ impl Db {
 
     /// Get all episodes for a series
     pub fn get_episodes_for_series(&self, tmdb_id: i64) -> Result<Vec<MediaEpisode>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut stmt = conn.prepare(
             "SELECT id, tmdb_id, season_number, episode_number, title, overview, air_date,
                     arr_episode_id, arr_has_file, arr_monitored, created_at, updated_at
              FROM media_episodes WHERE tmdb_id = ?1
-             ORDER BY season_number ASC, episode_number ASC"
+             ORDER BY season_number ASC, episode_number ASC",
         )?;
         let iter = stmt.query_map(params![tmdb_id], |row| Self::parse_media_episode(row))?;
         let mut episodes = Vec::new();
@@ -1761,26 +2038,45 @@ impl Db {
         tokio::task::spawn_blocking(move || {
             let db = Db { pool };
             db.get_episodes_for_series(tmdb_id)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Get a specific episode
-    pub fn get_episode(&self, tmdb_id: i64, season: i32, episode: i32) -> Result<Option<MediaEpisode>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    pub fn get_episode(
+        &self,
+        tmdb_id: i64,
+        season: i32,
+        episode: i32,
+    ) -> Result<Option<MediaEpisode>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut stmt = conn.prepare(
             "SELECT id, tmdb_id, season_number, episode_number, title, overview, air_date,
                     arr_episode_id, arr_has_file, arr_monitored, created_at, updated_at
-             FROM media_episodes WHERE tmdb_id = ?1 AND season_number = ?2 AND episode_number = ?3"
+             FROM media_episodes WHERE tmdb_id = ?1 AND season_number = ?2 AND episode_number = ?3",
         )?;
-        stmt.query_row(params![tmdb_id, season, episode], |row| Self::parse_media_episode(row)).optional()
+        stmt.query_row(params![tmdb_id, season, episode], |row| {
+            Self::parse_media_episode(row)
+        })
+        .optional()
     }
 
     /// Get a media item with all its associated downloads
-    pub fn get_media_with_downloads(&self, tmdb_id: i64) -> Result<Option<(MediaItem, Vec<crate::downloader::task::DownloadTask>)>> {
+    pub fn get_media_with_downloads(
+        &self,
+        tmdb_id: i64,
+    ) -> Result<Option<(MediaItem, Vec<crate::downloader::task::DownloadTask>)>> {
         let item = self.get_media_item(tmdb_id)?;
         match item {
             Some(media) => {
-                let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+                let conn = self
+                    .pool
+                    .get()
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
                 let mut stmt = conn.prepare(
                     "SELECT id, url, original_url, filename, destination, state, progress, size, 
                              downloaded, speed, eta, host, category, priority, segments, retry_count,
@@ -1791,7 +2087,8 @@ impl Db {
                      FROM downloads WHERE tmdb_id = ?1
                      ORDER BY created_at DESC"
                 )?;
-                let task_iter = stmt.query_map(params![tmdb_id], |row| Self::parse_task_from_row(row))?;
+                let task_iter =
+                    stmt.query_map(params![tmdb_id], |row| Self::parse_task_from_row(row))?;
                 let mut tasks = Vec::new();
                 for task in task_iter {
                     if let Ok(t) = task {
@@ -1805,18 +2102,29 @@ impl Db {
     }
 
     /// Async get media with downloads
-    pub async fn get_media_with_downloads_async(&self, tmdb_id: i64) -> Result<Option<(MediaItem, Vec<crate::downloader::task::DownloadTask>)>> {
+    pub async fn get_media_with_downloads_async(
+        &self,
+        tmdb_id: i64,
+    ) -> Result<Option<(MediaItem, Vec<crate::downloader::task::DownloadTask>)>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
             let db = Db { pool };
             db.get_media_with_downloads(tmdb_id)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Get all downloads for a given TMDB ID directly from the downloads table.
     /// Does NOT require a media_items row — works for queued downloads before library sync.
-    pub fn get_downloads_by_tmdb_id(&self, tmdb_id: i64) -> Result<Vec<crate::downloader::task::DownloadTask>> {
-        let conn = self.pool.get().map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    pub fn get_downloads_by_tmdb_id(
+        &self,
+        tmdb_id: i64,
+    ) -> Result<Vec<crate::downloader::task::DownloadTask>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let mut stmt = conn.prepare(
             "SELECT id, url, original_url, filename, destination, state, progress, size, 
                      downloaded, speed, eta, host, category, priority, segments, retry_count,
@@ -1825,7 +2133,7 @@ impl Db {
                      arr_announced, arr_series_id, arr_movie_id, arr_announce_error, fshare_code,
                      quality, resolution
              FROM downloads WHERE tmdb_id = ?1
-             ORDER BY created_at DESC"
+             ORDER BY created_at DESC",
         )?;
         let task_iter = stmt.query_map(params![tmdb_id], |row| Self::parse_task_from_row(row))?;
         let mut tasks = Vec::new();
@@ -1838,14 +2146,18 @@ impl Db {
     }
 
     /// Async version of get_downloads_by_tmdb_id
-    pub async fn get_downloads_by_tmdb_id_async(&self, tmdb_id: i64) -> Result<Vec<crate::downloader::task::DownloadTask>> {
+    pub async fn get_downloads_by_tmdb_id_async(
+        &self,
+        tmdb_id: i64,
+    ) -> Result<Vec<crate::downloader::task::DownloadTask>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
             let db = Db { pool };
             db.get_downloads_by_tmdb_id(tmdb_id)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
-
 
     // ── Row Parsers ───────────────────────────────────────────────────────
 
@@ -1948,7 +2260,9 @@ impl Db {
 
     /// Clear the entire folder cache
     pub fn clear_folder_cache(&self) -> Result<()> {
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute("DELETE FROM folder_cache", [])?;
         Ok(())
@@ -1956,10 +2270,12 @@ impl Db {
 
     /// Insert a batch of items into the folder cache within a transaction
     pub fn insert_folder_cache_batch(&self, items: &[CachedFolderItem]) -> Result<usize> {
-        let mut conn = self.pool.get()
+        let mut conn = self
+            .pool
+            .get()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let tx = conn.transaction()?;
-        
+
         let mut count = 0;
         {
             let mut stmt = tx.prepare(
@@ -1967,9 +2283,9 @@ impl Db {
                     linkcode, name, title, category, label, parent_linkcode,
                     fshare_url, year, season, episode, is_series, is_directory,
                     size, quality, path
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             )?;
-            
+
             for item in items {
                 stmt.execute(params![
                     item.linkcode,
@@ -1991,22 +2307,25 @@ impl Db {
                 count += 1;
             }
         }
-        
+
         tx.commit()?;
         Ok(count)
     }
 
     /// Search the folder cache using FTS5 full-text search (LEFT JOINs TMDB map)
     pub fn search_folder_cache(&self, query: &str, limit: u32) -> Result<Vec<CachedFolderItem>> {
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        
+
         // Build FTS5 query: add * for prefix matching
-        let fts_query = query.split_whitespace()
+        let fts_query = query
+            .split_whitespace()
             .map(|word| format!("{}*", word))
             .collect::<Vec<_>>()
             .join(" ");
-        
+
         let mut stmt = conn.prepare(
             "SELECT fc.linkcode, fc.name, fc.title, fc.category, fc.label, fc.parent_linkcode,
                     fc.fshare_url, fc.year, fc.season, fc.episode, fc.is_series, fc.is_directory,
@@ -2019,9 +2338,9 @@ impl Db {
              LEFT JOIN folder_tmdb_map ptm ON fc.parent_linkcode = ptm.linkcode
              WHERE folder_cache MATCH ?1
              ORDER BY rank
-             LIMIT ?2"
+             LIMIT ?2",
         )?;
-        
+
         let rows = stmt.query_map(params![fts_query, limit], |row| {
             let year_str: String = row.get(7)?;
             let season_str: String = row.get(8)?;
@@ -2032,7 +2351,7 @@ impl Db {
             let tmdb_id: Option<i64> = row.get(15)?;
             let media_type_hint: Option<String> = row.get(16)?;
             let poster_path: Option<String> = row.get(17)?;
-            
+
             Ok(CachedFolderItem {
                 linkcode: row.get(0)?,
                 name: row.get(1)?,
@@ -2054,7 +2373,7 @@ impl Db {
                 poster_path: poster_path.filter(|s| !s.is_empty()),
             })
         })?;
-        
+
         let mut results = Vec::new();
         for row in rows {
             if let Ok(item) = row {
@@ -2065,28 +2384,39 @@ impl Db {
     }
 
     /// Async search wrapper
-    pub async fn search_folder_cache_async(&self, query: String, limit: u32) -> Result<Vec<CachedFolderItem>> {
+    pub async fn search_folder_cache_async(
+        &self,
+        query: String,
+        limit: u32,
+    ) -> Result<Vec<CachedFolderItem>> {
         let pool = self.pool.clone();
         tokio::task::spawn_blocking(move || {
             let db = Db { pool };
             db.search_folder_cache(&query, limit)
-        }).await.unwrap()
+        })
+        .await
+        .unwrap()
     }
 
     /// Get folder cache metadata value
     pub fn get_folder_cache_meta(&self, key: &str) -> Result<Option<String>> {
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.query_row(
             "SELECT value FROM folder_cache_meta WHERE key = ?1",
             params![key],
             |row| row.get(0),
-        ).optional()
+        )
+        .optional()
     }
 
     /// Set folder cache metadata value
     pub fn set_folder_cache_meta(&self, key: &str, value: &str) -> Result<()> {
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO folder_cache_meta (key, value) VALUES (?1, ?2)",
@@ -2097,13 +2427,11 @@ impl Db {
 
     /// Get total count of items in folder cache
     pub fn get_folder_cache_count(&self) -> Result<u64> {
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        conn.query_row(
-            "SELECT COUNT(*) FROM folder_cache",
-            [],
-            |row| row.get(0),
-        )
+        conn.query_row("SELECT COUNT(*) FROM folder_cache", [], |row| row.get(0))
     }
 
     // ============================================================================
@@ -2112,7 +2440,9 @@ impl Db {
 
     /// Check if a linkcode already has a TMDB mapping
     pub fn has_folder_tmdb_mapping(&self, linkcode: &str) -> Result<bool> {
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM folder_tmdb_map WHERE linkcode = ?1",
@@ -2123,8 +2453,16 @@ impl Db {
     }
 
     /// Set TMDB mapping for a linkcode
-    pub fn set_folder_tmdb_mapping(&self, linkcode: &str, tmdb_id: i64, media_type: &str, poster_path: &str) -> Result<()> {
-        let conn = self.pool.get()
+    pub fn set_folder_tmdb_mapping(
+        &self,
+        linkcode: &str,
+        tmdb_id: i64,
+        media_type: &str,
+        poster_path: &str,
+    ) -> Result<()> {
+        let conn = self
+            .pool
+            .get()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         conn.execute(
             "INSERT OR REPLACE INTO folder_tmdb_map (linkcode, tmdb_id, media_type, poster_path, mapped_at)
@@ -2135,8 +2473,13 @@ impl Db {
     }
 
     /// Batch set TMDB mappings
-    pub fn set_folder_tmdb_mappings_batch(&self, mappings: &[(String, i64, String, String)]) -> Result<usize> {
-        let mut conn = self.pool.get()
+    pub fn set_folder_tmdb_mappings_batch(
+        &self,
+        mappings: &[(String, i64, String, String)],
+    ) -> Result<usize> {
+        let mut conn = self
+            .pool
+            .get()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
         let tx = conn.transaction()?;
         let now = chrono::Utc::now().timestamp().to_string();
@@ -2156,12 +2499,15 @@ impl Db {
     }
 
     /// Get all existing TMDB mappings as a HashMap for fast lookup
-    pub fn get_all_folder_tmdb_mappings(&self) -> Result<std::collections::HashMap<String, FolderTmdbMapping>> {
-        let conn = self.pool.get()
+    pub fn get_all_folder_tmdb_mappings(
+        &self,
+    ) -> Result<std::collections::HashMap<String, FolderTmdbMapping>> {
+        let conn = self
+            .pool
+            .get()
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        let mut stmt = conn.prepare(
-            "SELECT linkcode, tmdb_id, media_type, poster_path FROM folder_tmdb_map"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT linkcode, tmdb_id, media_type, poster_path FROM folder_tmdb_map")?;
         let rows = stmt.query_map([], |row| {
             Ok(FolderTmdbMapping {
                 linkcode: row.get(0)?,

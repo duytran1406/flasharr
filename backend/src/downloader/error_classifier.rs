@@ -14,24 +14,19 @@ pub enum ErrorCategory {
         delay_seconds: u64,
         reason: String,
     },
-    
+
     /// Premium URL expired - need to refresh from original URL
-    UrlRefreshNeeded {
-        max_retries: u32,
-        reason: String,
-    },
-    
+    UrlRefreshNeeded { max_retries: u32, reason: String },
+
     /// Account issue - needs user intervention
     AccountIssue {
         reason: String,
         action_required: String,
     },
-    
+
     /// Permanent failure - will never succeed
-    Permanent {
-        reason: String,
-    },
-    
+    Permanent { reason: String },
+
     /// System/local issue - check configuration
     SystemIssue {
         max_retries: u32,
@@ -47,22 +42,25 @@ impl ErrorClassifier {
     /// Classify an error and determine recovery strategy
     pub fn classify(error: &anyhow::Error) -> ErrorCategory {
         let error_str = error.to_string().to_lowercase();
-        
+
         // Try HTTP status code first
         if let Some(status) = Self::extract_http_status(&error_str) {
             return Self::classify_http_error(status, &error_str);
         }
-        
+
         // Network errors — reqwest reports mid-stream failures as:
         // "request or response body error: operation timed out"
-        if error_str.contains("timeout") || error_str.contains("timed out") || error_str.contains("operation timed out") {
+        if error_str.contains("timeout")
+            || error_str.contains("timed out")
+            || error_str.contains("operation timed out")
+        {
             return ErrorCategory::Retryable {
                 max_retries: 20, // Increased for large, slow media
                 delay_seconds: 5,
                 reason: "Network timeout - server too slow or connection dropped".to_string(),
             };
         }
-        
+
         // Mid-stream body errors (connection reset mid-download)
         if error_str.contains("body error") || error_str.contains("incomplete message") {
             return ErrorCategory::Retryable {
@@ -71,7 +69,7 @@ impl ErrorClassifier {
                 reason: "Stream interrupted mid-download".to_string(),
             };
         }
-        
+
         if error_str.contains("connection reset") || error_str.contains("broken pipe") {
             return ErrorCategory::Retryable {
                 max_retries: 10,
@@ -79,7 +77,7 @@ impl ErrorClassifier {
                 reason: "Connection reset by server".to_string(),
             };
         }
-        
+
         if error_str.contains("connection refused") {
             return ErrorCategory::Retryable {
                 max_retries: 5,
@@ -87,47 +85,56 @@ impl ErrorClassifier {
                 reason: "Server refused connection - may be down".to_string(),
             };
         }
-        
+
         // DNS errors
-        if error_str.contains("dns") || error_str.contains("resolve") || error_str.contains("name resolution") {
+        if error_str.contains("dns")
+            || error_str.contains("resolve")
+            || error_str.contains("name resolution")
+        {
             return ErrorCategory::SystemIssue {
                 max_retries: 5,
                 reason: "DNS resolution failed".to_string(),
                 fix_suggestion: "Check your internet connection and DNS settings".to_string(),
             };
         }
-        
+
         // Network unreachable
-        if error_str.contains("no route") || error_str.contains("network unreachable") || error_str.contains("network is unreachable") {
+        if error_str.contains("no route")
+            || error_str.contains("network unreachable")
+            || error_str.contains("network is unreachable")
+        {
             return ErrorCategory::SystemIssue {
                 max_retries: 10,
                 reason: "No internet connection".to_string(),
                 fix_suggestion: "Check your network connection".to_string(),
             };
         }
-        
+
         // Disk errors
         if error_str.contains("no space") || error_str.contains("disk full") {
             return ErrorCategory::Permanent {
                 reason: "Disk full - no space left on device".to_string(),
             };
         }
-        
+
         if error_str.contains("permission denied") {
             return ErrorCategory::Permanent {
                 reason: "Permission denied - cannot write to destination".to_string(),
             };
         }
-        
+
         // SSL/TLS errors
-        if error_str.contains("ssl") || error_str.contains("tls") || error_str.contains("certificate") {
+        if error_str.contains("ssl")
+            || error_str.contains("tls")
+            || error_str.contains("certificate")
+        {
             return ErrorCategory::SystemIssue {
                 max_retries: 3,
                 reason: "SSL/TLS error".to_string(),
                 fix_suggestion: "Check system time and SSL certificates".to_string(),
             };
         }
-        
+
         // Default: treat as retryable with conservative settings
         ErrorCategory::Retryable {
             max_retries: 3,
@@ -135,7 +142,7 @@ impl ErrorClassifier {
             reason: format!("Unknown error: {}", error),
         }
     }
-    
+
     /// Classify HTTP status code errors
     fn classify_http_error(status: u16, error_str: &str) -> ErrorCategory {
         match status {
@@ -145,19 +152,19 @@ impl ErrorClassifier {
                 delay_seconds: 1,
                 reason: format!("Unexpected success code {}", status),
             },
-            
+
             // 3xx Redirection
             300..=399 => ErrorCategory::Retryable {
                 max_retries: 3,
                 delay_seconds: 2,
                 reason: format!("Redirect error {}", status),
             },
-            
+
             // 400 Bad Request
             400 => ErrorCategory::Permanent {
                 reason: "Bad request - invalid URL or parameters".to_string(),
             },
-            
+
             // 401 Unauthorized - might be expired token
             401 => {
                 if error_str.contains("token") || error_str.contains("session") {
@@ -171,14 +178,14 @@ impl ErrorClassifier {
                         action_required: "Check your account credentials".to_string(),
                     }
                 }
-            },
-            
+            }
+
             // 402 Payment Required
             402 => ErrorCategory::AccountIssue {
                 reason: "Insufficient credits or payment required".to_string(),
                 action_required: "Add credits to your account".to_string(),
             },
-            
+
             // 403 Forbidden — Fshare returns 403 for expired VIP download links
             // (the direct CDN link is only valid for ~6h after generation)
             403 => {
@@ -197,11 +204,12 @@ impl ErrorClassifier {
                     // has expired — Fshare doesn't include 'expired' in the body
                     ErrorCategory::UrlRefreshNeeded {
                         max_retries: 3,
-                        reason: "VIP download link expired or access denied — refreshing URL".to_string(),
+                        reason: "VIP download link expired or access denied — refreshing URL"
+                            .to_string(),
                     }
                 }
-            },
-            
+            }
+
             // 404 Not Found
             404 => {
                 if error_str.contains("file") {
@@ -214,73 +222,73 @@ impl ErrorClassifier {
                         reason: "Premium URL no longer valid".to_string(),
                     }
                 }
-            },
-            
+            }
+
             // 408 Request Timeout
             408 => ErrorCategory::Retryable {
                 max_retries: 10,
                 delay_seconds: 5,
                 reason: "Request timeout".to_string(),
             },
-            
+
             // 410 Gone
             410 => ErrorCategory::UrlRefreshNeeded {
                 max_retries: 3,
                 reason: "URL expired or no longer available".to_string(),
             },
-            
+
             // 429 Too Many Requests
             429 => ErrorCategory::Retryable {
                 max_retries: 10,
                 delay_seconds: 30,
                 reason: "Rate limited - too many requests".to_string(),
             },
-            
+
             // 451 Unavailable For Legal Reasons
             451 => ErrorCategory::Permanent {
                 reason: "File removed due to copyright claim (DMCA)".to_string(),
             },
-            
+
             // 500 Internal Server Error
             500 => ErrorCategory::Retryable {
                 max_retries: 5,
                 delay_seconds: 10,
                 reason: "Server internal error".to_string(),
             },
-            
+
             // 502 Bad Gateway
             502 => ErrorCategory::Retryable {
                 max_retries: 10,
                 delay_seconds: 5,
                 reason: "Bad gateway - upstream server issue".to_string(),
             },
-            
+
             // 503 Service Unavailable
             503 => ErrorCategory::Retryable {
                 max_retries: 10,
                 delay_seconds: 10,
                 reason: "Server temporarily unavailable or overloaded".to_string(),
             },
-            
+
             // 504 Gateway Timeout
             504 => ErrorCategory::Retryable {
                 max_retries: 10,
                 delay_seconds: 15,
                 reason: "Gateway timeout - upstream server too slow".to_string(),
             },
-            
+
             // Other 4xx errors (client errors)
             400..=499 => ErrorCategory::Permanent {
                 reason: format!("Client error: HTTP {}", status),
             },
-            
+
             // Other 5xx errors (server errors)
             500..=599 => ErrorCategory::Retryable {
                 max_retries: 5,
                 delay_seconds: 10,
                 reason: format!("Server error: HTTP {}", status),
             },
-            
+
             // Unknown status codes
             _ => ErrorCategory::Retryable {
                 max_retries: 3,
@@ -289,7 +297,7 @@ impl ErrorClassifier {
             },
         }
     }
-    
+
     /// Extract HTTP status code from error string
     /// Handles multiple formats:
     /// - reqwest: "HTTP status 403 Forbidden"
@@ -305,17 +313,17 @@ impl ErrorClassifier {
             "status code ",
             "status: ",
         ];
-        
+
         for pattern in &patterns {
             if let Some(start) = error_str.find(pattern) {
                 let after_pattern = &error_str[start + pattern.len()..];
-                
+
                 // Take first word/number
                 let status_str: String = after_pattern
                     .chars()
                     .take_while(|c| c.is_numeric())
                     .collect();
-                
+
                 if let Ok(status) = status_str.parse::<u16>() {
                     if (100..=599).contains(&status) {
                         return Some(status);
@@ -323,7 +331,7 @@ impl ErrorClassifier {
                 }
             }
         }
-        
+
         None
     }
 }
@@ -331,7 +339,7 @@ impl ErrorClassifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_classify_timeout() {
         let error = anyhow::anyhow!("connection timeout");
@@ -344,12 +352,12 @@ mod tests {
             _ => panic!("Expected Retryable"),
         }
     }
-    
+
     #[test]
     fn test_classify_404() {
         let error = anyhow::anyhow!("HTTP error: 404 file not found");
         let category = ErrorClassifier::classify(&error);
-        
+
         match category {
             ErrorCategory::Permanent { reason } => {
                 assert!(reason.contains("deleted"));
@@ -357,12 +365,12 @@ mod tests {
             _ => panic!("Expected Permanent"),
         }
     }
-    
+
     #[test]
     fn test_classify_403_expired() {
         let error = anyhow::anyhow!("HTTP 403: token expired");
         let category = ErrorClassifier::classify(&error);
-        
+
         match category {
             ErrorCategory::UrlRefreshNeeded { max_retries, .. } => {
                 assert_eq!(max_retries, 3);
@@ -370,12 +378,12 @@ mod tests {
             _ => panic!("Expected UrlRefreshNeeded"),
         }
     }
-    
+
     #[test]
     fn test_classify_429_rate_limit() {
         let error = anyhow::anyhow!("HTTP status code 429");
         let category = ErrorClassifier::classify(&error);
-        
+
         match category {
             ErrorCategory::Retryable { delay_seconds, .. } => {
                 assert_eq!(delay_seconds, 30); // Longer delay for rate limits
@@ -383,23 +391,32 @@ mod tests {
             _ => panic!("Expected Retryable"),
         }
     }
-    
+
     #[test]
     fn test_classify_disk_full() {
         let error = anyhow::anyhow!("no space left on device");
         let category = ErrorClassifier::classify(&error);
-        
+
         match category {
             ErrorCategory::Permanent { .. } => {}
             _ => panic!("Expected Permanent"),
         }
     }
-    
+
     #[test]
     fn test_extract_http_status() {
-        assert_eq!(ErrorClassifier::extract_http_status("http error: 404"), Some(404));
-        assert_eq!(ErrorClassifier::extract_http_status("status code 503"), Some(503));
-        assert_eq!(ErrorClassifier::extract_http_status("http 429 too many"), Some(429));
+        assert_eq!(
+            ErrorClassifier::extract_http_status("http error: 404"),
+            Some(404)
+        );
+        assert_eq!(
+            ErrorClassifier::extract_http_status("status code 503"),
+            Some(503)
+        );
+        assert_eq!(
+            ErrorClassifier::extract_http_status("http 429 too many"),
+            Some(429)
+        );
         assert_eq!(ErrorClassifier::extract_http_status("no status here"), None);
     }
 }

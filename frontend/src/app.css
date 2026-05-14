@@ -1,16 +1,17 @@
 @import "tailwindcss";
-@source "../../core-ui";
-
-/* ═══════════════════════════════════════════════════════════
-   Shared Design Tokens from @media-set/core-ui
-   These provide the canonical Cyber-Dark Elite token values.
-   ═══════════════════════════════════════════════════════════ */
 @import "@media-set/core-ui/styles/fonts.css";
 @import "@media-set/core-ui/styles/tokens.css";
 @import "@media-set/core-ui/styles/glass.css";
 @import "@media-set/core-ui/styles/scrollbar.css";
 @import "@media-set/core-ui/styles/media-card.css";
 @import "@media-set/core-ui/styles/aurora.css";
+
+@source "../../core-ui";
+
+/* ═══════════════════════════════════════════════════════════
+   Shared Design Tokens from @media-set/core-ui
+   These provide the canonical Cyber-Dark Elite token values.
+   ═══════════════════════════════════════════════════════════ */
 
 @layer utilities {
   .no-scrollbar::-webkit-scrollbar {

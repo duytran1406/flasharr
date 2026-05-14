@@ -1,7 +1,7 @@
 //! Media entities module
 //!
 //! Defines MediaItem and MediaEpisode types for the TMDB-centric data model.
-//! TMDB ID is the primary key for media_items, establishing it as the 
+//! TMDB ID is the primary key for media_items, establishing it as the
 //! universal join key across downloads, *arr integration, and the frontend.
 
 use serde::{Deserialize, Serialize};

@@ -2,16 +2,15 @@
 //!
 //! Application configuration management endpoints.
 
+use crate::AppState;
 use axum::{
-    routing::{get, put, post},
-    Router,
-    Json,
     extract::State,
     http::StatusCode,
+    routing::{get, post, put},
+    Json, Router,
 };
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
-use crate::AppState;
+use std::sync::Arc;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -101,11 +100,9 @@ struct UpdateSettingsRequest {
 // ============================================================================
 
 /// GET /api/settings - Get all settings
-async fn get_settings(
-    State(state): State<Arc<AppState>>,
-) -> Json<SettingsResponse> {
+async fn get_settings(State(state): State<Arc<AppState>>) -> Json<SettingsResponse> {
     let config = &state.config;
-    
+
     Json(SettingsResponse {
         server: ServerSettings {
             host: config.server.host.clone(),
@@ -139,16 +136,16 @@ async fn update_settings(
     // TODO: Implement config file persistence
     Json(ActionResponse {
         success: false,
-        message: Some("Settings update not yet implemented. Edit config.toml directly.".to_string()),
+        message: Some(
+            "Settings update not yet implemented. Edit config.toml directly.".to_string(),
+        ),
     })
 }
 
 /// GET /api/settings/downloads - Get download settings
-async fn get_downloads_settings(
-    State(state): State<Arc<AppState>>,
-) -> Json<DownloadsSettings> {
+async fn get_downloads_settings(State(state): State<Arc<AppState>>) -> Json<DownloadsSettings> {
     let config = state.download_orchestrator.get_config().await;
-    
+
     Json(DownloadsSettings {
         directory: config.download_dir.to_string_lossy().to_string(),
         max_concurrent: config.max_concurrent,
@@ -165,24 +162,37 @@ async fn update_downloads_settings(
 
     // Ensure the directory exists (create if absent)
     if let Err(e) = std::fs::create_dir_all(&new_dir) {
-        return Err((StatusCode::BAD_REQUEST, Json(ActionResponse {
-            success: false,
-            message: Some(format!("Cannot create directory '{}': {}", new_dir.display(), e)),
-        })));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ActionResponse {
+                success: false,
+                message: Some(format!(
+                    "Cannot create directory '{}': {}",
+                    new_dir.display(),
+                    e
+                )),
+            }),
+        ));
     }
 
     // Write-test: verify the process can actually write into it
     let test_path = new_dir.join(format!(".flasharr_write_test_{}", std::process::id()));
     match std::fs::File::create(&test_path) {
-        Ok(_) => { let _ = std::fs::remove_file(&test_path); }
+        Ok(_) => {
+            let _ = std::fs::remove_file(&test_path);
+        }
         Err(e) => {
-            return Err((StatusCode::BAD_REQUEST, Json(ActionResponse {
-                success: false,
-                message: Some(format!(
-                    "Directory '{}' is not writable: {}. Check volume mounts and ownership.",
-                    new_dir.display(), e
-                )),
-            })));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ActionResponse {
+                    success: false,
+                    message: Some(format!(
+                        "Directory '{}' is not writable: {}. Check volume mounts and ownership.",
+                        new_dir.display(),
+                        e
+                    )),
+                }),
+            ));
         }
     }
 
@@ -193,23 +203,64 @@ async fn update_downloads_settings(
     config.segments_per_download = payload.segments_per_download as usize;
     config.download_dir = new_dir;
 
+    if let Err(e) = state
+        .db
+        .save_download_settings(&payload.directory, payload.max_concurrent as u32)
+    {
+        tracing::error!("Failed to persist download settings: {}", e);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ActionResponse {
+                success: false,
+                message: Some("Failed to persist download settings".to_string()),
+            }),
+        ));
+    }
+
+    if let Err(e) = state.db.save_setting(
+        "segments_per_download",
+        &payload.segments_per_download.to_string(),
+    ) {
+        tracing::error!("Failed to persist segments_per_download: {}", e);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ActionResponse {
+                success: false,
+                message: Some("Failed to persist download settings".to_string()),
+            }),
+        ));
+    }
+
     state.download_orchestrator.update_config(config).await;
 
     Ok(Json(ActionResponse {
         success: true,
-        message: Some("Settings updated successfully (runtime only, persistence not implemented)".to_string()),
+        message: Some("Download settings saved and applied successfully.".to_string()),
     }))
 }
 
 /// GET /api/settings/sonarr - Get Sonarr settings
-async fn get_sonarr_settings(
-    State(state): State<Arc<AppState>>,
-) -> Json<ArrSettings> {
-    let url = state.db.get_setting("sonarr_url").ok().flatten().unwrap_or_else(|| "http://localhost:8989".to_string());
-    let api_key = state.db.get_setting("sonarr_api_key").ok().flatten().unwrap_or_else(|| String::new());
+async fn get_sonarr_settings(State(state): State<Arc<AppState>>) -> Json<ArrSettings> {
+    let url = state
+        .db
+        .get_setting("sonarr_url")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "http://localhost:8989".to_string());
+    let api_key = state
+        .db
+        .get_setting("sonarr_api_key")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| String::new());
     let enabled = !url.is_empty() && !api_key.is_empty();
 
-    Json(ArrSettings { enabled, url, api_key, auto_import: true })
+    Json(ArrSettings {
+        enabled,
+        url,
+        api_key,
+        auto_import: true,
+    })
 }
 
 /// PUT /api/settings/sonarr - Update Sonarr settings
@@ -231,7 +282,7 @@ async fn update_sonarr_settings(
             }
         }
     }
-    
+
     // Update in-memory config
     let mut config = state.config.clone();
     let sonarr_config = Some(crate::config::ArrConfig {
@@ -241,20 +292,20 @@ async fn update_sonarr_settings(
         auto_import: payload.auto_import,
     });
     config.sonarr = sonarr_config.clone();
-    
+
     // Save to config.toml
     match crate::config::save_config(&config) {
         Ok(_) => {
             // Also save to database so GET endpoints can read them back
             let _ = state.db.save_setting("sonarr_url", &payload.url);
             let _ = state.db.save_setting("sonarr_api_key", &payload.api_key);
-            
+
             // Reload arr_client dynamically (no restart needed!)
-            state.download_orchestrator.reload_arr_client(
-                sonarr_config,
-                config.radarr.clone(),
-            ).await;
-            
+            state
+                .download_orchestrator
+                .reload_arr_client(sonarr_config, config.radarr.clone())
+                .await;
+
             Json(ActionResponse {
                 success: true,
                 message: Some("Sonarr settings saved and applied successfully.".to_string()),
@@ -271,14 +322,27 @@ async fn update_sonarr_settings(
 }
 
 /// GET /api/settings/radarr - Get Radarr settings
-async fn get_radarr_settings(
-    State(state): State<Arc<AppState>>,
-) -> Json<ArrSettings> {
-    let url = state.db.get_setting("radarr_url").ok().flatten().unwrap_or_else(|| "http://localhost:7878".to_string());
-    let api_key = state.db.get_setting("radarr_api_key").ok().flatten().unwrap_or_else(|| String::new());
+async fn get_radarr_settings(State(state): State<Arc<AppState>>) -> Json<ArrSettings> {
+    let url = state
+        .db
+        .get_setting("radarr_url")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "http://localhost:7878".to_string());
+    let api_key = state
+        .db
+        .get_setting("radarr_api_key")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| String::new());
     let enabled = !url.is_empty() && !api_key.is_empty();
 
-    Json(ArrSettings { enabled, url, api_key, auto_import: true })
+    Json(ArrSettings {
+        enabled,
+        url,
+        api_key,
+        auto_import: true,
+    })
 }
 
 /// PUT /api/settings/radarr - Update Radarr settings
@@ -300,7 +364,7 @@ async fn update_radarr_settings(
             }
         }
     }
-    
+
     // Update in-memory config
     let mut config = state.config.clone();
     let radarr_config = Some(crate::config::ArrConfig {
@@ -310,20 +374,20 @@ async fn update_radarr_settings(
         auto_import: payload.auto_import,
     });
     config.radarr = radarr_config.clone();
-    
+
     // Save to config.toml
     match crate::config::save_config(&config) {
         Ok(_) => {
             // Also save to database so GET endpoints can read them back
             let _ = state.db.save_setting("radarr_url", &payload.url);
             let _ = state.db.save_setting("radarr_api_key", &payload.api_key);
-            
+
             // Reload arr_client dynamically (no restart needed!)
-            state.download_orchestrator.reload_arr_client(
-                config.sonarr.clone(),
-                radarr_config,
-            ).await;
-            
+            state
+                .download_orchestrator
+                .reload_arr_client(config.sonarr.clone(), radarr_config)
+                .await;
+
             Json(ActionResponse {
                 success: true,
                 message: Some("Radarr settings saved and applied successfully.".to_string()),
@@ -340,19 +404,19 @@ async fn update_radarr_settings(
 }
 
 /// GET /api/settings/indexer - Get indexer settings
-async fn get_indexer_settings(
-    State(state): State<Arc<AppState>>,
-) -> Json<IndexerSettings> {
+async fn get_indexer_settings(State(state): State<Arc<AppState>>) -> Json<IndexerSettings> {
     let host = &state.config.server.host;
     let port = state.config.server.port;
     let indexer_url = format!("http://{}:{}/newznab", host, port);
-    
+
     // Read API key from database
-    let api_key = state.db.get_setting("indexer_api_key")
+    let api_key = state
+        .db
+        .get_setting("indexer_api_key")
         .ok()
         .flatten()
         .unwrap_or_else(|| "flasharr-default-key".to_string());
-    
+
     Json(IndexerSettings {
         enabled: true,
         api_key,
@@ -372,9 +436,9 @@ async fn update_indexer_settings(
             message: Some(format!("Failed to save indexer settings: {}", e)),
         });
     }
-    
+
     tracing::info!("Indexer settings updated: API key saved to database");
-    
+
     Json(ActionResponse {
         success: true,
         message: Some("Indexer settings updated successfully".to_string()),
@@ -384,13 +448,11 @@ async fn update_indexer_settings(
 /// GET /api/settings/indexer/generate-key - Generate new API key
 async fn generate_api_key() -> Json<GenerateKeyResponse> {
     use uuid::Uuid;
-    
+
     // Generate a secure random API key
     let api_key = format!("flasharr_{}", Uuid::new_v4().to_string().replace("-", ""));
-    
-    Json(GenerateKeyResponse {
-        api_key,
-    })
+
+    Json(GenerateKeyResponse { api_key })
 }
 
 // ============================================================================
@@ -399,7 +461,7 @@ async fn generate_api_key() -> Json<GenerateKeyResponse> {
 
 fn mask_api_key(key: &str) -> String {
     if key.len() > 8 {
-        format!("{}...{}", &key[..4], &key[key.len()-4..])
+        format!("{}...{}", &key[..4], &key[key.len() - 4..])
     } else {
         "****".to_string()
     }
@@ -411,8 +473,14 @@ async fn test_sonarr_connection(
     Json(payload): Json<ArrSettings>,
 ) -> Result<Json<ActionResponse>, StatusCode> {
     match crate::arr::ArrClient::test_sonarr_connection(&payload.url, &payload.api_key).await {
-        Ok(message) => Ok(Json(ActionResponse { success: true, message: Some(message) })),
-        Err(e) => Ok(Json(ActionResponse { success: false, message: Some(format!("Connection failed: {}", e)) })),
+        Ok(message) => Ok(Json(ActionResponse {
+            success: true,
+            message: Some(message),
+        })),
+        Err(e) => Ok(Json(ActionResponse {
+            success: false,
+            message: Some(format!("Connection failed: {}", e)),
+        })),
     }
 }
 
@@ -422,7 +490,13 @@ async fn test_radarr_connection(
     Json(payload): Json<ArrSettings>,
 ) -> Result<Json<ActionResponse>, StatusCode> {
     match crate::arr::ArrClient::test_radarr_connection(&payload.url, &payload.api_key).await {
-        Ok(message) => Ok(Json(ActionResponse { success: true, message: Some(message) })),
-        Err(e) => Ok(Json(ActionResponse { success: false, message: Some(format!("Connection failed: {}", e)) })),
+        Ok(message) => Ok(Json(ActionResponse {
+            success: true,
+            message: Some(message),
+        })),
+        Err(e) => Ok(Json(ActionResponse {
+            success: false,
+            message: Some(format!("Connection failed: {}", e)),
+        })),
     }
 }

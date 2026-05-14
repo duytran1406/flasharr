@@ -1,29 +1,46 @@
-use axum::{
-    routing::post,
-    extract::{State, Json},
-    response::IntoResponse,
-    Router,
-};
-use serde::{Deserialize, Serialize};
+use crate::services::tmdb_service::MediaEnrichment;
+use crate::utils::smart_tokenizer::smart_parse;
 use crate::utils::title_matcher::{
-    calculate_unified_similarity, group_by_quality, SmartSearchResult, QualityGroup,
-    extract_core_title, normalize_vietnamese, detect_badges
+    calculate_unified_similarity, detect_badges, extract_core_title, group_by_quality,
+    normalize_vietnamese, QualityGroup, SmartSearchResult,
 };
 use crate::utils::unified_scorer::{calculate_match_score, is_valid_match};
-use crate::utils::smart_tokenizer::smart_parse;
-use tracing::info;
-use regex::Regex;
-use std::sync::Arc;
 use crate::AppState;
 use crate::TmdbEnrichmentCache;
-use crate::services::tmdb_service::MediaEnrichment;
-use reqwest::Client;
+use axum::{
+    extract::{Json, State},
+    response::IntoResponse,
+    routing::post,
+    Router,
+};
 use moka::future::Cache;
+use regex::Regex;
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 use std::sync::OnceLock;
+use tracing::info;
 
+use super::search_pipeline::{RawFshareResult, SearchPipeline};
 
-use super::search_pipeline::{SearchPipeline, RawFshareResult};
+fn folder_cache_version(state: &Arc<AppState>) -> String {
+    let count = state.db.get_folder_cache_count().unwrap_or(0);
+    let last_sync = state
+        .db
+        .get_folder_cache_meta("last_sync")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let sync_status = state
+        .db
+        .get_folder_cache_meta("sync_status")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+
+    format!("folders:{}:{}:{}", count, last_sync, sync_status)
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,8 +68,8 @@ pub struct SmartSearchResponse {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SeasonGroup {
     pub season: u32,
-    pub episode_count: u32,  // TMDB official episode count for uncut detection
-    pub aired_episode_count: u32,  // Number of episodes that have actually aired
+    pub episode_count: u32, // TMDB official episode count for uncut detection
+    pub aired_episode_count: u32, // Number of episodes that have actually aired
     pub episodes_grouped: Vec<EpisodeGroup>,
 }
 
@@ -68,8 +85,7 @@ pub struct EpisodeGroup {
 
 #[allow(dead_code)]
 pub fn router() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/", post(smart_search))
+    Router::new().route("/", post(smart_search))
 }
 
 pub async fn smart_search(
@@ -77,7 +93,7 @@ pub async fn smart_search(
     Json(req): Json<SmartSearchRequest>,
 ) -> impl IntoResponse {
     let media_type = req.r#type.clone();
-    
+
     if media_type == "tv" {
         handle_tv_search(state, req).await
     } else {
@@ -98,14 +114,22 @@ pub async fn handle_movie_search(
         Some(Value::Number(ref n)) => Some(n.to_string()),
         _ => None,
     };
-    
+
     let core_title = extract_core_title(&title);
     let _query_keyword = if let Some(ref y) = year_str {
         format!("{} {}", core_title, y)
     } else {
         core_title.clone()
     };
-    let cache_key = format!("movie|{}|{:?}|{:?}|{:?}|{:?}", req.title, req.year, req.tmdb_id, req.season, req.episode);
+    let cache_key = format!(
+        "movie|{}|{:?}|{:?}|{:?}|{:?}|{}",
+        req.title,
+        req.year,
+        req.tmdb_id,
+        req.season,
+        req.episode,
+        folder_cache_version(&state)
+    );
     if let Some(cached) = state.search_cache.get(&cache_key).await {
         info!("Search Cache HIT: {}", cache_key);
         return Json::<SmartSearchResponse>(cached).into_response();
@@ -128,7 +152,10 @@ pub async fn handle_movie_search(
             let tmdb_id_num: i64 = tmdb_id.parse().unwrap_or(0);
             let enrichment = state.tmdb_service.get_movie_enrichment(tmdb_id_num).await;
             let cache_entry = build_movie_enrichment_cache(enrichment, &title);
-            state.tmdb_cache.insert(tmdb_id.clone(), cache_entry.clone()).await;
+            state
+                .tmdb_cache
+                .insert(tmdb_id.clone(), cache_entry.clone())
+                .await;
             cache_entry
         }
     } else {
@@ -144,7 +171,10 @@ pub async fn handle_movie_search(
         }
     };
 
-    let official_name = enrichment_cache.official.clone().unwrap_or_else(|| title.clone());
+    let official_name = enrichment_cache
+        .official
+        .clone()
+        .unwrap_or_else(|| title.clone());
     let aliases = enrichment_cache.all_aliases.clone();
     let base_poster = enrichment_cache.poster.clone();
     let _collections = enrichment_cache.collections.clone();
@@ -202,12 +232,15 @@ pub async fn handle_movie_search(
 
     let client_arc = Arc::new(client.clone());
     let fshare_cache = state.fshare_search_cache.clone();
-    let fshare_futures: Vec<_> = all_queries.iter().map(|q| {
-        let c = Arc::clone(&client_arc);
-        let q = q.clone();
-        let cache = fshare_cache.clone();
-        async move { execute_fshare_search_cached(&c, &q, 60, &cache).await }
-    }).collect();
+    let fshare_futures: Vec<_> = all_queries
+        .iter()
+        .map(|q| {
+            let c = Arc::clone(&client_arc);
+            let q = q.clone();
+            let cache = fshare_cache.clone();
+            async move { execute_fshare_search_cached(&c, &q, 60, &cache).await }
+        })
+        .collect();
 
     // Run Fshare API + folder cache search in parallel
     let (all_search_batches, folder_results) = tokio::join!(
@@ -246,7 +279,7 @@ pub async fn handle_movie_search(
 
         let final_id = base_tmdb_id;
         let final_poster = base_poster.clone();
-        
+
         // Use unified scorer for primary match (movies: 70% title + 20% year)
         let primary_score = calculate_match_score(
             &official_name,
@@ -256,7 +289,7 @@ pub async fn handle_movie_search(
             &aliases,
             false, // is_tv_series = false for movies
         );
-        
+
         let best_score = primary_score;
 
         // FILTER: Use unified scorer's validation
@@ -266,7 +299,7 @@ pub async fn handle_movie_search(
 
         // PHASE 3: Detect badges
         let (vietdub, vietsub, hdr, dolby_vision) = detect_badges(&r.name);
-        
+
         valid_results.push(SmartSearchResult {
             name: r.name.clone(),
             url: r.url,
@@ -277,12 +310,12 @@ pub async fn handle_movie_search(
             custom_format_score: parsed.custom_format_score(),
             total_score: parsed.total_score(),
             normalized_score: parsed.normalized_score(),
-            match_type: if best_score >= 0.90 { 
-                "exact".to_string() 
-            } else if best_score >= 0.75 { 
-                "high_confidence".to_string() 
-            } else { 
-                "valid".to_string() 
+            match_type: if best_score >= 0.90 {
+                "exact".to_string()
+            } else if best_score >= 0.75 {
+                "high_confidence".to_string()
+            } else {
+                "valid".to_string()
             },
             quality_attrs: crate::utils::parser::QualityAttributes {
                 resolution: parsed.resolution.clone(),
@@ -296,7 +329,16 @@ pub async fn handle_movie_search(
                 viet_dub: parsed.viet_dub,
                 is_tv: parsed.media_type == crate::utils::smart_tokenizer::MediaType::TvShow,
                 is_movie: parsed.media_type == crate::utils::smart_tokenizer::MediaType::Movie,
-                is_hd: parsed.resolution.as_ref().map(|r| r.contains("720") || r.contains("1080") || r.contains("2160") || r.contains("4K")).unwrap_or(false),
+                is_hd: parsed
+                    .resolution
+                    .as_ref()
+                    .map(|r| {
+                        r.contains("720")
+                            || r.contains("1080")
+                            || r.contains("2160")
+                            || r.contains("4K")
+                    })
+                    .unwrap_or(false),
             },
             tmdb_id: final_id,
             poster_path: final_poster,
@@ -321,7 +363,7 @@ pub async fn handle_movie_search(
             "fuzzy" | "keyword_overlap" => 2,
             _ => 3,
         };
-        
+
         match a_priority.cmp(&b_priority) {
             std::cmp::Ordering::Equal => b.total_score.cmp(&a.total_score),
             other => other,
@@ -329,7 +371,10 @@ pub async fn handle_movie_search(
     });
 
     let groups = group_by_quality(valid_results);
-    info!("Total Optimized Smart Search took: {:?}", start_time.elapsed());
+    info!(
+        "Total Optimized Smart Search took: {:?}",
+        start_time.elapsed()
+    );
 
     let response = SmartSearchResponse {
         query: title,
@@ -338,10 +383,13 @@ pub async fn handle_movie_search(
         groups: Some(groups),
         seasons: None,
     };
-    
+
     state.search_cache.insert(cache_key, response.clone()).await;
-    
-    info!("Total Optimized Movie Smart Search took: {:?}", start_time.elapsed());
+
+    info!(
+        "Total Optimized Movie Smart Search took: {:?}",
+        start_time.elapsed()
+    );
     Json(response).into_response()
 }
 
@@ -360,14 +408,22 @@ pub async fn handle_tv_search(
         Some(Value::Number(ref n)) => Some(n.to_string()),
         _ => None,
     };
-    
+
     let core_title = extract_core_title(&title);
     let _query_keyword = if let Some(ref y) = year_str {
         format!("{} {}", core_title, y)
     } else {
         core_title
     };
-    let cache_key = format!("tv|{}|{:?}|{:?}|{:?}|{:?}", req.title, req.year, req.tmdb_id, req.season, req.episode);
+    let cache_key = format!(
+        "tv|{}|{:?}|{:?}|{:?}|{:?}|{}",
+        req.title,
+        req.year,
+        req.tmdb_id,
+        req.season,
+        req.episode,
+        folder_cache_version(&state)
+    );
     if let Some(cached) = state.search_cache.get(&cache_key).await {
         info!("Search Cache HIT: {}", cache_key);
         return Json::<SmartSearchResponse>(cached).into_response();
@@ -382,7 +438,10 @@ pub async fn handle_tv_search(
         _ => None,
     };
 
-    info!("📊 [PERF] TV Smart Search START: title='{}', tmdbId={:?}, year={:?}", title, tmdb_id_str, year_str);
+    info!(
+        "📊 [PERF] TV Smart Search START: title='{}', tmdbId={:?}, year={:?}",
+        title, tmdb_id_str, year_str
+    );
 
     // ── 1. TMDB ENRICHMENT ──────────────────────────────────────────────────
     let phase1_start = std::time::Instant::now();
@@ -395,10 +454,17 @@ pub async fn handle_tv_search(
             info!("Enriching TV metadata from TMDB: tmdb_id={}", tmdb_id_num);
             let enrichment = state.tmdb_service.get_tv_enrichment(tmdb_id_num).await;
             let cache_entry = build_tv_enrichment_cache(enrichment, &title);
-            info!("TMDB enrichment built — official={:?}, vn={:?}, orig_lang={:?}, us={:?}",
-                cache_entry.official, cache_entry.vn_titles,
-                cache_entry.original_lang_titles, cache_entry.us_titles);
-            state.tmdb_cache.insert(tmdb_id.clone(), cache_entry.clone()).await;
+            info!(
+                "TMDB enrichment built — official={:?}, vn={:?}, orig_lang={:?}, us={:?}",
+                cache_entry.official,
+                cache_entry.vn_titles,
+                cache_entry.original_lang_titles,
+                cache_entry.us_titles
+            );
+            state
+                .tmdb_cache
+                .insert(tmdb_id.clone(), cache_entry.clone())
+                .await;
             cache_entry
         }
     } else {
@@ -414,7 +480,10 @@ pub async fn handle_tv_search(
         }
     };
 
-    let official_name = enrichment_cache.official.clone().unwrap_or_else(|| title.clone());
+    let official_name = enrichment_cache
+        .official
+        .clone()
+        .unwrap_or_else(|| title.clone());
     let aliases = enrichment_cache.all_aliases.clone();
     let base_poster = enrichment_cache.poster.clone();
     let base_tmdb_id = tmdb_id_str.as_ref().and_then(|s| s.parse::<u64>().ok());
@@ -482,27 +551,43 @@ pub async fn handle_tv_search(
         }
     }
 
-    info!("📊 [PERF] Phase 1 (TMDB enrichment) took: {:?}", phase1_start.elapsed());
-    info!("TV search queries (parallel x{}): {:?}", all_queries.len(), all_queries);
+    info!(
+        "📊 [PERF] Phase 1 (TMDB enrichment) took: {:?}",
+        phase1_start.elapsed()
+    );
+    info!(
+        "TV search queries (parallel x{}): {:?}",
+        all_queries.len(),
+        all_queries
+    );
 
     // ── 3. PARALLEL FSHARE SEARCHES ─────────────────────────────────────────
     let phase2_start = std::time::Instant::now();
     let client_arc = Arc::new(client.clone());
     let fshare_cache = state.fshare_search_cache.clone();
-    let fshare_futures: Vec<_> = all_queries.iter().map(|q| {
-        let c = Arc::clone(&client_arc);
-        let q = q.clone();
-        let cache = fshare_cache.clone();
-        async move { execute_fshare_search_cached(&c, &q, 100, &cache).await }
-    }).collect();
+    let fshare_futures: Vec<_> = all_queries
+        .iter()
+        .map(|q| {
+            let c = Arc::clone(&client_arc);
+            let q = q.clone();
+            let cache = fshare_cache.clone();
+            async move { execute_fshare_search_cached(&c, &q, 100, &cache).await }
+        })
+        .collect();
 
     // Run Fshare API + folder cache search in parallel
     let (all_search_batches, folder_results) = tokio::join!(
         futures_util::future::join_all(fshare_futures),
         search_folder_cache(&state, &all_queries)
     );
-    info!("📊 [PERF] Phase 2 (parallel Fshare + folder cache) took: {:?}", phase2_start.elapsed());
-    info!("Folder cache returned {} matches for TV", folder_results.len());
+    info!(
+        "📊 [PERF] Phase 2 (parallel Fshare + folder cache) took: {:?}",
+        phase2_start.elapsed()
+    );
+    info!(
+        "Folder cache returned {} matches for TV",
+        folder_results.len()
+    );
 
     // Flatten + deduplicate by pure fcode
     let mut results_pool: Vec<RawFshareResult> = Vec::new();
@@ -528,10 +613,14 @@ pub async fn handle_tv_search(
         let pure_fcode = f.fcode.split('?').next().unwrap_or(&f.fcode);
         final_seen.insert(pure_fcode.to_string())
     });
-    
+
     // 3.5 SNOWBALL LOGIC (TV Only) - matching V2's deep-dive search
     let phase3_start = std::time::Instant::now();
-    info!("Snowball Check: results_pool={}, aliases={}", results_pool.len(), aliases.len());
+    info!(
+        "Snowball Check: results_pool={}, aliases={}",
+        results_pool.len(),
+        aliases.len()
+    );
     if !results_pool.is_empty() && !aliases.is_empty() {
         // Reuse the final_seen set for snowball results
         let mut seen = final_seen;
@@ -559,7 +648,7 @@ pub async fn handle_tv_search(
         struct ReleaseGroup {
             found_eps: std::collections::HashSet<u32>,
             sample_name: String,
-            base_search: String,   // e.g. "Tales of Qin Mu S01" — links sibling groups
+            base_search: String, // e.g. "Tales of Qin Mu S01" — links sibling groups
             /// Full template with {ep} placeholder, e.g.
             /// "Tales of Qin Mu S01E{ep} 4K 8Bit H264 TVP TMPĐ_kimngonx5.mkv"
             /// Substituting the ep number gives a precise Fshare search query.
@@ -571,20 +660,28 @@ pub async fn handle_tv_search(
         static RE_LEADING2: OnceLock<Regex> = OnceLock::new();
         static RE_TRAILING2: OnceLock<Regex> = OnceLock::new();
 
-        let re_s_e2 = RE_S_E2.get_or_init(|| Regex::new(r"^(.+?)[._\s]S(\d{1,2})[Ee](\d{1,3})(.*)$").unwrap());
-        let re_tap2 = RE_TAP2.get_or_init(|| Regex::new(r"^(.+?)(?:[\s_.-]?(?:Tập|[Tt]ap|[Ee]p?))[\s_.-]*(\d{1,4})(.*)$").unwrap());
+        let re_s_e2 = RE_S_E2
+            .get_or_init(|| Regex::new(r"^(.+?)[._\s]S(\d{1,2})[Ee](\d{1,3})(.*)$").unwrap());
+        let re_tap2 = RE_TAP2.get_or_init(|| {
+            Regex::new(r"^(.+?)(?:[\s_.-]?(?:Tập|[Tt]ap|[Ee]p?))[\s_.-]*(\d{1,4})(.*)$").unwrap()
+        });
         let re_leading2 = RE_LEADING2.get_or_init(|| Regex::new(r"^(\d{1,3})([_\s.].+)$").unwrap());
-        let re_trailing2 = RE_TRAILING2.get_or_init(|| Regex::new(r"^(.+?)[_\s.-](\d{1,3})(\.(?:mkv|mp4))$").unwrap());
+        let re_trailing2 = RE_TRAILING2
+            .get_or_init(|| Regex::new(r"^(.+?)[_\s.-](\d{1,3})(\.(?:mkv|mp4))$").unwrap());
 
         // Map: full_template → ReleaseGroup
-        let mut release_groups: std::collections::HashMap<String, ReleaseGroup> = std::collections::HashMap::new();
+        let mut release_groups: std::collections::HashMap<String, ReleaseGroup> =
+            std::collections::HashMap::new();
 
         for r in &results_pool {
             let name = &r.name;
 
             // Returns (ep, full_template, base_search)
             let parsed: Option<(u32, String, String)> = if let Some(caps) = re_s_e2.captures(name) {
-                let ep = caps.get(3).and_then(|m| m.as_str().parse::<u32>().ok()).unwrap_or(0);
+                let ep = caps
+                    .get(3)
+                    .and_then(|m| m.as_str().parse::<u32>().ok())
+                    .unwrap_or(0);
                 let season = caps.get(2).map(|m| m.as_str()).unwrap_or("");
                 let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
                 let suffix = caps.get(4).map(|m| m.as_str()).unwrap_or("");
@@ -593,19 +690,31 @@ pub async fn handle_tv_search(
                 let base_search = format!("{} S{}", prefix, season);
                 Some((ep, full_template, base_search))
             } else if let Some(caps) = re_tap2.captures(name) {
-                let ep = caps.get(2).and_then(|m| m.as_str().parse::<u32>().ok()).unwrap_or(0);
+                let ep = caps
+                    .get(2)
+                    .and_then(|m| m.as_str().parse::<u32>().ok())
+                    .unwrap_or(0);
                 let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
                 let suffix = caps.get(3).map(|m| m.as_str()).unwrap_or("");
                 let full_template = format!("{} Tap {{ep}}{}", prefix, suffix);
                 Some((ep, full_template, prefix.to_string()))
             } else if let Some(caps) = re_leading2.captures(name) {
-                let ep = caps.get(1).and_then(|m| m.as_str().parse::<u32>().ok()).unwrap_or(0);
+                let ep = caps
+                    .get(1)
+                    .and_then(|m| m.as_str().parse::<u32>().ok())
+                    .unwrap_or(0);
                 let suffix = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                let base = suffix.trim_start_matches(|c: char| c == '_' || c == '.' || c == ' ').chars().take(30).collect::<String>();
+                let base = suffix
+                    .trim_start_matches(|c: char| c == '_' || c == '.' || c == ' ')
+                    .chars()
+                    .take(30)
+                    .collect::<String>();
                 Some((ep, format!("{{ep}}{}", suffix), base))
             } else if let Some(caps) = re_trailing2.captures(name) {
                 let ep_str = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-                if ep_str.len() >= 3 && ep_str.len() <= 4 { continue; } // likely a resolution
+                if ep_str.len() >= 3 && ep_str.len() <= 4 {
+                    continue;
+                } // likely a resolution
                 let ep = ep_str.parse::<u32>().ok().unwrap_or(0);
                 let prefix = caps.get(1).map(|m| m.as_str()).unwrap_or("");
                 let ext = caps.get(3).map(|m| m.as_str()).unwrap_or("");
@@ -617,12 +726,14 @@ pub async fn handle_tv_search(
 
             if let Some((ep, full_template, base_search)) = parsed {
                 if ep >= 1 && ep <= 1000 {
-                    let group = release_groups.entry(full_template.clone()).or_insert_with(|| ReleaseGroup {
-                        found_eps: std::collections::HashSet::new(),
-                        sample_name: name.clone(),
-                        base_search,
-                        full_template: full_template.clone(),
-                    });
+                    let group = release_groups
+                        .entry(full_template.clone())
+                        .or_insert_with(|| ReleaseGroup {
+                            found_eps: std::collections::HashSet::new(),
+                            sample_name: name.clone(),
+                            base_search,
+                            full_template: full_template.clone(),
+                        });
                     group.found_eps.insert(ep);
                 }
             }
@@ -631,9 +742,11 @@ pub async fn handle_tv_search(
         // ── Step 2: Build a base → [full_templates] index ──────────────────────────
         // Clusters sibling release groups by show/season so we can search them all
         // when snowballing one qualifying group.
-        let mut base_to_templates: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        let mut base_to_templates: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
         for (tmpl, grp) in &release_groups {
-            base_to_templates.entry(grp.base_search.clone())
+            base_to_templates
+                .entry(grp.base_search.clone())
                 .or_default()
                 .push(tmpl.clone());
         }
@@ -651,27 +764,24 @@ pub async fn handle_tv_search(
                 None => return String::new(),
             };
             let before_ep = &tmpl[..ep_placeholder_idx];
-            let after_ep  = &tmpl[ep_placeholder_idx + 4..]; // skip "{ep}"
+            let after_ep = &tmpl[ep_placeholder_idx + 4..]; // skip "{ep}"
 
             // Strip the trailing "S01E" (or "Tap " or similar) from before_ep
             // to get just the show title.
             static RE_STRIP_SE: OnceLock<Regex> = OnceLock::new();
             static RE_STRIP_TAP: OnceLock<Regex> = OnceLock::new();
-            let re_strip_se  = RE_STRIP_SE.get_or_init(|| Regex::new(r"[\s._-]+[Ss]\d{1,2}[Ee]$").unwrap());
-            let re_strip_tap = RE_STRIP_TAP.get_or_init(|| Regex::new(r"[\s._-]+(?:Tập|[Tt]ap|[Ee]p?)[\s._-]*$").unwrap());
+            let re_strip_se =
+                RE_STRIP_SE.get_or_init(|| Regex::new(r"[\s._-]+[Ss]\d{1,2}[Ee]$").unwrap());
+            let re_strip_tap = RE_STRIP_TAP
+                .get_or_init(|| Regex::new(r"[\s._-]+(?:Tập|[Tt]ap|[Ee]p?)[\s._-]*$").unwrap());
 
-            let title_part = re_strip_se
-                .replace(before_ep, "")
-                .to_string();
-            let title_part = re_strip_tap
-                .replace(&title_part, "")
-                .trim()
-                .to_string();
+            let title_part = re_strip_se.replace(before_ep, "").to_string();
+            let title_part = re_strip_tap.replace(&title_part, "").trim().to_string();
 
             // Strip the file extension from the suffix part
             let suffix_clean = after_ep
                 .trim_start_matches(|c: char| c == ' ' || c == '_' || c == '.')
-                .trim_end_matches(|c: char| matches!(c, 'v'|'k'|'m'|'4'|'p'|'i'))
+                .trim_end_matches(|c: char| matches!(c, 'v' | 'k' | 'm' | '4' | 'p' | 'i'))
                 .trim_end_matches('.')
                 .trim();
 
@@ -701,20 +811,32 @@ pub async fn handle_tv_search(
 
         // Track episodes found across the entire snowball pass (not per-group),
         // so Tier 2 only fires for truly remaining gaps.
-        let mut snowball_found_eps: std::collections::HashMap<String, std::collections::HashSet<u32>> = std::collections::HashMap::new();
+        let mut snowball_found_eps: std::collections::HashMap<
+            String,
+            std::collections::HashSet<u32>,
+        > = std::collections::HashMap::new();
 
         for (_tmpl, grp) in sorted_groups.iter().take(5) {
-            info!("Snowball: Evaluating release group '{}' (count: {})",
-                &grp.full_template[..grp.full_template.len().min(60)], grp.found_eps.len());
+            info!(
+                "Snowball: Evaluating release group '{}' (count: {})",
+                &grp.full_template[..grp.full_template.len().min(60)],
+                grp.found_eps.len()
+            );
 
             let sim = calculate_unified_similarity(&official_name, &grp.sample_name, &aliases);
             if !sim.is_valid {
-                info!("Snowball: Skipping '{}' - no title match", &grp.full_template[..grp.full_template.len().min(40)]);
+                info!(
+                    "Snowball: Skipping '{}' - no title match",
+                    &grp.full_template[..grp.full_template.len().min(40)]
+                );
                 continue;
             }
 
             if grp.found_eps.len() < 5 {
-                info!("Snowball: Release group too small ({})", grp.found_eps.len());
+                info!(
+                    "Snowball: Release group too small ({})",
+                    grp.found_eps.len()
+                );
                 continue;
             }
 
@@ -725,45 +847,67 @@ pub async fn handle_tv_search(
                 .collect();
 
             if missing_eps.is_empty() {
-                info!("Snowball: No missing episodes in '{}'", &grp.full_template[..grp.full_template.len().min(40)]);
+                info!(
+                    "Snowball: No missing episodes in '{}'",
+                    &grp.full_template[..grp.full_template.len().min(40)]
+                );
                 continue;
             }
 
-            info!("Snowball deep-dive: '{}' missing {} eps (max={})",
-                &grp.full_template[..grp.full_template.len().min(50)], missing_eps.len(), max_ep);
+            info!(
+                "Snowball deep-dive: '{}' missing {} eps (max={})",
+                &grp.full_template[..grp.full_template.len().min(50)],
+                missing_eps.len(),
+                max_ep
+            );
 
             let sibling_templates = base_to_templates
                 .get(&grp.base_search)
                 .cloned()
                 .unwrap_or_default();
 
-            info!("Snowball: {} sibling release groups for base '{}'", sibling_templates.len(), grp.base_search);
+            info!(
+                "Snowball: {} sibling release groups for base '{}'",
+                sibling_templates.len(),
+                grp.base_search
+            );
 
             // ── Tier 1: Basic pattern search — PARALLEL (one call per sibling group) ──
             // Build (template, basic_query) pairs, skip empties, fire all at once.
             static RE_EP_QUICK: OnceLock<Regex> = OnceLock::new();
             let re_ep = RE_EP_QUICK.get_or_init(|| Regex::new(r"[Ee](\d{1,3})").unwrap());
 
-            let tier1_pairs: Vec<(String, String)> = sibling_templates.iter()
+            let tier1_pairs: Vec<(String, String)> = sibling_templates
+                .iter()
                 .filter_map(|tmpl| {
                     let basic = extract_basic_pattern(tmpl);
-                    if basic.is_empty() { None } else { Some((tmpl.clone(), basic)) }
+                    if basic.is_empty() {
+                        None
+                    } else {
+                        Some((tmpl.clone(), basic))
+                    }
                 })
                 .collect();
 
-            info!("Snowball Tier1: {} parallel searches for base '{}'",
-                tier1_pairs.len(), grp.base_search);
+            info!(
+                "Snowball Tier1: {} parallel searches for base '{}'",
+                tier1_pairs.len(),
+                grp.base_search
+            );
 
-            let tier1_futures: Vec<_> = tier1_pairs.iter().map(|(_, basic)| {
-                let c = client.clone();
-                let b = basic.clone();
-                async move {
-                    info!("Snowball Tier1 Execute: '{}'", b);
-                    let r = execute_fshare_search(&c, &b, 100).await;
-                    info!("Snowball Tier1 Result: {} files for '{}'", r.len(), b);
-                    r
-                }
-            }).collect();
+            let tier1_futures: Vec<_> = tier1_pairs
+                .iter()
+                .map(|(_, basic)| {
+                    let c = client.clone();
+                    let b = basic.clone();
+                    async move {
+                        info!("Snowball Tier1 Execute: '{}'", b);
+                        let r = execute_fshare_search(&c, &b, 100).await;
+                        info!("Snowball Tier1 Result: {} files for '{}'", r.len(), b);
+                        r
+                    }
+                })
+                .collect();
 
             let tier1_batches = futures_util::future::join_all(tier1_futures).await;
 
@@ -773,7 +917,9 @@ pub async fn handle_tv_search(
                     let pure_fcode = sr.fcode.split('?').next().unwrap_or("").to_string();
                     if seen.insert(pure_fcode) {
                         if let Some(cap) = re_ep.captures(&sr.name) {
-                            if let Ok(ep) = cap[1].parse::<u32>() { sib_eps.insert(ep); }
+                            if let Ok(ep) = cap[1].parse::<u32>() {
+                                sib_eps.insert(ep);
+                            }
                         }
                         results_pool.push(sr);
                     }
@@ -781,46 +927,65 @@ pub async fn handle_tv_search(
             }
 
             // ── Tier 2: Targeted per-episode — PARALLEL (all gaps × all siblings at once)
-            let tier1_found: std::collections::HashSet<u32> = sibling_templates.iter()
+            let tier1_found: std::collections::HashSet<u32> = sibling_templates
+                .iter()
                 .flat_map(|t| snowball_found_eps.get(t).into_iter().flatten().copied())
                 .collect();
 
-            let still_missing: Vec<u32> = missing_eps.iter()
+            let still_missing: Vec<u32> = missing_eps
+                .iter()
                 .copied()
                 .filter(|ep| !tier1_found.contains(ep))
                 .collect();
 
             if still_missing.is_empty() {
-                info!("Snowball Tier2: No remaining gaps after Tier 1 for '{}'", &grp.base_search);
+                info!(
+                    "Snowball Tier2: No remaining gaps after Tier 1 for '{}'",
+                    &grp.base_search
+                );
                 continue;
             }
 
             // Build every (ep × sibling_tmpl) query upfront, cap at 10 eps to bound parallelism
-            let tier2_queries: Vec<String> = still_missing.iter().take(10)
+            let tier2_queries: Vec<String> = still_missing
+                .iter()
+                .take(10)
                 .flat_map(|&ep| {
                     let ep_str = format!("{:03}", ep);
-                    sibling_templates.iter().map(move |tmpl| {
-                        tmpl.replace("{ep}", &ep_str)
-                            .trim_end_matches(|c: char| matches!(c, 'v'|'k'|'m'|'4'|'p'|'i'))
-                            .trim_end_matches('.')
-                            .to_string()
-                    }).collect::<Vec<_>>()
+                    sibling_templates
+                        .iter()
+                        .map(move |tmpl| {
+                            tmpl.replace("{ep}", &ep_str)
+                                .trim_end_matches(|c: char| {
+                                    matches!(c, 'v' | 'k' | 'm' | '4' | 'p' | 'i')
+                                })
+                                .trim_end_matches('.')
+                                .to_string()
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .collect();
 
-            info!("Snowball Tier2: {} parallel targeted searches ({} eps × {} variants)",
-                tier2_queries.len(), still_missing.len().min(10), sibling_templates.len());
+            info!(
+                "Snowball Tier2: {} parallel targeted searches ({} eps × {} variants)",
+                tier2_queries.len(),
+                still_missing.len().min(10),
+                sibling_templates.len()
+            );
 
-            let tier2_futures: Vec<_> = tier2_queries.iter().map(|q| {
-                let c = client.clone();
-                let query = q.clone();
-                async move {
-                    info!("Snowball Tier2 Execute: '{}'", query);
-                    let r = execute_fshare_search(&c, &query, 30).await;
-                    info!("Snowball Tier2 Result: {} files for '{}'", r.len(), query);
-                    r
-                }
-            }).collect();
+            let tier2_futures: Vec<_> = tier2_queries
+                .iter()
+                .map(|q| {
+                    let c = client.clone();
+                    let query = q.clone();
+                    async move {
+                        info!("Snowball Tier2 Execute: '{}'", query);
+                        let r = execute_fshare_search(&c, &query, 30).await;
+                        info!("Snowball Tier2 Result: {} files for '{}'", r.len(), query);
+                        r
+                    }
+                })
+                .collect();
 
             let tier2_batches = futures_util::future::join_all(tier2_futures).await;
 
@@ -835,20 +1000,28 @@ pub async fn handle_tv_search(
         }
     }
 
-    info!("📊 [PERF] Phase 3 (Snowball Logic) took: {:?}\n  → release groups indexed, Tier1 basic + Tier2 targeted per-gap",
-        phase3_start.elapsed());
+    info!(
+        "📊 [PERF] Phase 3 (Snowball Logic) took: {:?}\n  → release groups indexed, Tier1 basic + Tier2 targeted per-gap",
+        phase3_start.elapsed()
+    );
 
-    
     let target_results = results_pool; // Process ALL results, not just first 100
-
 
     // 4. PARSE AND EVALUATE
     let phase4_start = std::time::Instant::now();
     let mut valid_results = Vec::new();
-    
+
     info!("Total files to evaluate: {}", target_results.len());
-    let vn_files: Vec<_> = target_results.iter().filter(|r| r.name.contains("Bộ Bộ")).map(|r| &r.name).collect();
-    info!("Vietnamese files in results: {} - {:?}", vn_files.len(), vn_files);
+    let vn_files: Vec<_> = target_results
+        .iter()
+        .filter(|r| r.name.contains("Bộ Bộ"))
+        .map(|r| &r.name)
+        .collect();
+    info!(
+        "Vietnamese files in results: {} - {:?}",
+        vn_files.len(),
+        vn_files
+    );
 
     for r in target_results {
         let parsed = smart_parse(&r.name);
@@ -858,7 +1031,10 @@ pub async fn handle_tv_search(
             if let Some(file_year) = parsed.year {
                 if let Ok(y_val) = y_req.parse::<u32>() {
                     if (file_year as i32 - y_val as i32).abs() > 1 {
-                        info!("REJECTED Version: '{}' (Year mismatch: {} != {})", r.name, file_year, y_req);
+                        info!(
+                            "REJECTED Version: '{}' (Year mismatch: {} != {})",
+                            r.name, file_year, y_req
+                        );
                         continue;
                     }
                 }
@@ -870,7 +1046,10 @@ pub async fn handle_tv_search(
             // If parser found season/episode, check strict match
             if let (Some(s_file), Some(e_file)) = (parsed.season, parsed.episode) {
                 if s_file != s_req || e_file != e_req {
-                    info!("FILTERED: '{}' - S/E mismatch (file: S{:02}E{:02}, req: S{:02}E{:02})", r.name, s_file, e_file, s_req, e_req);
+                    info!(
+                        "FILTERED: '{}' - S/E mismatch (file: S{:02}E{:02}, req: S{:02}E{:02})",
+                        r.name, s_file, e_file, s_req, e_req
+                    );
                     continue;
                 }
             } else {
@@ -880,24 +1059,25 @@ pub async fn handle_tv_search(
             }
         } else if let Some(s_req) = season {
             // Season pack / Season search
-             if let Some(s_file) = parsed.season {
-                 if s_file != s_req { continue; }
-             }
+            if let Some(s_file) = parsed.season {
+                if s_file != s_req {
+                    continue;
+                }
+            }
         }
-        
-        
+
         let sim = calculate_unified_similarity(&official_name, &r.name, &aliases);
-        
+
         // Debug logging for similarity check
         let _truncated_name: String = r.name.chars().take(80).collect();
-        // info!("SIM: '{}' vs '{}...' => score:{:.2} type:{} valid:{}", 
+        // info!("SIM: '{}' vs '{}...' => score:{:.2} type:{} valid:{}",
         //       official_name, truncated_name, sim.score, sim.match_type, sim.is_valid);
-        
+
         // Filter out invalid matches (like V2 does - Filter 1)
         if !sim.is_valid {
             continue;
         }
-        
+
         // V2's Filter 2: When TMDB ID is available, only accept high-quality matches
         // Valid types: 'alias', 'exact', 'all_keywords'
         // Reject: 'missing_keywords', 'fuzzy', 'franchise_conflict', 'keyword_overlap'
@@ -907,10 +1087,10 @@ pub async fn handle_tv_search(
                 continue;
             }
         }
-        
+
         // PHASE 3: Detect badges
         let (vietdub, vietsub, hdr, dolby_vision) = detect_badges(&r.name);
-        
+
         valid_results.push(SmartSearchResult {
             name: r.name.clone(),
             url: r.url,
@@ -921,7 +1101,11 @@ pub async fn handle_tv_search(
             custom_format_score: parsed.custom_format_score(),
             total_score: parsed.total_score(),
             normalized_score: parsed.normalized_score(),
-            match_type: if sim.is_valid { sim.match_type } else { "tv_match".to_string() },
+            match_type: if sim.is_valid {
+                sim.match_type
+            } else {
+                "tv_match".to_string()
+            },
             quality_attrs: crate::utils::parser::QualityAttributes {
                 resolution: parsed.resolution.clone(),
                 source: parsed.source.clone(),
@@ -934,7 +1118,16 @@ pub async fn handle_tv_search(
                 viet_dub: parsed.viet_dub,
                 is_tv: parsed.media_type == crate::utils::smart_tokenizer::MediaType::TvShow,
                 is_movie: parsed.media_type == crate::utils::smart_tokenizer::MediaType::Movie,
-                is_hd: parsed.resolution.as_ref().map(|r| r.contains("720") || r.contains("1080") || r.contains("2160") || r.contains("4K")).unwrap_or(false),
+                is_hd: parsed
+                    .resolution
+                    .as_ref()
+                    .map(|r| {
+                        r.contains("720")
+                            || r.contains("1080")
+                            || r.contains("2160")
+                            || r.contains("4K")
+                    })
+                    .unwrap_or(false),
             },
             tmdb_id: base_tmdb_id,
             poster_path: base_poster.clone(),
@@ -946,15 +1139,23 @@ pub async fn handle_tv_search(
     }
 
     info!("Valid results count: {}", valid_results.len());
-    let vn_valid: Vec<_> = valid_results.iter().filter(|r| r.name.contains("Bộ Bộ")).map(|r| &r.name).collect();
-    info!("Vietnamese files in valid_results: {} - {:?}", vn_valid.len(), vn_valid);
+    let vn_valid: Vec<_> = valid_results
+        .iter()
+        .filter(|r| r.name.contains("Bộ Bộ"))
+        .map(|r| &r.name)
+        .collect();
+    info!(
+        "Vietnamese files in valid_results: {} - {:?}",
+        vn_valid.len(),
+        vn_valid
+    );
 
     // PHASE 2.1: Sort by match_type first (alias > exact > fuzzy), then by quality
     // This ensures Vietnamese files (alias matches) appear first
     valid_results.sort_by(|a, b| {
         // Prioritize alias matches (Vietnamese files)
         let a_priority = match a.match_type.as_str() {
-            "alias" => 0,      // Highest priority
+            "alias" => 0, // Highest priority
             "exact" => 1,
             "fuzzy" | "keyword_overlap" | "tv_match" => 2,
             _ => 3,
@@ -965,39 +1166,48 @@ pub async fn handle_tv_search(
             "fuzzy" | "keyword_overlap" | "tv_match" => 2,
             _ => 3,
         };
-        
+
         // First compare by match_type priority
         match a_priority.cmp(&b_priority) {
             std::cmp::Ordering::Equal => {
                 // If same match_type, sort by quality score (higher first)
                 b.total_score.cmp(&a.total_score)
-            },
+            }
             other => other,
         }
     });
 
     // Grouping for TV: Seasons -> Episodes -> Files
-    let mut seasons_map: std::collections::HashMap<u32, std::collections::HashMap<u32, Vec<SmartSearchResult>>> = std::collections::HashMap::new();
-    
+    let mut seasons_map: std::collections::HashMap<
+        u32,
+        std::collections::HashMap<u32, Vec<SmartSearchResult>>,
+    > = std::collections::HashMap::new();
+
     for res in valid_results {
         let parsed = smart_parse(&res.name);
-        let s = parsed.season.or(season).unwrap_or(1); 
+        let s = parsed.season.or(season).unwrap_or(1);
         let e = parsed.episode.or(episode).unwrap_or(0);
-        
-        seasons_map.entry(s).or_default()
-            .entry(e).or_default()
+
+        seasons_map
+            .entry(s)
+            .or_default()
+            .entry(e)
+            .or_default()
             .push(res);
     }
 
-
     // PHASE 4: Fetch Episode Metadata from TMDB
-    let mut episode_metadata: std::collections::HashMap<(u32, u32), (String, String, String, String)> = std::collections::HashMap::new();
-    let mut season_episode_counts: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();  // TMDB official episode counts
-    
+    let mut episode_metadata: std::collections::HashMap<
+        (u32, u32),
+        (String, String, String, String),
+    > = std::collections::HashMap::new();
+    let mut season_episode_counts: std::collections::HashMap<u32, u32> =
+        std::collections::HashMap::new(); // TMDB official episode counts
+
     if let Some(tmdb_id) = base_tmdb_id {
         let seasons_to_fetch: Vec<u32> = seasons_map.keys().cloned().collect();
         let mut fetch_tasks = Vec::new();
-        
+
         for s_num in seasons_to_fetch {
             let tmdb_svc = state.tmdb_service.clone();
             let tid = tmdb_id as i64;
@@ -1008,22 +1218,25 @@ pub async fn handle_tv_search(
                 None
             }));
         }
-        
+
         let results = futures_util::future::join_all(fetch_tasks).await;
         for res in results.into_iter().flatten().flatten() {
             let (s_num, data) = res;
             if let Some(episodes) = data["episodes"].as_array() {
                 // Store TMDB official episode count for this season
                 season_episode_counts.insert(s_num, episodes.len() as u32);
-                
+
                 for ep in episodes {
                     if let Some(e_num) = ep["episode_number"].as_u64() {
                         let name = ep["name"].as_str().unwrap_or("").to_string();
                         let overview = ep["overview"].as_str().unwrap_or("").to_string();
                         let air_date = ep["air_date"].as_str().unwrap_or("").to_string();
                         let still_path = ep["still_path"].as_str().unwrap_or("").to_string();
-                        
-                        episode_metadata.insert((s_num, e_num as u32), (name, overview, air_date, still_path));
+
+                        episode_metadata.insert(
+                            (s_num, e_num as u32),
+                            (name, overview, air_date, still_path),
+                        );
                     }
                 }
             }
@@ -1052,7 +1265,7 @@ pub async fn handle_tv_search(
         for (e_num, mut files) in eps_map {
             // Sort files by quality score descending
             files.sort_by(|a, b| b.total_score.cmp(&a.total_score));
-            
+
             let meta = episode_metadata.get(&(s_num, e_num));
 
             // Filter out unreleased episodes.
@@ -1069,7 +1282,10 @@ pub async fn handle_tv_search(
                 if !m.2.is_empty() {
                     if let Ok(date) = chrono::NaiveDate::parse_from_str(&m.2, "%Y-%m-%d") {
                         if date > today {
-                            info!("Filtering unreleased episode S{}E{} (air_date: {} is in future)", s_num, e_num, m.2);
+                            info!(
+                                "Filtering unreleased episode S{}E{} (air_date: {} is in future)",
+                                s_num, e_num, m.2
+                            );
                             continue;
                         }
                     }
@@ -1078,42 +1294,91 @@ pub async fn handle_tv_search(
             }
             // No TMDB metadata at all → unknown, but file exists → show it
 
-            
             episodes_grouped.push(EpisodeGroup {
                 episode_number: e_num,
-                name: meta.map(|m| m.0.clone()).unwrap_or_else(|| format!("Episode {}", e_num)),
-                overview: meta.map(|m| if m.1.is_empty() { None } else { Some(m.1.clone()) }).flatten(),
-                air_date: meta.map(|m| if m.2.is_empty() { None } else { Some(m.2.clone()) }).flatten(),
-                still_path: meta.map(|m| if m.3.is_empty() { None } else { Some(m.3.clone()) }).flatten(),
+                name: meta
+                    .map(|m| m.0.clone())
+                    .unwrap_or_else(|| format!("Episode {}", e_num)),
+                overview: meta
+                    .map(|m| {
+                        if m.1.is_empty() {
+                            None
+                        } else {
+                            Some(m.1.clone())
+                        }
+                    })
+                    .flatten(),
+                air_date: meta
+                    .map(|m| {
+                        if m.2.is_empty() {
+                            None
+                        } else {
+                            Some(m.2.clone())
+                        }
+                    })
+                    .flatten(),
+                still_path: meta
+                    .map(|m| {
+                        if m.3.is_empty() {
+                            None
+                        } else {
+                            Some(m.3.clone())
+                        }
+                    })
+                    .flatten(),
                 files,
             });
         }
         episodes_grouped.sort_by(|a, b| a.episode_number.cmp(&b.episode_number));
-        
+
         seasons.push(SeasonGroup {
             season: s_num,
-            episode_count: season_episode_counts.get(&s_num).copied().unwrap_or(episodes_grouped.len() as u32),
+            episode_count: season_episode_counts
+                .get(&s_num)
+                .copied()
+                .unwrap_or(episodes_grouped.len() as u32),
             aired_episode_count: aired_count,
             episodes_grouped,
         });
     }
     seasons.sort_by(|a, b| a.season.cmp(&b.season));
 
-    info!("Total Optimized TV Smart Search took: {:?}", start_time.elapsed());
+    info!(
+        "Total Optimized TV Smart Search took: {:?}",
+        start_time.elapsed()
+    );
 
     let response = SmartSearchResponse {
         query: query_season,
-        total_found: seasons.iter().map(|s| s.episodes_grouped.iter().map(|e| e.files.len()).sum::<usize>()).sum(),
-        r#type: if episode.is_some() { "episode".to_string() } else { "tv".to_string() },
+        total_found: seasons
+            .iter()
+            .map(|s| {
+                s.episodes_grouped
+                    .iter()
+                    .map(|e| e.files.len())
+                    .sum::<usize>()
+            })
+            .sum(),
+        r#type: if episode.is_some() {
+            "episode".to_string()
+        } else {
+            "tv".to_string()
+        },
         groups: None,
         seasons: Some(seasons),
     };
-    
-    info!("📊 [PERF] Phase 4 (Parse & Evaluate) took: {:?}", phase4_start.elapsed());
+
+    info!(
+        "📊 [PERF] Phase 4 (Parse & Evaluate) took: {:?}",
+        phase4_start.elapsed()
+    );
     info!("📊 [PERF] ========================================");
-    info!("📊 [PERF] TOTAL TV Smart Search took: {:?}", start_time.elapsed());
+    info!(
+        "📊 [PERF] TOTAL TV Smart Search took: {:?}",
+        start_time.elapsed()
+    );
     info!("📊 [PERF] ========================================");
-    
+
     state.search_cache.insert(cache_key, response.clone()).await;
 
     Json(response).into_response()
@@ -1190,7 +1455,10 @@ fn lang_to_countries(lang: &str) -> &'static [&'static str] {
 /// Build a `TmdbEnrichmentCache` from a TV `MediaEnrichment`.
 /// Buckets titles by country code: VN → vn_titles, origin-lang → original_lang_titles,
 /// US → us_titles, everything else → all_aliases (for scoring only).
-fn build_tv_enrichment_cache(enrichment: MediaEnrichment, fallback_title: &str) -> TmdbEnrichmentCache {
+fn build_tv_enrichment_cache(
+    enrichment: MediaEnrichment,
+    fallback_title: &str,
+) -> TmdbEnrichmentCache {
     let official = enrichment.official_name.clone();
     let original_name = enrichment.original_name.clone();
     let original_language = enrichment.original_language.clone();
@@ -1262,7 +1530,10 @@ fn build_tv_enrichment_cache(enrichment: MediaEnrichment, fallback_title: &str) 
 }
 
 /// Build a `TmdbEnrichmentCache` from a Movie `MediaEnrichment`.
-fn build_movie_enrichment_cache(enrichment: MediaEnrichment, fallback_title: &str) -> TmdbEnrichmentCache {
+fn build_movie_enrichment_cache(
+    enrichment: MediaEnrichment,
+    fallback_title: &str,
+) -> TmdbEnrichmentCache {
     let official = enrichment.official_name.clone();
     let original_name = enrichment.original_name.clone();
     let original_language = enrichment.original_language.clone();
@@ -1309,11 +1580,15 @@ fn build_movie_enrichment_cache(enrichment: MediaEnrichment, fallback_title: &st
     }
 
     // Extract collection parts
-    let collections = enrichment.collection.map(|coll| {
-        coll.parts.into_iter()
-            .map(|p| (p.title, String::new(), p.id as u64, None::<String>))
-            .collect()
-    }).unwrap_or_default();
+    let collections = enrichment
+        .collection
+        .map(|coll| {
+            coll.parts
+                .into_iter()
+                .map(|p| (p.title, String::new(), p.id as u64, None::<String>))
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut all_aliases = vn_titles.clone();
     all_aliases.extend(original_lang_titles.iter().cloned());

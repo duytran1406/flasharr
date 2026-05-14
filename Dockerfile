@@ -121,6 +121,10 @@ RUN chmod +x /app/docker-entrypoint.sh
 
 # Set environment variables
 ENV FLASHARR_APPDATA_DIR=/appData \
+    PUID=911 \
+    PGID=911 \
+    UMASK=002 \
+    FLASHARR_RUN_AS_ROOT=false \
     RUST_LOG=flasharr=info,tower_http=info
 
 # Expose application port

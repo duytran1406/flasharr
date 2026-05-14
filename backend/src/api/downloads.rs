@@ -2,19 +2,18 @@
 //!
 //! REST endpoints for managing download tasks.
 
-use axum::{
-    routing::{get, post, delete},
-    Router,
-    Json,
-    extract::{State, Path, Query},
-    http::StatusCode,
-};
-use std::sync::Arc;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-use crate::AppState;
-use crate::downloader::{DownloadTask, DownloadState, EngineStats};
+use crate::downloader::{DownloadState, DownloadTask, EngineStats};
 use crate::utils::status_utils::StatusCounts;
+use crate::AppState;
+use axum::{
+    extract::{Path, Query, State},
+    http::StatusCode,
+    routing::{delete, get, post},
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use uuid::Uuid;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -122,7 +121,6 @@ struct BatchSummariesResponse {
     total_pages: u32,
 }
 
-
 // ============================================================================
 // Request Types
 // ============================================================================
@@ -159,22 +157,21 @@ where
     D: serde::Deserializer<'de>,
 {
     use serde::de::{self, Deserialize};
-    
+
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum YearValue {
         Int(i32),
         String(String),
     }
-    
+
     match Option::<YearValue>::deserialize(deserializer)? {
         None => Ok(None),
         Some(YearValue::Int(i)) => Ok(Some(i)),
-        Some(YearValue::String(s)) => {
-            s.parse::<i32>()
-                .map(Some)
-                .map_err(|_| de::Error::custom(format!("invalid year string: {}", s)))
-        }
+        Some(YearValue::String(s)) => s
+            .parse::<i32>()
+            .map(Some)
+            .map_err(|_| de::Error::custom(format!("invalid year string: {}", s))),
     }
 }
 
@@ -204,7 +201,7 @@ pub struct AddDownloadRequest {
 // ============================================================================
 
 /// GET /api/downloads - List downloads with pagination
-/// 
+///
 /// Query params:
 /// - page: Page number (1-indexed, default 1)
 /// - limit: Items per page (default 20, max 100)
@@ -220,21 +217,33 @@ async fn list_downloads(
     let sort_by = params.sort_by.unwrap_or_else(|| "added".to_string());
     let sort_dir = params.sort_dir.unwrap_or_else(|| "desc".to_string());
     let status_filter = params.status; // None means "all"
-    
+
     // Query from database with pagination, sorting, and optional status filter (async to prevent blocking)
-    let (mut downloads, total) = state.db
-        .get_tasks_paginated_sorted_filtered_async(page, limit, &sort_by, &sort_dir, status_filter.as_deref()).await
+    let (mut downloads, total) = state
+        .db
+        .get_tasks_paginated_sorted_filtered_async(
+            page,
+            limit,
+            &sort_by,
+            &sort_dir,
+            status_filter.as_deref(),
+        )
+        .await
         .unwrap_or_else(|e| {
             tracing::error!("Failed to get tasks from DB: {}", e);
             (Vec::new(), 0)
         });
-    
+
     // Get status counts from database for filter dropdown
     let db_status_counts = state.db.get_status_counts_async().await.unwrap_or_default();
     let status_counts = StatusCounts::from_db_counts(db_status_counts);
 
     // Merge real-time progress from active downloads in memory
-    let active_tasks = state.download_orchestrator.task_manager().get_active_tasks().await;
+    let active_tasks = state
+        .download_orchestrator
+        .task_manager()
+        .get_active_tasks()
+        .await;
     for download in downloads.iter_mut() {
         if let Some(active) = active_tasks.iter().find(|t| t.id == download.id) {
             // Update with real-time data from memory
@@ -248,9 +257,9 @@ async fn list_downloads(
 
     let stats = state.download_orchestrator.task_manager().get_stats().await;
     let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
-    
-    Json(DownloadsResponse { 
-        downloads, 
+
+    Json(DownloadsResponse {
+        downloads,
         stats,
         status_counts,
         total,
@@ -267,7 +276,9 @@ async fn get_download(
 ) -> Result<Json<DownloadTask>, StatusCode> {
     let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    state.download_orchestrator.task_manager()
+    state
+        .download_orchestrator
+        .task_manager()
         .get_task(uuid)
         .await
         .map(Json)
@@ -285,24 +296,31 @@ async fn add_download(
     tracing::info!("[API] Incoming filename: {:?}", payload.filename);
     tracing::info!("[API] Incoming category: {:?}", payload.category);
     if let Some(ref tmdb) = payload.tmdb {
-        tracing::info!("[API] TMDB metadata: tmdb_id={:?}, media_type={:?}, title={:?}, year={:?}, season={:?}, episode={:?}",
-            tmdb.tmdb_id, tmdb.media_type, tmdb.title, tmdb.year, tmdb.season, tmdb.episode);
+        tracing::info!(
+            "[API] TMDB metadata: tmdb_id={:?}, media_type={:?}, title={:?}, year={:?}, season={:?}, episode={:?}",
+            tmdb.tmdb_id,
+            tmdb.media_type,
+            tmdb.title,
+            tmdb.year,
+            tmdb.season,
+            tmdb.episode
+        );
     } else {
         tracing::info!("[API] No TMDB metadata provided");
     }
-    
+
     // Category from payload or derive from TMDB metadata
     // CRITICAL: Trust TMDB media_type over UI's provided category if they mismatch
     let category = if let Some(ref tmdb) = payload.tmdb {
         match tmdb.media_type.as_deref() {
             Some("movie") => "movies".to_string(), // Force to movies if TMDB says so
-            Some("tv") => "tv".to_string(),      // Force to tv if TMDB says so
+            Some("tv") => "tv".to_string(),        // Force to tv if TMDB says so
             _ => payload.category.unwrap_or_else(|| "other".to_string()),
         }
     } else {
         payload.category.unwrap_or_else(|| "other".to_string())
     };
-    
+
     // Normalize filename (strip leading slash) at the API entry point
     let final_filename_api = payload.filename.map(|f| {
         if f.starts_with('/') {
@@ -311,65 +329,109 @@ async fn add_download(
             f
         }
     });
-    
+
     // Convert TMDB metadata to orchestrator format
-    let tmdb_metadata = payload.tmdb.map(|t| crate::downloader::TmdbDownloadMetadata {
-        tmdb_id: t.tmdb_id,
-        media_type: t.media_type,
-        title: t.title,
-        year: t.year,
-        collection_name: t.collection_name,
-        season: t.season,
-        episode: t.episode,
-    });
-    
+    let tmdb_metadata = payload
+        .tmdb
+        .map(|t| crate::downloader::TmdbDownloadMetadata {
+            tmdb_id: t.tmdb_id,
+            media_type: t.media_type,
+            title: t.title,
+            year: t.year,
+            collection_name: t.collection_name,
+            season: t.season,
+            episode: t.episode,
+        });
+
     // Smart Grab Batch Consolidation: Always check for existing batch by name or TMDB ID
-    let (batch_id, batch_name) = if let (Some(provided_batch_id), Some(provided_batch_name)) = 
-        (&payload.batch_id, &payload.batch_name) {
-        
+    let (batch_id, batch_name) = if let (Some(provided_batch_id), Some(provided_batch_name)) =
+        (&payload.batch_id, &payload.batch_name)
+    {
         // Strategy 1: Check if a batch with this NAME already exists
-        let existing_id_by_name = state.db
+        let existing_id_by_name = state
+            .db
             .get_batch_id_by_name_async(provided_batch_name)
             .await
             .ok()
             .flatten();
-        
+
         // Strategy 2: If TMDB ID is available, check if we already have a batch for this show
         let existing_id_by_tmdb = if let Some(ref meta) = tmdb_metadata {
             if let Some(tmdb_id) = meta.tmdb_id {
-                state.db.get_batch_id_by_tmdb_id_async(tmdb_id).await.ok().flatten()
-            } else { None }
-        } else { None };
-        
+                state
+                    .db
+                    .get_batch_id_by_tmdb_id_async(tmdb_id)
+                    .await
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         // Consolidate: Preference to name match, then TMDB match
         if let Some(existing_id) = existing_id_by_name.or(existing_id_by_tmdb) {
-            tracing::info!("Consolidating into existing batch: {} ({})", provided_batch_name, existing_id);
+            tracing::info!(
+                "Consolidating into existing batch: {} ({})",
+                provided_batch_name,
+                existing_id
+            );
             (Some(existing_id), Some(provided_batch_name.clone()))
         } else {
-            tracing::info!("Creating new batch: {} ({})", provided_batch_name, provided_batch_id);
-            (Some(provided_batch_id.clone()), Some(provided_batch_name.clone()))
+            tracing::info!(
+                "Creating new batch: {} ({})",
+                provided_batch_name,
+                provided_batch_id
+            );
+            (
+                Some(provided_batch_id.clone()),
+                Some(provided_batch_name.clone()),
+            )
         }
     } else if let Some(ref meta) = tmdb_metadata {
         // No batch info provided - auto-generate for TV episodes belonging to a series
         if meta.media_type.as_deref() == Some("tv") {
-            let auto_batch_name = meta.title.clone().unwrap_or_else(|| "Unknown Show".to_string());
-            
+            let auto_batch_name = meta
+                .title
+                .clone()
+                .unwrap_or_else(|| "Unknown Show".to_string());
+
             // Try to find existing batch for this TMDB ID first (most reliable for TV series)
             let existing_id = if let Some(tmdb_id) = meta.tmdb_id {
-                state.db.get_batch_id_by_tmdb_id_async(tmdb_id).await.ok().flatten()
+                state
+                    .db
+                    .get_batch_id_by_tmdb_id_async(tmdb_id)
+                    .await
+                    .ok()
+                    .flatten()
             } else {
-                state.db.get_batch_id_by_name_async(&auto_batch_name).await.ok().flatten()
+                state
+                    .db
+                    .get_batch_id_by_name_async(&auto_batch_name)
+                    .await
+                    .ok()
+                    .flatten()
             };
-            
+
             let auto_batch_id = if let Some(id) = existing_id {
-                tracing::info!("Reusing existing series batch: {} ({})", auto_batch_name, id);
+                tracing::info!(
+                    "Reusing existing series batch: {} ({})",
+                    auto_batch_name,
+                    id
+                );
                 id
             } else {
                 let new_id = uuid::Uuid::new_v4().to_string();
-                tracing::info!("Creating new series batch: {} ({})", auto_batch_name, new_id);
+                tracing::info!(
+                    "Creating new series batch: {} ({})",
+                    auto_batch_name,
+                    new_id
+                );
                 new_id
             };
-            
+
             (Some(auto_batch_id), Some(auto_batch_name))
         } else {
             (None, None)
@@ -377,16 +439,20 @@ async fn add_download(
     } else {
         (None, None)
     };
-    
-    let task = match state.download_orchestrator.add_download_with_metadata(
-        payload.url,
-        final_filename_api,
-        "fshare".to_string(),
-        category,
-        tmdb_metadata,
-        batch_id,
-        batch_name,
-    ).await {
+
+    let task = match state
+        .download_orchestrator
+        .add_download_with_metadata(
+            payload.url,
+            final_filename_api,
+            "fshare".to_string(),
+            category,
+            tmdb_metadata,
+            batch_id,
+            batch_name,
+        )
+        .await
+    {
         Ok(task) => task,
         Err(e) => {
             let error_msg = format!("{}", e);
@@ -398,7 +464,7 @@ async fn add_download(
             return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed: {}", e)));
         }
     };
-    
+
     // Return full task object so frontend gets batch_id, batch_name, etc.
     Ok(Json(task))
 }
@@ -411,7 +477,11 @@ async fn delete_download(
     let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     // Delete from in-memory task manager (may not exist if task is queued/failed)
-    let in_memory = state.download_orchestrator.task_manager().delete_task(uuid).await;
+    let in_memory = state
+        .download_orchestrator
+        .task_manager()
+        .delete_task(uuid)
+        .await;
 
     // Always try to delete from database (task might exist in DB but not in memory)
     let from_db = match state.db.delete_task(uuid) {
@@ -426,15 +496,19 @@ async fn delete_download(
     };
 
     let success = in_memory || from_db;
-    
+
     // Broadcast TASK_REMOVED to frontend if deleted from either location
     if success {
         state.download_orchestrator.broadcast_task_removed(&id);
     }
-    
+
     Ok(Json(ActionResponse {
         success,
-        message: if success { None } else { Some("Task not found".to_string()) },
+        message: if success {
+            None
+        } else {
+            Some("Task not found".to_string())
+        },
     }))
 }
 
@@ -445,7 +519,11 @@ async fn pause_download(
 ) -> Result<Json<ActionResponse>, StatusCode> {
     let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let task_result = state.download_orchestrator.task_manager().pause_task(uuid).await;
+    let task_result = state
+        .download_orchestrator
+        .task_manager()
+        .pause_task(uuid)
+        .await;
     let success = task_result.is_some();
 
     // Broadcast state change if successful
@@ -470,7 +548,11 @@ async fn resume_download(
 ) -> Result<Json<ActionResponse>, StatusCode> {
     let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let task_result = state.download_orchestrator.task_manager().resume_task(uuid).await;
+    let task_result = state
+        .download_orchestrator
+        .task_manager()
+        .resume_task(uuid)
+        .await;
     let success = task_result.is_some();
 
     // Broadcast state change if successful
@@ -498,7 +580,11 @@ async fn retry_download(
     let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     // For retry, we handle failed/cancelled tasks
-    let task_result = state.download_orchestrator.task_manager().retry_task(uuid).await;
+    let task_result = state
+        .download_orchestrator
+        .task_manager()
+        .retry_task(uuid)
+        .await;
     let success = task_result.is_some();
 
     // Wake idle workers to process the retried task
@@ -522,7 +608,7 @@ async fn redownload_download(
     Path(id): Path<String>,
 ) -> Result<Json<ActionResponse>, StatusCode> {
     let uuid = Uuid::parse_str(&id).map_err(|_| StatusCode::BAD_REQUEST)?;
-    
+
     match state.download_orchestrator.redownload_task(uuid).await {
         Ok(_) => Ok(Json(ActionResponse {
             success: true,
@@ -540,11 +626,9 @@ async fn redownload_download(
 
 /// POST /api/downloads/pause-all - Pause all active downloads
 /// Delegates to Orchestrator which handles: DB (atomic) → TaskManager → Broadcast
-async fn pause_all(
-    State(state): State<Arc<AppState>>,
-) -> Json<BulkActionResponse> {
+async fn pause_all(State(state): State<Arc<AppState>>) -> Json<BulkActionResponse> {
     let affected = state.download_orchestrator.pause_all_async().await;
-    
+
     Json(BulkActionResponse {
         success: true,
         affected,
@@ -553,11 +637,9 @@ async fn pause_all(
 
 /// POST /api/downloads/resume-all - Resume all paused downloads
 /// Delegates to Orchestrator which handles: DB (atomic) → TaskManager → Broadcast → Wake
-async fn resume_all(
-    State(state): State<Arc<AppState>>,
-) -> Json<BulkActionResponse> {
+async fn resume_all(State(state): State<Arc<AppState>>) -> Json<BulkActionResponse> {
     let affected = state.download_orchestrator.resume_all_async().await;
-    
+
     Json(BulkActionResponse {
         success: true,
         affected,
@@ -565,9 +647,7 @@ async fn resume_all(
 }
 
 /// GET /api/downloads/stats - Get engine statistics
-async fn get_stats(
-    State(state): State<Arc<AppState>>,
-) -> Json<EngineStats> {
+async fn get_stats(State(state): State<Arc<AppState>>) -> Json<EngineStats> {
     Json(state.download_orchestrator.task_manager().get_stats().await)
 }
 
@@ -581,10 +661,16 @@ async fn pause_batch(
     Path(batch_id): Path<String>,
 ) -> Json<BulkActionResponse> {
     match state.download_service.pause_batch(&batch_id).await {
-        Ok(affected) => Json(BulkActionResponse { success: true, affected }),
+        Ok(affected) => Json(BulkActionResponse {
+            success: true,
+            affected,
+        }),
         Err(e) => {
             tracing::error!("Failed to pause batch {}: {}", batch_id, e);
-            Json(BulkActionResponse { success: false, affected: 0 })
+            Json(BulkActionResponse {
+                success: false,
+                affected: 0,
+            })
         }
     }
 }
@@ -595,10 +681,16 @@ async fn resume_batch(
     Path(batch_id): Path<String>,
 ) -> Json<BulkActionResponse> {
     match state.download_service.resume_batch(&batch_id).await {
-        Ok(affected) => Json(BulkActionResponse { success: true, affected }),
+        Ok(affected) => Json(BulkActionResponse {
+            success: true,
+            affected,
+        }),
         Err(e) => {
             tracing::error!("Failed to resume batch {}: {}", batch_id, e);
-            Json(BulkActionResponse { success: false, affected: 0 })
+            Json(BulkActionResponse {
+                success: false,
+                affected: 0,
+            })
         }
     }
 }
@@ -609,10 +701,16 @@ async fn delete_batch(
     Path(batch_id): Path<String>,
 ) -> Json<BulkActionResponse> {
     match state.download_service.delete_batch(&batch_id).await {
-        Ok(affected) => Json(BulkActionResponse { success: true, affected }),
+        Ok(affected) => Json(BulkActionResponse {
+            success: true,
+            affected,
+        }),
         Err(e) => {
             tracing::error!("Failed to delete batch {}: {}", batch_id, e);
-            Json(BulkActionResponse { success: false, affected: 0 })
+            Json(BulkActionResponse {
+                success: false,
+                affected: 0,
+            })
         }
     }
 }
@@ -622,14 +720,24 @@ async fn redownload_batch(
     State(state): State<Arc<AppState>>,
     Path(batch_id): Path<String>,
 ) -> Json<BulkActionResponse> {
-    match state.download_orchestrator.redownload_batch_async(batch_id.clone()).await {
+    match state
+        .download_orchestrator
+        .redownload_batch_async(batch_id.clone())
+        .await
+    {
         Ok(affected) => {
             tracing::info!("Re-downloaded batch {}: {} tasks", batch_id, affected);
-            Json(BulkActionResponse { success: true, affected })
+            Json(BulkActionResponse {
+                success: true,
+                affected,
+            })
         }
         Err(e) => {
             tracing::error!("Failed to re-download batch {}: {}", batch_id, e);
-            Json(BulkActionResponse { success: false, affected: 0 })
+            Json(BulkActionResponse {
+                success: false,
+                affected: 0,
+            })
         }
     }
 }
@@ -663,43 +771,61 @@ async fn get_batch_progress(
     let all_tasks = state.download_orchestrator.task_manager().get_tasks().await;
 
     // Filter tasks by batch_id
-    let batch_tasks: Vec<_> = all_tasks.iter()
+    let batch_tasks: Vec<_> = all_tasks
+        .iter()
         .filter(|t| t.batch_id.as_deref() == Some(&batch_id))
         .collect();
-    
+
     if batch_tasks.is_empty() {
         return Err(StatusCode::NOT_FOUND);
     }
-    
+
     let batch_name = batch_tasks[0].batch_name.clone().unwrap_or_default();
     let total_tasks = batch_tasks.len();
-    
+
     // Count by state
-    let completed_tasks = batch_tasks.iter().filter(|t| matches!(t.state, DownloadState::Completed)).count();
-    let failed_tasks = batch_tasks.iter().filter(|t| matches!(t.state, DownloadState::Failed)).count();
-    let downloading_tasks = batch_tasks.iter().filter(|t| matches!(t.state, DownloadState::Downloading)).count();
-    let paused_tasks = batch_tasks.iter().filter(|t| matches!(t.state, DownloadState::Paused)).count();
-    let queued_tasks = batch_tasks.iter().filter(|t| matches!(t.state, DownloadState::Queued)).count();
-    
+    let completed_tasks = batch_tasks
+        .iter()
+        .filter(|t| matches!(t.state, DownloadState::Completed))
+        .count();
+    let failed_tasks = batch_tasks
+        .iter()
+        .filter(|t| matches!(t.state, DownloadState::Failed))
+        .count();
+    let downloading_tasks = batch_tasks
+        .iter()
+        .filter(|t| matches!(t.state, DownloadState::Downloading))
+        .count();
+    let paused_tasks = batch_tasks
+        .iter()
+        .filter(|t| matches!(t.state, DownloadState::Paused))
+        .count();
+    let queued_tasks = batch_tasks
+        .iter()
+        .filter(|t| matches!(t.state, DownloadState::Queued))
+        .count();
+
     // Calculate totals
     let total_size: u64 = batch_tasks.iter().map(|t| t.size).sum();
-    let downloaded_size: u64 = batch_tasks.iter()
+    let downloaded_size: u64 = batch_tasks
+        .iter()
         .map(|t| ((t.progress as f64 / 100.0) * t.size as f64) as u64)
         .sum();
-    
+
     // Calculate overall progress
     let overall_progress = if total_size > 0 {
         (downloaded_size as f64 / total_size as f64 * 100.0) as f32
     } else {
         0.0
     };
-    
+
     // Calculate combined speed (only downloading tasks)
-    let combined_speed: f64 = batch_tasks.iter()
+    let combined_speed: f64 = batch_tasks
+        .iter()
         .filter(|t| matches!(t.state, DownloadState::Downloading))
         .map(|t| t.speed)
         .sum();
-    
+
     // Calculate ETA
     let remaining_bytes = total_size.saturating_sub(downloaded_size);
     let estimated_time_remaining = if combined_speed > 0.0 {
@@ -707,7 +833,7 @@ async fn get_batch_progress(
     } else {
         0.0
     };
-    
+
     Ok(Json(BatchProgress {
         batch_id,
         batch_name,
@@ -738,17 +864,23 @@ async fn list_batch_summaries(
     let page = params.page.unwrap_or(1).max(1);
     let limit = params.limit.unwrap_or(20).min(100).max(1);
     let status_filter = params.status;
-    
+
     // Get batch summaries from database
-    let (batches, standalone, total_batches, total_standalone) = state.db
-        .get_batch_summaries_paginated_async(page, limit, status_filter.as_deref()).await
+    let (batches, standalone, total_batches, total_standalone) = state
+        .db
+        .get_batch_summaries_paginated_async(page, limit, status_filter.as_deref())
+        .await
         .unwrap_or_else(|e| {
             tracing::error!("Failed to get batch summaries from DB: {}", e);
             (Vec::new(), Vec::new(), 0, 0)
         });
-    
+
     // Merge real-time progress from active downloads for standalone items
-    let active_tasks = state.download_orchestrator.task_manager().get_active_tasks().await;
+    let active_tasks = state
+        .download_orchestrator
+        .task_manager()
+        .get_active_tasks()
+        .await;
     let mut standalone_with_realtime = standalone;
     for download in standalone_with_realtime.iter_mut() {
         if let Some(active) = active_tasks.iter().find(|t| t.id == download.id) {
@@ -759,31 +891,32 @@ async fn list_batch_summaries(
             download.state = active.state;
         }
     }
-    
+
     // Update batch speeds and real-time progress from active tasks
     let mut batches_with_realtime = batches;
     for batch in batches_with_realtime.iter_mut() {
         // Find all active tasks belonging to this batch
-        let batch_active: Vec<_> = active_tasks.iter()
+        let batch_active: Vec<_> = active_tasks
+            .iter()
             .filter(|t| t.batch_id.as_ref() == Some(&batch.batch_id))
             .collect();
-            
+
         if !batch_active.is_empty() {
             let mut live_speed: f64 = 0.0;
             let mut live_downloaded: u64 = 0;
-            
+
             for task in &batch_active {
                 live_speed += task.speed;
                 live_downloaded += task.downloaded;
             }
-            
+
             batch.speed = live_speed;
-            
+
             // Fix double-counting: The DB query summed 'downloaded' for ALL tasks including active ones.
             // But for active tasks, the DB value is stale. We need to:
             // 1. Subtract the number of active tasks * their stale DB contribution (usually 0)
             // 2. Add the live values from memory
-            // 
+            //
             // Since active tasks typically have 0 in DB until paused/completed, the DB sum
             // represents completed tasks. Adding live_downloaded gives us the accurate total.
             // However, if tasks were resumed with partial progress saved, we might double-count.
@@ -796,14 +929,15 @@ async fn list_batch_summaries(
             // so batch.downloaded_size is already "completed + paused" progress.
             // We just add live progress for currently active tasks.
             batch.downloaded_size += live_downloaded;
-            
+
             // Recalculate progress
             if batch.total_size > 0 {
-                batch.progress = (batch.downloaded_size as f64 / batch.total_size as f64 * 100.0) as f32;
+                batch.progress =
+                    (batch.downloaded_size as f64 / batch.total_size as f64 * 100.0) as f32;
             }
         }
     }
-    
+
     // Get status counts from database
     let db_status_counts = state.db.get_status_counts_async().await.unwrap_or_default();
     let status_counts = StatusCounts::from_db_counts(db_status_counts);
@@ -838,13 +972,17 @@ async fn get_batch_items(
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
         }
     };
-    
+
     if tasks.is_empty() {
         return Err(StatusCode::NOT_FOUND);
     }
-    
+
     // Merge real-time progress from active downloads
-    let active_tasks = state.download_orchestrator.task_manager().get_active_tasks().await;
+    let active_tasks = state
+        .download_orchestrator
+        .task_manager()
+        .get_active_tasks()
+        .await;
     let mut tasks_with_realtime = tasks;
     for task in tasks_with_realtime.iter_mut() {
         if let Some(active) = active_tasks.iter().find(|t| t.id == task.id) {
@@ -855,7 +993,7 @@ async fn get_batch_items(
             task.state = active.state;
         }
     }
-    
+
     Ok(Json(tasks_with_realtime))
 }
 
@@ -880,19 +1018,25 @@ struct BackfillResponse {
 }
 
 /// POST /api/downloads/backfill
-/// Re-process all completed downloads: look up Sonarr/Radarr paths and create symlinks.
-async fn backfill_arr_paths(
-    State(state): State<Arc<AppState>>,
-) -> Json<BackfillResponse> {
+/// Re-process all completed downloads: request Sonarr/Radarr import and poll for confirmation.
+async fn backfill_arr_paths(State(state): State<Arc<AppState>>) -> Json<BackfillResponse> {
     let results = state.download_orchestrator.backfill_arr_paths().await;
 
     let total_processed = results.len();
-    let linked = results.iter().filter(|(_, _, s)| s.starts_with("linked")).count();
+    let linked = results
+        .iter()
+        .filter(|(_, _, s)| s.starts_with("import confirmed"))
+        .count();
     let skipped = total_processed - linked;
 
-    let details: Vec<BackfillResult> = results.into_iter().map(|(id, name, status)| {
-        BackfillResult { task_id: id, filename: name, status }
-    }).collect();
+    let details: Vec<BackfillResult> = results
+        .into_iter()
+        .map(|(id, name, status)| BackfillResult {
+            task_id: id,
+            filename: name,
+            status,
+        })
+        .collect();
 
     Json(BackfillResponse {
         success: true,

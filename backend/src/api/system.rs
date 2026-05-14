@@ -2,17 +2,12 @@
 //!
 //! System information and health endpoints.
 
-use axum::{
-    routing::get,
-    Router,
-    Json,
-    extract::Query,
-};
+use crate::AppState;
+use axum::{extract::Query, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::fs;
 use std::path::Path;
-use crate::AppState;
+use std::sync::Arc;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -72,7 +67,7 @@ async fn get_version() -> Json<VersionResponse> {
         .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
         .trim()
         .to_string();
-    
+
     Json(VersionResponse {
         version,
         rust_version: "1.75+",
@@ -81,18 +76,12 @@ async fn get_version() -> Json<VersionResponse> {
 }
 
 /// GET /api/system/logs - Get recent log entries
-async fn get_logs(
-    Query(params): Query<LogsQuery>,
-) -> Json<LogsResponse> {
+async fn get_logs(Query(params): Query<LogsQuery>) -> Json<LogsResponse> {
     let lines = params.lines.min(1000); // Cap at 1000 lines
-    
+
     // Try to read log file
-    let log_paths = [
-        "data/flasharr.log",
-        "../data/flasharr.log",
-        "flasharr.log",
-    ];
-    
+    let log_paths = ["data/flasharr.log", "../data/flasharr.log", "flasharr.log"];
+
     let mut log_content = String::new();
     for path in log_paths {
         if Path::new(path).exists() {
@@ -102,24 +91,24 @@ async fn get_logs(
             }
         }
     }
-    
+
     // Parse log entries (simple line-based parsing)
     let log_lines: Vec<&str> = log_content.lines().rev().take(lines).collect();
     let mut logs: Vec<LogEntry> = Vec::new();
-    
+
     for line in log_lines.into_iter().rev() {
         // Simple parsing: assume format "TIMESTAMP - LEVEL - MESSAGE"
         let parts: Vec<&str> = line.splitn(3, " - ").collect();
         if parts.len() >= 3 {
             let level = parts[1].to_uppercase();
-            
+
             // Filter by level if specified
             if let Some(ref filter_level) = params.level {
                 if !level.contains(&filter_level.to_uppercase()) {
                     continue;
                 }
             }
-            
+
             logs.push(LogEntry {
                 timestamp: parts[0].to_string(),
                 level,
@@ -134,7 +123,7 @@ async fn get_logs(
             });
         }
     }
-    
+
     let total = logs.len();
     Json(LogsResponse { logs, total })
 }

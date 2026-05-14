@@ -5,19 +5,18 @@
 //! The scan endpoint fetches folders via the Fshare v3 API (returns XML) and
 //! parses subfolder names to detect movies or TV series.
 
-use axum::{
-    routing::{get, put, post},
-    Router,
-    Json,
-    extract::{State, Query},
-};
-use std::sync::Arc;
-use serde::{Deserialize, Serialize};
-use quick_xml::Reader;
-use quick_xml::events::Event;
-use crate::AppState;
-use crate::utils::parser::FilenameParser;
 use crate::db::sqlite::CachedFolderItem;
+use crate::utils::parser::FilenameParser;
+use crate::AppState;
+use axum::{
+    extract::{Query, State},
+    routing::{get, post, put},
+    Json, Router,
+};
+use quick_xml::events::Event;
+use quick_xml::Reader;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
@@ -53,7 +52,7 @@ struct FshareXmlItem {
     id: String,
     linkcode: String,
     name: String,
-    r#type: String,    // "0" = folder, "1" = file
+    r#type: String, // "0" = folder, "1" = file
     size: String,
     mimetype: String,
     path: String,
@@ -138,10 +137,10 @@ struct SearchResponse {
 // ============================================================================
 
 /// GET /api/folder-source/config — Get the configured Gist URL
-async fn get_folder_source_config(
-    State(state): State<Arc<AppState>>,
-) -> Json<FolderSourceConfig> {
-    let gist_url = state.db.get_setting("folder_sources_gist_url")
+async fn get_folder_source_config(State(state): State<Arc<AppState>>) -> Json<FolderSourceConfig> {
+    let gist_url = state
+        .db
+        .get_setting("folder_sources_gist_url")
         .ok()
         .flatten()
         .unwrap_or_default();
@@ -154,7 +153,10 @@ async fn update_folder_source_config(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<FolderSourceConfig>,
 ) -> Json<ActionResponse> {
-    match state.db.save_setting("folder_sources_gist_url", &payload.gist_url) {
+    match state
+        .db
+        .save_setting("folder_sources_gist_url", &payload.gist_url)
+    {
         Ok(_) => {
             tracing::info!("[FOLDER-SOURCE] Saved gist URL: {}", payload.gist_url);
             Json(ActionResponse {
@@ -173,10 +175,10 @@ async fn update_folder_source_config(
 }
 
 /// POST /api/folder-source/scan — Fetch and parse all folder sources
-async fn scan_folder_sources(
-    State(state): State<Arc<AppState>>,
-) -> Json<ScanResponse> {
-    let gist_url = state.db.get_setting("folder_sources_gist_url")
+async fn scan_folder_sources(State(state): State<Arc<AppState>>) -> Json<ScanResponse> {
+    let gist_url = state
+        .db
+        .get_setting("folder_sources_gist_url")
         .ok()
         .flatten()
         .unwrap_or_default();
@@ -199,7 +201,10 @@ async fn scan_folder_sources(
     let entries: Vec<FolderSourceEntry> = match client.get(&gist_url).send().await {
         Ok(resp) => {
             if !resp.status().is_success() {
-                tracing::error!("[FOLDER-SOURCE] Gist fetch failed with status: {}", resp.status());
+                tracing::error!(
+                    "[FOLDER-SOURCE] Gist fetch failed with status: {}",
+                    resp.status()
+                );
                 return Json(ScanResponse {
                     sources: vec![],
                     total_sources: 0,
@@ -225,7 +230,10 @@ async fn scan_folder_sources(
         }
     };
 
-    tracing::info!("[FOLDER-SOURCE] Found {} folder entries in gist", entries.len());
+    tracing::info!(
+        "[FOLDER-SOURCE] Found {} folder entries in gist",
+        entries.len()
+    );
 
     // Step 2: For each folder, call v3 API and parse contents
     let mut sources = Vec::new();
@@ -278,9 +286,7 @@ async fn search_folder_cache(
 }
 
 /// POST /api/folder-source/sync — Manually trigger a full cache sync
-async fn trigger_sync(
-    State(state): State<Arc<AppState>>,
-) -> Json<ActionResponse> {
+async fn trigger_sync(State(state): State<Arc<AppState>>) -> Json<ActionResponse> {
     let service = Arc::clone(&state.folder_cache_service);
 
     // Spawn the sync in background so the endpoint returns immediately
@@ -290,7 +296,10 @@ async fn trigger_sync(
             Ok(report) => {
                 tracing::info!(
                     "[FOLDER-SOURCE] Manual sync complete: {} items from {} sources ({} folders) in {:.1}s",
-                    report.total_items, report.total_sources, report.total_folders_scanned, report.duration_secs
+                    report.total_items,
+                    report.total_sources,
+                    report.total_folders_scanned,
+                    report.duration_secs
                 );
             }
             Err(e) => {
@@ -376,30 +385,57 @@ fn parse_folder_json(json_text: &str) -> (Vec<FshareXmlItem>, bool) {
     let mut items = Vec::new();
     if let Some(arr) = parsed.get("items").and_then(|v| v.as_array()) {
         for item in arr {
-            let linkcode = item.get("linkcode").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            if linkcode.is_empty() || name.is_empty() { continue; }
+            let linkcode = item
+                .get("linkcode")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if linkcode.is_empty() || name.is_empty() {
+                continue;
+            }
 
-            let id = item.get("id").map(|v| match v {
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::String(s) => s.clone(),
-                _ => String::new(),
-            }).unwrap_or_default();
+            let id = item
+                .get("id")
+                .map(|v| match v {
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::String(s) => s.clone(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
 
-            let item_type = item.get("type").map(|v| match v {
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::String(s) => s.clone(),
-                _ => String::new(),
-            }).unwrap_or_default();
+            let item_type = item
+                .get("type")
+                .map(|v| match v {
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::String(s) => s.clone(),
+                    _ => String::new(),
+                })
+                .unwrap_or_default();
 
-            let size = item.get("size").map(|v| match v {
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::String(s) => s.clone(),
-                _ => "0".to_string(),
-            }).unwrap_or_else(|| "0".to_string());
+            let size = item
+                .get("size")
+                .map(|v| match v {
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::String(s) => s.clone(),
+                    _ => "0".to_string(),
+                })
+                .unwrap_or_else(|| "0".to_string());
 
-            let mimetype = item.get("mimetype").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let path = item.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let mimetype = item
+                .get("mimetype")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let path = item
+                .get("path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             items.push(FshareXmlItem {
                 id,
@@ -413,7 +449,8 @@ fn parse_folder_json(json_text: &str) -> (Vec<FshareXmlItem>, bool) {
         }
     }
 
-    let has_next = parsed.get("_links")
+    let has_next = parsed
+        .get("_links")
         .and_then(|links| links.get("next"))
         .map(|next| !next.is_null())
         .unwrap_or(false);
@@ -519,7 +556,11 @@ async fn scan_single_folder(
         }
     };
 
-    tracing::info!("[FOLDER-SOURCE] Scanning folder '{}' (code: {})", entry.label, folder_code);
+    tracing::info!(
+        "[FOLDER-SOURCE] Scanning folder '{}' (code: {})",
+        entry.label,
+        folder_code
+    );
 
     let mut all_items = Vec::new();
     let mut page = 1; // Fshare v3 API pages start from 1
@@ -537,7 +578,8 @@ async fn scan_single_folder(
         ];
 
         // Extract token from URL if present
-        let token_value = entry.folder_url
+        let token_value = entry
+            .folder_url
             .split('?')
             .nth(1)
             .and_then(|qs| qs.split('&').find(|p| p.starts_with("token=")))
@@ -549,16 +591,24 @@ async fn scan_single_folder(
             query_params.push(("token", &token_value));
         }
 
-        let resp = match client.get("https://www.fshare.vn/api/v3/files/folder")
+        let resp = match client
+            .get("https://www.fshare.vn/api/v3/files/folder")
             .query(&query_params)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            .header(
+                "User-Agent",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            )
             .timeout(std::time::Duration::from_secs(15))
             .send()
             .await
         {
             Ok(r) => r,
             Err(e) => {
-                tracing::error!("[FOLDER-SOURCE] V3 API request failed for {}: {}", folder_code, e);
+                tracing::error!(
+                    "[FOLDER-SOURCE] V3 API request failed for {}: {}",
+                    folder_code,
+                    e
+                );
                 return FolderSourceResult {
                     category: entry.category.clone(),
                     label: entry.label.clone(),
@@ -571,14 +621,22 @@ async fn scan_single_folder(
         };
 
         if !resp.status().is_success() {
-            tracing::error!("[FOLDER-SOURCE] V3 API returned status {} for {}", resp.status(), folder_code);
+            tracing::error!(
+                "[FOLDER-SOURCE] V3 API returned status {} for {}",
+                resp.status(),
+                folder_code
+            );
             break;
         }
 
         let body = match resp.text().await {
             Ok(t) => t,
             Err(e) => {
-                tracing::error!("[FOLDER-SOURCE] Failed to read response body for {}: {}", folder_code, e);
+                tracing::error!(
+                    "[FOLDER-SOURCE] Failed to read response body for {}: {}",
+                    folder_code,
+                    e
+                );
                 break;
             }
         };
@@ -591,7 +649,12 @@ async fn scan_single_folder(
             break;
         }
 
-        tracing::info!("[FOLDER-SOURCE] Page {}: {} items from folder '{}'", page, xml_items.len(), entry.label);
+        tracing::info!(
+            "[FOLDER-SOURCE] Page {}: {} items from folder '{}'",
+            page,
+            xml_items.len(),
+            entry.label
+        );
 
         for xml_item in &xml_items {
             // type "0" = folder, "1" = file in Fshare v3
@@ -632,13 +695,20 @@ async fn scan_single_folder(
 
         // Safety limit
         if page > 100 {
-            tracing::warn!("[FOLDER-SOURCE] Hit pagination safety limit for folder '{}'", entry.label);
+            tracing::warn!(
+                "[FOLDER-SOURCE] Hit pagination safety limit for folder '{}'",
+                entry.label
+            );
             break;
         }
     }
 
     let total_items = all_items.len();
-    tracing::info!("[FOLDER-SOURCE] Folder '{}' scanned: {} total items", entry.label, total_items);
+    tracing::info!(
+        "[FOLDER-SOURCE] Folder '{}' scanned: {} total items",
+        entry.label,
+        total_items
+    );
 
     FolderSourceResult {
         category: entry.category.clone(),
@@ -730,12 +800,21 @@ mod tests {
 
         // Verify first item
         assert_eq!(items[0].linkcode, "VE41H65WVF9M");
-        assert_eq!(items[0].name, "Reality Z - Chương Trình Thực Tế Z Season 1_Việt Sub");
+        assert_eq!(
+            items[0].name,
+            "Reality Z - Chương Trình Thực Tế Z Season 1_Việt Sub"
+        );
         assert_eq!(items[0].r#type, "0");
 
         // Verify parsing of standard release format
-        assert_eq!(items[1].name, "Traces.S01.1080p.AMZN.WEBRip.DDP2.0.x264-Cinefeel");
-        assert_eq!(items[2].name, "Mrs.America.S01.1080p.AMZN.WEBRip.DDP5.1.x264-NTb");
+        assert_eq!(
+            items[1].name,
+            "Traces.S01.1080p.AMZN.WEBRip.DDP2.0.x264-Cinefeel"
+        );
+        assert_eq!(
+            items[2].name,
+            "Mrs.America.S01.1080p.AMZN.WEBRip.DDP5.1.x264-NTb"
+        );
     }
 
     #[test]

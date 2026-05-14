@@ -15,7 +15,8 @@ export type DownloadState =
   | 'FAILED'
   | 'CANCELLED'
   | 'EXTRACTING'
-  | 'SKIPPED';
+  | 'SKIPPED'
+  | 'IMPORTING';
 
 /**
  * Status priority for urgency-based sorting (lower = higher priority)
@@ -26,6 +27,7 @@ export const STATUS_PRIORITY: Record<DownloadState, number> = {
   CANCELLED: 2,   // User-cancelled, may want to re-add
   DOWNLOADING: 3, // Active, consuming bandwidth
   EXTRACTING: 4,  // Post-download, still working
+  IMPORTING: 4.5, // Remapping and notifying Sonarr/Radarr
   STARTING: 5,    // Transitional to DOWNLOADING
   WAITING: 6,     // Rate-limited, auto-retry soon
   PAUSED: 7,      // User-initiated freeze
@@ -316,7 +318,7 @@ class DownloadStore {
 
   /** Active downloads */
   activeDownloadsList: DownloadTask[] = $derived.by(() =>
-    this.downloadList.filter(d => d.state === 'DOWNLOADING' || d.state === 'STARTING')
+    this.downloadList.filter(d => d.state === 'DOWNLOADING' || d.state === 'STARTING' || d.state === 'IMPORTING')
   );
 
   /** Queued downloads */
@@ -347,7 +349,7 @@ class DownloadStore {
    * Clear error_message when a task enters a working/active state.
    */
   private clearErrorIfActive(task: DownloadTask): DownloadTask {
-    const activeStates: DownloadState[] = ['QUEUED', 'STARTING', 'DOWNLOADING', 'EXTRACTING', 'WAITING'];
+    const activeStates: DownloadState[] = ['QUEUED', 'STARTING', 'DOWNLOADING', 'EXTRACTING', 'WAITING', 'IMPORTING'];
     if (activeStates.includes(task.state)) {
       return { ...task, error_message: null };
     }
@@ -360,7 +362,7 @@ class DownloadStore {
   private getStateBucket(
     state: DownloadState
   ): 'downloading_items' | 'paused_items' | 'queued_items' | 'completed_items' | 'failed_items' | null {
-    if (state === 'DOWNLOADING' || state === 'STARTING' || state === 'EXTRACTING') return 'downloading_items';
+    if (state === 'DOWNLOADING' || state === 'STARTING' || state === 'EXTRACTING' || state === 'IMPORTING') return 'downloading_items';
     if (state === 'PAUSED') return 'paused_items';
     if (state === 'QUEUED' || state === 'WAITING') return 'queued_items';
     if (state === 'COMPLETED') return 'completed_items';
@@ -412,7 +414,7 @@ class DownloadStore {
     for (const item of cachedItems) {
       totalSize += item.size || 0;
       totalDownloaded += item.downloaded ?? 0;
-      if (item.state === 'DOWNLOADING' || item.state === 'STARTING' || item.state === 'EXTRACTING') {
+      if (item.state === 'DOWNLOADING' || item.state === 'STARTING' || item.state === 'EXTRACTING' || item.state === 'IMPORTING') {
         totalSpeed += item.speed ?? 0;
       }
     }
@@ -1006,12 +1008,21 @@ class DownloadStore {
         const newDownloads = new Map(this.downloads);
         newDownloads.set(message.task.id, message.task);
         this.downloads = newDownloads;
-        this._notify();
 
-        // If task has batch_id, refetch batches to update grouping
+        // If task has batch_id, update batchItems cache if it exists (expanded batch)
         if (message.task.batch_id) {
+          const cachedItems = this.batchItems.get(message.task.batch_id);
+          if (cachedItems) {
+            if (!cachedItems.some(i => i.id === message.task!.id)) {
+              const newBatchItems = new Map(this.batchItems);
+              newBatchItems.set(message.task.batch_id, [...cachedItems, message.task]);
+              this.batchItems = newBatchItems;
+            }
+          }
           this.fetchBatches().catch(err => console.error('Failed to refetch batches:', err));
         }
+
+        this._notify();
       }
     });
 
@@ -1048,9 +1059,11 @@ class DownloadStore {
         // --- 3. Patch individual item in batchItems cache ---
         const cachedItems = this.batchItems.get(batchId);
         if (cachedItems) {
-          const updated = cachedItems.map(item =>
-            item.id === taskId ? { ...item, ...incomingTask } : item
-          );
+          const isExisting = cachedItems.some(item => item.id === taskId);
+          const updated = isExisting
+            ? cachedItems.map(item => item.id === taskId ? { ...item, ...incomingTask } : item)
+            : [...cachedItems, incomingTask];
+
           newBatchItems = new Map(this.batchItems);
           newBatchItems.set(batchId, updated);
 
@@ -1103,10 +1116,12 @@ class DownloadStore {
         if (task.batch_id) {
           const cachedItems = newBatchItems.get(task.batch_id);
           if (cachedItems) {
-            newBatchItems.set(
-              task.batch_id,
-              cachedItems.map((item: DownloadTask) => (item.id === task.id ? { ...item, ...incomingTask } : item)),
-            );
+            const isExisting = cachedItems.some((item: DownloadTask) => item.id === task.id);
+            const updated = isExisting
+              ? cachedItems.map((item: DownloadTask) => (item.id === task.id ? { ...item, ...incomingTask } : item))
+              : [...cachedItems, incomingTask];
+
+            newBatchItems.set(task.batch_id, updated);
           }
 
           if (previousState !== task.state) {
