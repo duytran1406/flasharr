@@ -5,27 +5,18 @@
     animateRing,
     revealOnScroll,
   } from "$lib/animations";
-  import { get } from "svelte/store";
   import Carousel3D from "$lib/components/Carousel3D.svelte";
-  import { MediaCard } from "$lib/components";
   import CalendarWidget from "$lib/components/dashboard/CalendarWidget.svelte";
-  import StorageWidget from "$lib/components/dashboard/StorageWidget.svelte";
-  import LibraryCoverage from "$lib/components/dashboard/LibraryCoverage.svelte";
   import RecentlyAdded from "$lib/components/dashboard/RecentlyAdded.svelte";
   import NetflowStats from "$lib/components/dashboard/NetflowStats.svelte";
-  import {
-    engineStats,
-    formatSpeed,
-    downloads,
-    downloadStore,
-  } from "$lib/stores/downloads";
+  import { engineStats, downloadStore } from "$lib/stores/downloads.svelte";
   import {
     fetchLibraryOverview,
     libraryOverview,
     fetchArrStatus,
     arrStatus,
   } from "$lib/stores/arr";
-  import { integrations } from "$lib/stores/settings";
+  import { arrConfigured as hasAnyArrConfig } from "$lib/stores/system";
   import { accountStore } from "$lib/stores/account.svelte";
   import { Badge } from "@media-set/core-ui";
 
@@ -40,8 +31,6 @@
 
   // Engine stats from WebSocket
   let stats = $derived($engineStats);
-  let activeCount = $derived(stats.active_downloads);
-  let queuedCount = $derived(stats.queued);
 
   let speedValueParts = $derived.by(() => {
     const bytes = stats.total_speed || 0;
@@ -49,9 +38,7 @@
     const k = 1024;
     const sizes = ["B/s", "KB/s", "MB/s", "GB/s", "TB/s"];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-    const val = parseFloat(
-      (bytes / Math.pow(k, i)).toFixed(i >= 2 ? 1 : i === 1 ? 0 : 0),
-    );
+    const val = parseFloat((bytes / Math.pow(k, i)).toFixed(i >= 2 ? 1 : 0));
     return { v: val.toString(), u: sizes[i] };
   });
 
@@ -89,9 +76,8 @@
       : 0,
   );
 
-  let hasArrIntegration = $derived(
-    $integrations.sonarr_enabled || $integrations.radarr_enabled,
-  );
+  // Sonarr or Radarr is enabled with a URL and an API key
+  let hasArrIntegration = $derived($hasAnyArrConfig);
 
   // Active downloads for queue — must read both standalone downloads AND batch items
   // because TASK_BATCH_UPDATE only inserts batch tasks into batchItems, not downloads.
@@ -228,13 +214,6 @@
     }
   });
 
-  function formatBytes(bytes: number): string {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-  }
 </script>
 
 <svelte:head>
