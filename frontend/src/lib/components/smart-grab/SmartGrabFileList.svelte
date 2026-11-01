@@ -25,7 +25,7 @@
         <SourceSummary file={entry.file} kind="episode" compact />
       </div>
       <span class="file-size"
-        >{entry.file.packageSelection && !entry.file.size ? "Package item" : formatResultSize(entry.file.size)}</span
+        >{entry.file.packageSelection && !entry.file.size ? "Package item" : formatResultSize(entry.file.size ?? 0)}</span
       >
     </div>
   {/each}
