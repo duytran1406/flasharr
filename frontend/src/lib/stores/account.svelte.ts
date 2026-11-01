@@ -1,4 +1,4 @@
-import { settingsStore, accounts, formatExpiry, formatQuota, getQuotaPercentage, type FshareAccount } from './settings';
+import { settingsStore, accounts, formatExpiry, getQuotaPercentage, type FshareAccount } from './settings';
 
 /**
  * Account Store
@@ -26,6 +26,11 @@ class AccountStore {
         return settingsStore.removeAccount(email);
     }
 
+    /** Replace the active account's credentials (POST /api/accounts upserts). */
+    async replace(email: string, password: string) {
+        return settingsStore.addAccount(email, password);
+    }
+
     get primary() {
         if (!this.accountsList || this.accountsList.length === 0) return null;
         return this.accountsList.find(a => a.is_active) || this.accountsList[0];
@@ -39,18 +44,6 @@ class AccountStore {
         const rank = (acc.rank || '').toUpperCase().trim();
         if (!rank) return false; // empty = unverified, treat as non-VIP
         return rank === 'VIP' || rank === 'PREMIUM' || rank === 'VIP ACCOUNT';
-    }
-
-    /** Replace credentials: remove old account then add new one.
-     *  addAccount() already calls fetchAccounts() internally, so no extra fetch needed. */
-    async switchAccount(newEmail: string, newPassword: string): Promise<boolean> {
-        const old = this.primary;
-        // Remove old account first (also calls fetchAccounts internally, but that's fast now)
-        if (old?.email) {
-            await settingsStore.removeAccount(old.email);
-        }
-        // addAccount handles the POST + internal fetchAccounts
-        return settingsStore.addAccount(newEmail, newPassword);
     }
 
     get listFormatted() {

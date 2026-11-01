@@ -8,13 +8,22 @@ export type WSStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 /**
  * WebSocket Message Types (from contract-fe-bridge.md)
  */
-export type WSMessageType = 
+export type WSMessageType =
   | 'SYNC_ALL'
   | 'TASK_ADDED'
   | 'TASK_UPDATED'
   | 'TASK_BATCH_UPDATE'
   | 'TASK_REMOVED'
-  | 'ENGINE_STATS';
+  | 'ENGINE_STATS'
+  // qBittorrent instance sync (backend websocket/mod.rs WsMessage::Qbit*)
+  | 'QBIT_SYNC_INIT'
+  | 'QBIT_TORRENT_UPSERT'
+  | 'QBIT_TORRENT_REMOVED'
+  | 'QBIT_TRANSFER_INFO'
+  | 'QBIT_ERROR'
+  | 'QBIT_HEARTBEAT'
+  // Sonarr/Radarr/Prowlarr settings changed on the server
+  | 'INTEGRATION_SETTINGS_CHANGED';
 
 /**
  * Base WebSocket Message
@@ -24,7 +33,7 @@ export interface WSMessage {
   [key: string]: any;
 }
 
-/**Set
+/**
  * Message Handler Function
  */
 type MessageHandler = (data: any) => void;

@@ -22,6 +22,8 @@ export interface LibraryOverview {
   episodes_missing: number;
   movies_with_files: number;
   movies_missing: number;
+  series_size_on_disk: number;
+  movies_size_on_disk: number;
   total_size_on_disk: number;
 }
 
@@ -160,10 +162,16 @@ export async function fetchLibraryOverview(): Promise<LibraryOverview | null> {
   }
 }
 
-export async function fetchCalendar(days: number = 14): Promise<CalendarEntry[]> {
+/**
+ * Fetch the Sonarr calendar for `days` days starting at `startDate` (default: today).
+ * Dates are sent as UTC `YYYY-MM-DD`.
+ */
+export async function fetchCalendar(days: number = 14, startDate: Date = new Date()): Promise<CalendarEntry[]> {
   try {
-    const start = new Date().toISOString().split('T')[0];
-    const end = new Date(Date.now() + days * 86400000).toISOString().split('T')[0];
+    const start = startDate.toISOString().split('T')[0];
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + days);
+    const end = endDate.toISOString().split('T')[0];
     const res = await fetchWithTimeout(`${API_BASE}/calendar?start=${start}&end=${end}`);
     if (!res.ok) return [];
     const data: CalendarEntry[] = await res.json();
@@ -175,6 +183,7 @@ export async function fetchCalendar(days: number = 14): Promise<CalendarEntry[]>
   }
 }
 
+/** Not referenced by the 2026-09-02 build (kept from baseline). */
 export async function fetchDiskSpace(): Promise<DiskSpace[]> {
   try {
     const res = await fetchWithTimeout(`${API_BASE}/storage`);
@@ -199,6 +208,7 @@ export async function fetchArrStatus(): Promise<void> {
   }
 }
 
+/** Not referenced by the 2026-09-02 build (kept from baseline). */
 export async function fetchMissing(page: number = 1, pageSize: number = 10): Promise<any> {
   try {
     const res = await fetchWithTimeout(`${API_BASE}/missing?page=${page}&page_size=${pageSize}`);
@@ -276,15 +286,26 @@ export function getMoviePoster(movie: RadarrMovie): string | null {
 
 const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p';
 
-/** Get a TMDB poster URL from a tmdbId (constructs the path via API lookup) */
+/** Not referenced by the 2026-09-02 build (kept from baseline). Get a TMDB poster URL from a poster path (constructs the path via API lookup) */
 export function tmdbPosterUrl(posterPath: string | null, size: 'w185' | 'w342' | 'w500' = 'w342'): string | null {
   if (!posterPath) return null;
   return `${TMDB_IMAGE_BASE}/${size}${posterPath}`;
 }
 
-/** Find a Sonarr series by TMDB ID from a pre-fetched list */
-export function findSeriesInList(allSeries: SonarrSeries[], tmdbId: number): SonarrSeries | null {
-  return allSeries.find(s => s.tmdbId === tmdbId) || null;
+/**
+ * Find a Sonarr series in a pre-fetched list. TVDB is the canonical TV identity,
+ * so `tvdbId` is matched first; `tmdbId` is only a fallback bridge.
+ */
+export function findSeriesInList(
+  allSeries: SonarrSeries[],
+  tvdbId: number | null | undefined,
+  tmdbId?: number | null,
+): SonarrSeries | null {
+  if (tvdbId) {
+    const byTvdb = allSeries.find(s => s.tvdbId === tvdbId);
+    if (byTvdb) return byTvdb;
+  }
+  return (tmdbId && allSeries.find(s => s.tmdbId === tmdbId)) || null;
 }
 
 /** Find a Radarr movie by TMDB ID from a pre-fetched list */
