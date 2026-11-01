@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { onMount } from "svelte";
   import { Button, Modal, Tooltip } from "@media-set/core-ui";
   import { toasts } from "$lib/stores/toasts";
 
@@ -203,7 +202,7 @@
     }
   }
 
-  onMount(() => {
+  $effect(() => {
     loadAddons();
   });
 </script>
