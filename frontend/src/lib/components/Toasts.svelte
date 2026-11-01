@@ -10,6 +10,8 @@
   {#each toastList as toast (toast.id)}
     <div
       class="toast-terminal toast-{toast.type}"
+      role={toast.type === "error" ? "alert" : "status"}
+      aria-live={toast.type === "error" ? "assertive" : "polite"}
       in:animePop={{ duration: 400, scale: 0.9 }}
       out:animeFade={{ duration: 200 }}
     >
@@ -43,8 +45,8 @@
 <style>
   .toasts-container {
     position: fixed;
-    top: 80px;
-    right: 20px;
+    top: calc(80px + env(safe-area-inset-top, 0px));
+    right: max(20px, env(safe-area-inset-right, 0px));
     z-index: 1000000;
     display: flex;
     flex-direction: column;
@@ -135,8 +137,10 @@
     border: none;
     color: rgba(255, 255, 255, 0.5);
     cursor: pointer;
-    padding: 2px;
-    border-radius: 4px;
+    width: var(--cui-touch-min, 44px);
+    height: var(--cui-touch-min, 44px);
+    padding: 0;
+    border-radius: var(--cui-radius-md, 4px);
     transition: all 0.2s;
     display: flex;
     align-items: center;
@@ -157,6 +161,7 @@
     color: #c9d1d9;
     font-size: 0.8rem;
     line-height: 1.5;
+    white-space: pre-line;
     word-break: break-word;
   }
 
@@ -216,9 +221,9 @@
   /* Mobile Responsive */
   @media (max-width: 768px) {
     .toasts-container {
-      top: 70px;
-      right: 10px;
-      left: 10px;
+      top: calc(70px + env(safe-area-inset-top, 0px));
+      right: max(10px, env(safe-area-inset-right, 0px));
+      left: max(10px, env(safe-area-inset-left, 0px));
       max-width: none;
     }
 

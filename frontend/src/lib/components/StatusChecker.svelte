@@ -3,8 +3,13 @@
   import { animeFade } from "$lib/animations";
   import { Badge } from "@media-set/core-ui";
 
-  // Health status types
-  type HealthStatus = "healthy" | "degraded" | "unhealthy";
+  // Health status values serialized by the backend (`HealthStatus`, lowercase)
+  type HealthStatus =
+    | "healthy"
+    | "degraded"
+    | "unhealthy"
+    | "unknown"
+    | "notconfigured";
 
   interface ServiceHealth {
     status: HealthStatus;
@@ -24,14 +29,12 @@
     database: ServiceHealth;
   }
 
-  // Props
   interface Props {
     showDetails?: boolean;
   }
 
   let { showDetails = false }: Props = $props();
 
-  // State
   let healthData = $state<HealthCheckResponse | null>(null);
   let isLoading = $state(true);
   let showTooltip = $state(false);
@@ -39,33 +42,71 @@
   let hideTimeout: ReturnType<typeof setTimeout> | null = null;
   let abortController: AbortController | null = null;
 
-  // Derived values
-  let overallStatus = $derived(healthData?.overall_status || "unhealthy");
-  let statusColor = $derived(
-    overallStatus === "healthy"
-      ? "#00ff80"
-      : overallStatus === "degraded"
-        ? "#ffd700"
-        : "#ff5252",
+  function statusColor(status: HealthStatus): string {
+    switch (status) {
+      case "healthy":
+        return "#00ff80";
+      case "degraded":
+        return "#ffd700";
+      case "unhealthy":
+        return "#ff5252";
+      case "unknown":
+      case "notconfigured":
+        return "#888";
+    }
+  }
+
+  function statusIcon(status: HealthStatus): string {
+    switch (status) {
+      case "healthy":
+        return "check_circle";
+      case "degraded":
+        return "warning";
+      case "unhealthy":
+        return "error";
+      case "unknown":
+      case "notconfigured":
+        return "help";
+    }
+  }
+
+  function statusSymbol(status: HealthStatus): string {
+    switch (status) {
+      case "healthy":
+        return "✓";
+      case "degraded":
+        return "⚠";
+      case "unhealthy":
+        return "✗";
+      case "unknown":
+      case "notconfigured":
+        return "•";
+    }
+  }
+
+  function badgeVariant(status: HealthStatus): "success" | "danger" | "warning" {
+    return status === "healthy"
+      ? "success"
+      : status === "unhealthy"
+        ? "danger"
+        : "warning";
+  }
+
+  let overallStatus = $derived<HealthStatus>(
+    healthData?.overall_status || "unhealthy",
   );
-  let statusIcon = $derived(
-    overallStatus === "healthy"
-      ? "check_circle"
-      : overallStatus === "degraded"
-        ? "warning"
-        : "error",
-  );
+  let overallColor = $derived(statusColor(overallStatus));
+  let overallIcon = $derived(statusIcon(overallStatus));
 
   function toggleTooltip() {
     showTooltip = !showTooltip;
 
-    // Clear any existing timeout
     if (hideTimeout) {
       clearTimeout(hideTimeout);
       hideTimeout = null;
     }
 
-    // If showing tooltip, set auto-hide timer
+    // Auto-hide the tooltip after 3s
     if (showTooltip) {
       hideTimeout = setTimeout(() => {
         showTooltip = false;
@@ -79,7 +120,7 @@
     if (abortController) abortController.abort();
     abortController = new AbortController();
 
-    // 8s timeout — if backend is slow, don't block until the next 30s poll
+    // 8s timeout so a slow backend doesn't block until the next 30s poll
     const timeoutId = setTimeout(() => abortController?.abort(), 8000);
 
     try {
@@ -96,14 +137,13 @@
       }
     } catch (error: any) {
       clearTimeout(timeoutId);
-      // AbortError = request was intentionally cancelled (navigation / timeout) — not a real error
+      // AbortError = request intentionally cancelled (navigation / timeout)
       if (error?.name === "AbortError") {
         console.debug(
           "[StatusChecker] Health check aborted (navigation or timeout)",
         );
         return;
       }
-      // Any other fetch failure (offline, DNS, CORS) — log as warn, not error
       console.warn(
         "[StatusChecker] Health check unavailable:",
         error?.message ?? error,
@@ -113,28 +153,23 @@
   }
 
   onMount(() => {
-    // Initial fetch
     fetchHealthStatus();
-
-    // Poll every 30 seconds
     pollInterval = setInterval(fetchHealthStatus, 30000);
   });
 
   onDestroy(() => {
     if (pollInterval) clearInterval(pollInterval);
     if (hideTimeout) clearTimeout(hideTimeout);
-    // Cancel any pending fetch so it doesn't fire after component unmounts
     if (abortController) abortController.abort();
   });
 
-  // Portal action to move element to document.body
+  // Portal action: move the tooltip to document.body to escape stacking contexts
   function portal(node: HTMLElement) {
     const originalParent = node.parentElement;
     document.body.appendChild(node);
 
     return {
       destroy() {
-        // Move back to original parent when destroyed
         if (originalParent && node.parentElement === document.body) {
           originalParent.appendChild(node);
         }
@@ -164,33 +199,10 @@
         return "help";
     }
   }
-
-  function getServiceLabel(serviceName: string): string {
-    switch (serviceName) {
-      case "websocket":
-        return "WebSocket";
-      case "webhook":
-        return "Webhook";
-      case "sonarr":
-        return "Sonarr";
-      case "radarr":
-        return "Radarr";
-      case "fshare":
-        return "Fshare";
-      case "fshare_ping":
-        return "Fshare Ping";
-      case "internet_speed":
-        return "Internet Speed";
-      case "database":
-        return "Database";
-      default:
-        return serviceName;
-    }
-  }
 </script>
 
 {#if !showDetails}
-  <!-- Compact Status Dot (for header) -->
+  <!-- Compact status dot (header) -->
   <div
     class="status-checker-compact"
     onclick={toggleTooltip}
@@ -200,7 +212,7 @@
     aria-label="System health status"
     title="Click to view system health"
   >
-    <span class="status-dot-health" style="background: {statusColor};"></span>
+    <span class="status-dot-health" style="background: {overallColor};"></span>
   </div>
 
   <!-- Tooltip rendered outside to escape stacking context -->
@@ -218,45 +230,33 @@
         </div>
       {:else if healthData}
         <div class="tooltip-header">
-          <span class="material-icons">{statusIcon}</span>
+          <span class="material-icons">{overallIcon}</span>
           <span>System: {overallStatus.toUpperCase()}</span>
         </div>
         <div class="tooltip-services">
-          <!-- WebSocket -->
           <div class="service-row">
             <span class="material-icons">{getServiceIcon("websocket")}</span>
             <span>WebSocket</span>
             <span
               class="service-status"
-              style="color: {healthData.websocket.status === 'healthy'
-                ? '#00ff80'
-                : healthData.websocket.status === 'degraded'
-                  ? '#ffd700'
-                  : '#ff5252'};"
+              style="color: {statusColor(healthData.websocket.status)};"
             >
-              {healthData.websocket.status === "healthy"
-                ? "✓"
-                : healthData.websocket.status === "degraded"
-                  ? "⚠"
-                  : "✗"}
+              {statusSymbol(healthData.websocket.status)}
               {#if healthData.websocket.message}
                 {healthData.websocket.message}
               {/if}
             </span>
           </div>
 
-          <!-- Webhook -->
           {#if healthData.webhook}
             <div class="service-row">
               <span class="material-icons">{getServiceIcon("webhook")}</span>
               <span>Webhook</span>
               <span
                 class="service-status"
-                style="color: {healthData.webhook.status === 'healthy'
-                  ? '#00ff80'
-                  : '#ffd700'};"
+                style="color: {statusColor(healthData.webhook.status)};"
               >
-                {healthData.webhook.status === "healthy" ? "✓" : "⚠"}
+                {statusSymbol(healthData.webhook.status)}
                 {#if healthData.webhook.message}
                   {healthData.webhook.message}
                 {/if}
@@ -270,17 +270,9 @@
               <span>Sonarr</span>
               <span
                 class="service-status"
-                style="color: {healthData.sonarr.status === 'healthy'
-                  ? '#00ff80'
-                  : healthData.sonarr.status === 'degraded'
-                    ? '#ffd700'
-                    : '#ff5252'};"
+                style="color: {statusColor(healthData.sonarr.status)};"
               >
-                {healthData.sonarr.status === "healthy"
-                  ? "✓"
-                  : healthData.sonarr.status === "degraded"
-                    ? "⚠"
-                    : "✗"}
+                {statusSymbol(healthData.sonarr.status)}
                 {#if healthData.sonarr.response_time_ms}
                   {healthData.sonarr.response_time_ms}ms
                 {/if}
@@ -294,17 +286,9 @@
               <span>Radarr</span>
               <span
                 class="service-status"
-                style="color: {healthData.radarr.status === 'healthy'
-                  ? '#00ff80'
-                  : healthData.radarr.status === 'degraded'
-                    ? '#ffd700'
-                    : '#ff5252'};"
+                style="color: {statusColor(healthData.radarr.status)};"
               >
-                {healthData.radarr.status === "healthy"
-                  ? "✓"
-                  : healthData.radarr.status === "degraded"
-                    ? "⚠"
-                    : "✗"}
+                {statusSymbol(healthData.radarr.status)}
                 {#if healthData.radarr.response_time_ms}
                   {healthData.radarr.response_time_ms}ms
                 {/if}
@@ -312,21 +296,17 @@
             </div>
           {/if}
 
-          <!-- Fshare Handler -->
           <div class="service-row">
             <span class="material-icons">{getServiceIcon("fshare")}</span>
             <span>Fshare</span>
             <span
               class="service-status"
-              style="color: {healthData.fshare.status === 'healthy'
-                ? '#00ff80'
-                : '#ffd700'};"
+              style="color: {statusColor(healthData.fshare.status)};"
             >
-              {healthData.fshare.status === "healthy" ? "✓" : "⚠"}
+              {statusSymbol(healthData.fshare.status)}
             </span>
           </div>
 
-          <!-- Fshare Ping -->
           {#if healthData.fshare_ping}
             <div class="service-row">
               <span class="material-icons">{getServiceIcon("fshare_ping")}</span
@@ -334,17 +314,9 @@
               <span>Fshare Ping</span>
               <span
                 class="service-status"
-                style="color: {healthData.fshare_ping.status === 'healthy'
-                  ? '#00ff80'
-                  : healthData.fshare_ping.status === 'degraded'
-                    ? '#ffd700'
-                    : '#ff5252'};"
+                style="color: {statusColor(healthData.fshare_ping.status)};"
               >
-                {healthData.fshare_ping.status === "healthy"
-                  ? "✓"
-                  : healthData.fshare_ping.status === "degraded"
-                    ? "⚠"
-                    : "✗"}
+                {statusSymbol(healthData.fshare_ping.status)}
                 {#if healthData.fshare_ping.message}
                   {healthData.fshare_ping.message}
                 {/if}
@@ -352,14 +324,17 @@
             </div>
           {/if}
 
-          <!-- Internet Speed -->
           {#if healthData.internet_speed}
             <div class="service-row">
               <span class="material-icons"
                 >{getServiceIcon("internet_speed")}</span
               >
               <span>Internet Speed</span>
-              <span class="service-status" style="color: #888;">
+              <span
+                class="service-status"
+                style="color: {statusColor(healthData.internet_speed.status)};"
+              >
+                {statusSymbol(healthData.internet_speed.status)}
                 {healthData.internet_speed.message || "N/A"}
               </span>
             </div>
@@ -374,7 +349,7 @@
     </div>
   {/if}
 {:else}
-  <!-- Detailed Status Panel (for Settings page) -->
+  <!-- Detailed status panel -->
   <div class="status-checker-detailed">
     {#if isLoading}
       <div class="loading-state">
@@ -383,14 +358,13 @@
       </div>
     {:else if healthData}
       <div class="status-grid">
-        <!-- WebSocket -->
         <div class="status-card">
           <div class="card-header">
             <span class="material-icons">{getServiceIcon("websocket")}</span>
             <span class="service-name">WebSocket</span>
           </div>
           <div class="card-body">
-            <Badge variant={healthData.websocket.status === 'healthy' ? 'success' : 'warning'}>
+            <Badge variant={badgeVariant(healthData.websocket.status)}>
               {healthData.websocket.status}
             </Badge>
             {#if healthData.websocket.message}
@@ -399,7 +373,6 @@
           </div>
         </div>
 
-        <!-- Sonarr -->
         {#if healthData.sonarr}
           <div class="status-card">
             <div class="card-header">
@@ -407,7 +380,7 @@
               <span class="service-name">Sonarr</span>
             </div>
             <div class="card-body">
-              <Badge variant={healthData.sonarr.status === 'healthy' ? 'success' : healthData.sonarr.status === 'degraded' ? 'warning' : 'danger'}>
+              <Badge variant={badgeVariant(healthData.sonarr.status)}>
                 {healthData.sonarr.status}
               </Badge>
               {#if healthData.sonarr.message}
@@ -417,7 +390,6 @@
           </div>
         {/if}
 
-        <!-- Radarr -->
         {#if healthData.radarr}
           <div class="status-card">
             <div class="card-header">
@@ -425,7 +397,7 @@
               <span class="service-name">Radarr</span>
             </div>
             <div class="card-body">
-              <Badge variant={healthData.radarr.status === 'healthy' ? 'success' : healthData.radarr.status === 'degraded' ? 'warning' : 'danger'}>
+              <Badge variant={badgeVariant(healthData.radarr.status)}>
                 {healthData.radarr.status}
               </Badge>
               {#if healthData.radarr.message}
@@ -435,14 +407,13 @@
           </div>
         {/if}
 
-        <!-- Fshare -->
         <div class="status-card">
           <div class="card-header">
             <span class="material-icons">{getServiceIcon("fshare")}</span>
             <span class="service-name">Fshare</span>
           </div>
           <div class="card-body">
-            <Badge variant={healthData.fshare.status === 'healthy' ? 'success' : 'warning'}>
+            <Badge variant={badgeVariant(healthData.fshare.status)}>
               {healthData.fshare.status}
             </Badge>
             {#if healthData.fshare.message}
@@ -451,14 +422,28 @@
           </div>
         </div>
 
-        <!-- Database -->
+        <div class="status-card">
+          <div class="card-header">
+            <span class="material-icons">{getServiceIcon("internet_speed")}</span>
+            <span class="service-name">Internet Speed</span>
+          </div>
+          <div class="card-body">
+            <Badge variant={badgeVariant(healthData.internet_speed.status)}>
+              {healthData.internet_speed.status}
+            </Badge>
+            {#if healthData.internet_speed.message}
+              <p class="status-message">{healthData.internet_speed.message}</p>
+            {/if}
+          </div>
+        </div>
+
         <div class="status-card">
           <div class="card-header">
             <span class="material-icons">{getServiceIcon("database")}</span>
             <span class="service-name">Database</span>
           </div>
           <div class="card-body">
-            <Badge variant="success">
+            <Badge variant={badgeVariant(healthData.database.status)}>
               {healthData.database.status}
             </Badge>
             {#if healthData.database.message}

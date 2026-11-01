@@ -2,28 +2,36 @@
   import { page } from "$app/stores";
 
   /**
-   * MobileNav — fixed bottom navigation bar (mobile only).
-   * Visible exclusively on < 768px viewports via CSS.
-   * Tabs: Discover, Downloads, Library, Settings.
-   * Uses core-ui design tokens (--color-primary, --bg-glass, etc.)
+   * MobileNav — fixed bottom navigation bar (mobile / short landscape only).
+   * Tabs: Home, Discover, Downloads, Library, plus a "More" button that opens
+   * the full navigation drawer.
    */
 
+  interface Props {
+    /** Set while the mobile drawer is open so the bar is removed from tab order */
+    inert?: boolean;
+    onMore?: () => void;
+  }
+
+  let { inert = false, onMore }: Props = $props();
+
   const tabs = [
-    { href: "/discover",   label: "Discover",   icon: "movie_filter"    },
-    { href: "/downloads",  label: "Downloads",  icon: "cloud_download"  },
-    { href: "/library",    label: "Library",    icon: "video_library"   },
-    { href: "/settings",   label: "Settings",   icon: "settings_suggest"},
-  ] as const;
+    { href: "/", label: "Home", icon: "dashboard" },
+    { href: "/discover", label: "Discover", icon: "movie_filter" },
+    { href: "/downloads", label: "Downloads", icon: "cloud_download" },
+    { href: "/library", label: "Library", icon: "video_library" },
+  ];
 
   let currentPath = $derived($page.url.pathname);
 
   function isActive(href: string): boolean {
+    if (!href) return false;
     if (href === "/") return currentPath === "/";
     return currentPath.startsWith(href);
   }
 </script>
 
-<nav class="mobile-bottom-nav" aria-label="Mobile navigation">
+<nav class="mobile-bottom-nav" aria-label="Mobile navigation" {inert}>
   {#each tabs as tab}
     <a
       href={tab.href}
@@ -31,14 +39,21 @@
       class:active={isActive(tab.href)}
       aria-current={isActive(tab.href) ? "page" : undefined}
     >
-      <!-- Active indicator bar -->
       <span class="tab-indicator" aria-hidden="true"></span>
-      <!-- Icon -->
       <span class="material-icons tab-icon" aria-hidden="true">{tab.icon}</span>
-      <!-- Label -->
       <span class="tab-label">{tab.label}</span>
     </a>
   {/each}
+  <button
+    class="mobile-nav-tab"
+    type="button"
+    aria-label="Open more navigation"
+    onclick={onMore}
+  >
+    <span class="tab-indicator" aria-hidden="true"></span>
+    <span class="material-icons tab-icon" aria-hidden="true">more_horiz</span>
+    <span class="tab-label">More</span>
+  </button>
 </nav>
 
 <style>
@@ -59,7 +74,7 @@
     background: rgba(6, 8, 14, 0.93);
     backdrop-filter: blur(28px) saturate(180%);
     -webkit-backdrop-filter: blur(28px) saturate(180%);
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
     box-shadow:
       0 -8px 32px rgba(0, 0, 0, 0.5),
       inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -70,7 +85,7 @@
   }
 
   /* ── Show on mobile ───────────────────────────────────────── */
-  @media (max-width: 767px) {
+  @media (max-width: 767px), (pointer: coarse) and (max-height: 500px) {
     .mobile-bottom-nav {
       display: flex;
     }
@@ -89,7 +104,10 @@
     min-height: var(--touch-target-min, 48px);
     padding: 0 8px;
 
-    color: rgba(255, 255, 255, 0.38);
+    color: rgba(255, 255, 255, 0.64);
+    border: 0;
+    background: transparent;
+    font: inherit;
     text-decoration: none;
     position: relative;
     transition: color var(--duration-fast, 150ms) var(--ease-out, ease);
@@ -145,8 +163,8 @@
   .tab-label {
     font-family: var(--font-body, "Inter", sans-serif);
     font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
+    font-weight: 700;
+    letter-spacing: 0.03em;
     text-transform: uppercase;
     line-height: 1;
   }
