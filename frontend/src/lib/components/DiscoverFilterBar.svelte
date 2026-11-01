@@ -5,6 +5,9 @@
    *
    * Owns NO data-fetching. All state is passed via $bindable props so the parent
    * (discover page) stays in full control of fetch logic.
+   *
+   * On phones (max-width: 767px) the genre picker opens as a bottom sheet that is
+   * portalled to <body> (dialog semantics + focus trap) instead of the inline dropdown.
    */
 
   import { X, Palette, Star, Search, ChevronDown, SlidersHorizontal } from "lucide-svelte";
@@ -16,6 +19,8 @@
     movieId: number | null;
     tvId: number | null;
   }
+
+  export type DiscoverMediaType = "movie" | "tv" | "collections";
 
   export const UNIFIED_GENRES: UnifiedGenre[] = [
     { name: "Action",      movieId: 28,    tvId: 10759 },
@@ -66,7 +71,7 @@
 
   // ── Props — all $bindable so parent can react to filter changes ───────────
   interface Props {
-    mediaType: "movie" | "tv";
+    mediaType: DiscoverMediaType;
     sortBy: string;
     searchQuery: string;
     selectedGenres: UnifiedGenre[];
@@ -76,7 +81,11 @@
     maxRating: number;
     resolvedGenreIds?: number[];
     hasFilter?: boolean;
-    onMediaTypeChange: (t: "movie" | "tv") => void;
+    /** Adds a third "Collection" tab to the media toggle. */
+    includeCollectionTab?: boolean;
+    /** Hides every filter except the media toggle while the collection tab is active. */
+    hideNonCollectionFilters?: boolean;
+    onMediaTypeChange: (t: DiscoverMediaType) => void;
     onSortChange: (v: string) => void;
     onSearchInput: () => void;
     onGenreToggle: (g: UnifiedGenre) => void;
@@ -96,6 +105,8 @@
     maxRating = $bindable(),
     resolvedGenreIds = $bindable([] as number[]),
     hasFilter = $bindable(false),
+    includeCollectionTab = false,
+    hideNonCollectionFilters = false,
     onMediaTypeChange,
     onSortChange,
     onSearchInput,
@@ -119,9 +130,48 @@
 
   const currentYear = new Date().getFullYear();
 
-  // Genre dropdown open/close
+  // Genre dropdown (desktop) / genre sheet (mobile) open/close
   let genreDropdownOpen = $state(false);
   let genreDropdownRef = $state<HTMLDivElement | null>(null);
+  let genreButtonRef = $state<HTMLButtonElement | null>(null);
+  let genreSheetRef = $state<HTMLDivElement | null>(null);
+  let isMobileSheet = $state(false);
+
+  /** Moves the node to <body> so the sheet escapes the filter bar's stacking context. */
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return { destroy: () => node.remove() };
+  }
+
+  function closeGenreSheet(restoreFocus = true) {
+    genreDropdownOpen = false;
+    if (restoreFocus) queueMicrotask(() => genreButtonRef?.focus());
+  }
+
+  // Keep keyboard focus inside the genre sheet while it is open
+  function trapGenreSheetFocus(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeGenreSheet();
+      return;
+    }
+    if (e.key !== "Tab" || !genreSheetRef) return;
+    const focusable = [
+      ...genreSheetRef.querySelectorAll<HTMLElement>(
+        'button:not([disabled]),[href],input,select,[tabindex]:not([tabindex="-1"])',
+      ),
+    ];
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
 
   // Rating panel open/close
   let ratingPanelOpen = $state(false);
@@ -146,10 +196,15 @@
 
   // ── Outside-click handler ────────────────────────────────────────────────
   function onDocClick(e: MouseEvent) {
-    if (genreDropdownRef && !genreDropdownRef.contains(e.target as Node)) {
+    const target = e.target as Node;
+    if (
+      genreDropdownRef &&
+      !genreDropdownRef.contains(target) &&
+      !genreSheetRef?.contains(target)
+    ) {
       genreDropdownOpen = false;
     }
-    if (ratingPanelRef && !ratingPanelRef.contains(e.target as Node)) {
+    if (ratingPanelRef && !ratingPanelRef.contains(target)) {
       ratingPanelOpen = false;
     }
   }
@@ -158,6 +213,22 @@
   $effect(() => {
     document.addEventListener("click", onDocClick);
     return () => document.removeEventListener("click", onDocClick);
+  });
+
+  // Phones get the portalled genre sheet instead of the inline dropdown
+  $effect(() => {
+    const query = matchMedia("(max-width: 767px)");
+    const update = () => (isMobileSheet = query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  });
+
+  // Move focus into the sheet when it opens
+  $effect(() => {
+    if (genreDropdownOpen && isMobileSheet) {
+      queueMicrotask(() => genreSheetRef?.querySelector("button")?.focus());
+    }
   });
 
   function isGenreSelected(g: UnifiedGenre): boolean {
@@ -189,206 +260,200 @@
     <!-- MEDIA TYPE TOGGLE -->
     <div class="filter-group">
       <div class="media-toggle">
-        {#each (["movie", "tv"] as const) as m}
+        {#each (includeCollectionTab
+          ? (["movie", "tv", "collections"] as const)
+          : (["movie", "tv"] as const)) as m}
           <button
             class="toggle-btn {mediaType === m ? 'active' : ''}"
             onclick={() => onMediaTypeChange(m)}
           >
-            {m === "movie" ? "Movies" : "TV"}
+            {m === "movie" ? "Movies" : m === "tv" ? "TV" : "Collection"}
           </button>
         {/each}
       </div>
     </div>
 
-    <!-- GENRE DROPDOWN -->
-    <div class="filter-group" bind:this={genreDropdownRef}>
-      <button
-        class="filter-btn {selectedGenres.length > 0 ? 'active' : ''}"
-        onclick={(e) => { e.stopPropagation(); genreDropdownOpen = !genreDropdownOpen; }}
-      >
-        <Palette size={15} />
-        <span>
-          {#if selectedGenres.length === 0}
-            Genre
-          {:else if selectedGenres.length === 1}
-            {selectedGenres[0].name}
-          {:else}
-            {selectedGenres.length} Genres
-          {/if}
-        </span>
-        {#if selectedGenres.length > 0}
+    {#if !hideNonCollectionFilters || mediaType !== "collections"}
+      <!-- GENRE DROPDOWN -->
+      <div class="filter-group" bind:this={genreDropdownRef}>
+        <button
+          bind:this={genreButtonRef}
+          class="filter-btn {selectedGenres.length > 0 ? 'active' : ''}"
+          aria-haspopup={isMobileSheet ? "dialog" : "menu"}
+          aria-expanded={genreDropdownOpen}
+          onclick={(e) => { e.stopPropagation(); genreDropdownOpen = !genreDropdownOpen; }}
+        >
+          <Palette size={15} />
           <span
-            role="button"
-            tabindex="0"
+            >{selectedGenres.length === 0
+              ? "Genre"
+              : selectedGenres.length === 1
+                ? selectedGenres[0].name
+                : `${selectedGenres.length} Genres`}</span
+          >
+          <ChevronDown size={13} class="opacity-50" />
+        </button>
+        {#if selectedGenres.length > 0}
+          <button
             class="clear-x"
+            aria-label="Clear genres"
             onclick={(e) => { e.stopPropagation(); selectedGenres = []; onYearChange(); }}
-            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); selectedGenres = []; onYearChange(); } }}
           >
             <X size={13} />
-          </span>
-        {:else}
-          <ChevronDown size={13} class="opacity-50" />
+          </button>
         {/if}
-      </button>
 
-      {#if genreDropdownOpen}
-        <div class="genre-dropdown">
-          <div class="genre-dropdown-grid">
-            {#each availableGenres as g}
-              {@const selected = isGenreSelected(g)}
-              {@const tint = getGenreTint(g.name)}
-              <button
-                class="genre-opt {selected ? 'selected' : ''}"
-                style="--tint: {tint}"
-                onclick={(e) => { e.stopPropagation(); onGenreToggle(g); }}
-              >
-                {g.name}
-              </button>
-            {/each}
+        {#if genreDropdownOpen && !isMobileSheet}
+          <div class="genre-dropdown">
+            <div class="genre-dropdown-grid">
+              {#each availableGenres as g}
+                {@const selected = isGenreSelected(g)}
+                {@const tint = getGenreTint(g.name)}
+                <button
+                  class="genre-opt {selected ? 'selected' : ''}"
+                  style="--tint: {tint}"
+                  onclick={(e) => { e.stopPropagation(); onGenreToggle(g); }}
+                >
+                  {g.name}
+                </button>
+              {/each}
+            </div>
           </div>
-        </div>
-      {/if}
-    </div>
-
-    <!-- YEAR RANGE -->
-    <div class="filter-group">
-      <div class="year-pair">
-        <input
-          id="filter-year-from"
-          type="number"
-          class="year-input {fromYear ? 'active' : ''}"
-          placeholder="From"
-          min="1900"
-          max={currentYear}
-          bind:value={fromYear}
-          onchange={onYearChange}
-        />
-        <span class="year-sep">–</span>
-        <input
-          id="filter-year-to"
-          type="number"
-          class="year-input {toYear ? 'active' : ''}"
-          placeholder="To"
-          min="1900"
-          max={currentYear + 2}
-          bind:value={toYear}
-          onchange={onYearChange}
-        />
+        {/if}
       </div>
-    </div>
 
-    <!-- RATING RANGE (flyout panel) -->
-    <div class="filter-group" bind:this={ratingPanelRef}>
-      <button
-        class="filter-btn {ratingActive ? 'active' : ''}"
-        onclick={(e) => { e.stopPropagation(); ratingPanelOpen = !ratingPanelOpen; }}
-      >
-        <Star size={15} color={ratingActive ? "#ffb700" : "currentColor"} />
-        <span>{ratingLabel}</span>
+      <!-- YEAR RANGE -->
+      <div class="filter-group">
+        <div class="year-pair">
+          <input
+            id="filter-year-from"
+            type="number"
+            class="year-input {fromYear ? 'active' : ''}"
+            placeholder="From"
+            min="1900"
+            max={currentYear}
+            bind:value={fromYear}
+            onchange={onYearChange}
+          />
+          <span class="year-sep">–</span>
+          <input
+            id="filter-year-to"
+            type="number"
+            class="year-input {toYear ? 'active' : ''}"
+            placeholder="To"
+            min="1900"
+            max={currentYear + 2}
+            bind:value={toYear}
+            onchange={onYearChange}
+          />
+        </div>
+      </div>
+
+      <!-- RATING RANGE (flyout panel) -->
+      <div class="filter-group" bind:this={ratingPanelRef}>
+        <button
+          class="filter-btn {ratingActive ? 'active' : ''}"
+          onclick={(e) => { e.stopPropagation(); ratingPanelOpen = !ratingPanelOpen; }}
+        >
+          <Star size={15} color={ratingActive ? "#ffb700" : "currentColor"} />
+          <span>{ratingLabel}</span>
+          <ChevronDown size={13} class="opacity-50" />
+        </button>
         {#if ratingActive}
-          <span
-            role="button"
-            tabindex="0"
+          <button
             class="clear-x"
+            aria-label="Clear rating"
             onclick={(e) => {
               e.stopPropagation();
               minRating = 0;
               maxRating = 10;
               onRatingChange();
             }}
-            onkeydown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.stopPropagation();
-                minRating = 0;
-                maxRating = 10;
-                onRatingChange();
-              }
-            }}
           >
             <X size={13} />
-          </span>
-        {:else}
-          <ChevronDown size={13} class="opacity-50" />
+          </button>
         {/if}
-      </button>
 
-      {#if ratingPanelOpen}
-        <div class="rating-panel">
-          <div class="rating-row-item">
-            <span class="rating-row-label">Min: <strong>{minRating.toFixed(1)}</strong></span>
-            <input
-              id="filter-min-rating"
-              type="range"
-              class="score-slider"
-              min="0"
-              max="10"
-              step="0.5"
-              bind:value={minRating}
-              style="--val: {minRating}"
-              onchange={onRatingChange}
-            />
+        {#if ratingPanelOpen}
+          <div class="rating-panel">
+            <div class="rating-row-item">
+              <span class="rating-row-label">Min: <strong>{minRating.toFixed(1)}</strong></span>
+              <input
+                id="filter-min-rating"
+                type="range"
+                class="score-slider"
+                min="0"
+                max="10"
+                step="0.5"
+                bind:value={minRating}
+                style="--val: {minRating}"
+                onchange={onRatingChange}
+              />
+            </div>
+            <div class="rating-row-item">
+              <span class="rating-row-label">Max: <strong>{maxRating.toFixed(1)}</strong></span>
+              <input
+                id="filter-max-rating"
+                type="range"
+                class="score-slider"
+                min="0"
+                max="10"
+                step="0.5"
+                bind:value={maxRating}
+                style="--val: {maxRating}"
+                onchange={onRatingChange}
+              />
+            </div>
           </div>
-          <div class="rating-row-item">
-            <span class="rating-row-label">Max: <strong>{maxRating.toFixed(1)}</strong></span>
-            <input
-              id="filter-max-rating"
-              type="range"
-              class="score-slider"
-              min="0"
-              max="10"
-              step="0.5"
-              bind:value={maxRating}
-              style="--val: {maxRating}"
-              onchange={onRatingChange}
-            />
-          </div>
-        </div>
-      {/if}
-    </div>
-
-    <!-- SORT -->
-    <div class="filter-group">
-      <div class="select-wrapper">
-        <SlidersHorizontal size={15} class="select-icon" />
-        <select
-          class="sort-select"
-          bind:value={sortBy}
-          onchange={() => onSortChange(sortBy)}
-        >
-          {#each sortOptions as opt}
-            <option value={opt.value}>{opt.label}</option>
-          {/each}
-        </select>
+        {/if}
       </div>
-    </div>
 
-    <!-- SEARCH -->
-    <div class="filter-group search-group">
-      <Search size={15} class="opacity-40 shrink-0" />
-      <input
-        id="filter-search"
-        type="text"
-        class="search-input"
-        placeholder="Search title…"
-        bind:value={searchQuery}
-        oninput={onSearchInput}
-      />
-      {#if searchQuery}
-        <button
-          class="clear-x"
-          onclick={() => { searchQuery = ""; onSearchInput(); }}
-        >
-          <X size={13} />
+      <!-- SORT -->
+      <div class="filter-group">
+        <div class="select-wrapper">
+          <SlidersHorizontal size={15} class="select-icon" />
+          <select
+            class="sort-select"
+            bind:value={sortBy}
+            onchange={() => onSortChange(sortBy)}
+          >
+            {#each sortOptions as opt}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </div>
+      </div>
+
+      <!-- SEARCH -->
+      <div class="filter-group search-group">
+        <Search size={15} class="opacity-40 shrink-0" />
+        <input
+          id="filter-search"
+          type="text"
+          class="search-input"
+          aria-label="Search titles"
+          placeholder="Search title…"
+          bind:value={searchQuery}
+          oninput={onSearchInput}
+        />
+        {#if searchQuery}
+          <button
+            class="clear-x"
+            aria-label="Clear title search"
+            onclick={() => { searchQuery = ""; onSearchInput(); }}
+          >
+            <X size={13} />
+          </button>
+        {/if}
+      </div>
+
+      <!-- CLEAR ALL -->
+      {#if hasFilter}
+        <button class="clear-all-btn" onclick={onClearAll}>
+          <X size={14} />
+          Clear
         </button>
       {/if}
-    </div>
-
-    <!-- CLEAR ALL -->
-    {#if hasFilter}
-      <button class="clear-all-btn" onclick={onClearAll}>
-        <X size={14} />
-        Clear
-      </button>
     {/if}
 
   </div>
@@ -417,6 +482,51 @@
     </div>
   {/if}
 </div>
+
+<!-- MOBILE GENRE SHEET (portalled to <body>) -->
+{#if genreDropdownOpen && isMobileSheet}
+  <div
+    class="genre-portal"
+    role="presentation"
+    use:portal
+    onclick={(e) => { if (e.target === e.currentTarget) closeGenreSheet(); }}
+    onkeydown={(e) => { if (e.key === "Escape") closeGenreSheet(); }}
+  >
+    <div
+      class="genre-sheet"
+      bind:this={genreSheetRef}
+      role="dialog"
+      tabindex="-1"
+      aria-modal="true"
+      aria-labelledby="genre-sheet-title"
+      onkeydown={trapGenreSheetFocus}
+    >
+      <header
+        ><h2 id="genre-sheet-title">Choose genres</h2><button
+          class="genre-close"
+          aria-label="Close genre dialog"
+          onclick={() => closeGenreSheet()}><X size={20} /></button
+        ></header
+      >
+      <div class="genre-sheet-scroll">
+        <div class="genre-dropdown-grid">
+          {#each availableGenres as g}
+            {@const selected = isGenreSelected(g)}
+            {@const tint = getGenreTint(g.name)}
+            <button
+              class="genre-opt {selected ? 'selected' : ''}"
+              style="--tint: {tint}"
+              aria-pressed={selected}
+              onclick={() => onGenreToggle(g)}
+            >
+              {g.name}
+            </button>
+          {/each}
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   /* ── Wrapper ────────────────────────────────────────────────────────── */
@@ -593,7 +703,11 @@
     font-size: 0.85rem;
     font-family: var(--font-mono, monospace);
     text-align: center;
-    transition: all 180ms;
+    transition:
+      background var(--cui-duration-fast) var(--cui-ease-standard),
+      border-color var(--cui-duration-fast) var(--cui-ease-standard),
+      box-shadow var(--cui-duration-fast) var(--cui-ease-standard);
+    appearance: textfield;
     -moz-appearance: textfield;
   }
   .year-input::-webkit-outer-spin-button,
@@ -869,55 +983,162 @@
   }
 
   /* ── Responsive ─────────────────────────────────────────────────────── */
+  /* ── Mobile genre sheet (portalled to <body>) ── */
+  .genre-portal {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483640;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding: max(0.75rem, env(safe-area-inset-top)) 0.75rem
+      calc(
+        var(--cui-mobile-bottom-nav-height, 60px) +
+          max(0.75rem, env(safe-area-inset-bottom))
+      );
+    background: rgba(0, 0, 0, 0.68);
+  }
+
+  .genre-sheet {
+    display: flex;
+    flex-direction: column;
+    width: min(100%, 520px);
+    max-height: min(76dvh, 620px);
+    overflow: hidden;
+    background: #080b12;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 16px;
+    box-shadow: 0 24px 70px #000;
+  }
+
+  .genre-sheet header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex: 0 0 auto;
+    padding: 0.65rem 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .genre-sheet h2 {
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  .genre-close {
+    display: grid;
+    place-items: center;
+    min-width: 44px;
+    min-height: 44px;
+    border: 0;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #fff;
+  }
+
+  .genre-sheet-scroll {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    padding: 0.75rem;
+  }
+
+  /* ── Mobile ── */
   @media (max-width: 767px) {
-    /* Single-row horizontal scrollable chip bar */
+    .filter-bar-wrap {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      isolation: isolate;
+      gap: 0;
+    }
     .filter-bar {
       flex-wrap: nowrap;
       overflow-x: auto;
-      overflow-y: hidden;
+      overflow-y: visible;
       -webkit-overflow-scrolling: touch;
-      padding: 0.5rem 0.75rem;
+      touch-action: pan-x;
+      padding: 0.6rem 0.75rem;
       gap: 0.5rem;
-      scrollbar-width: none; /* Firefox */
+      scrollbar-width: none;
+      border-bottom: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      box-shadow:
+        0 -8px 32px rgba(0, 0, 0, 0.5),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
     }
     .filter-bar::-webkit-scrollbar {
-      display: none; /* Chrome/Safari */
+      display: none;
     }
-    /* Prevent groups from shrinking — preserve their natural width */
     .filter-group {
       flex-shrink: 0;
     }
-    /* Compact toggle buttons */
     .toggle-btn {
-      padding: 0.38rem 0.65rem;
-      font-size: 0.72rem;
+      padding: 0.4rem 0.7rem;
+      font-size: 0.7rem;
     }
-    /* Compact sort select */
+    .filter-btn {
+      padding: 0.45rem 0.75rem;
+      font-size: 0.75rem;
+    }
     .sort-select {
       font-size: 0.75rem;
-      padding: 0.38rem 1.6rem 0.38rem 0.6rem;
+      padding: 0.4rem 1.6rem 0.4rem 0.6rem;
     }
-    /* Make search narrower on mobile */
     .search-group {
       min-width: 100px;
       max-width: 160px;
+      padding: 0.45rem 0.75rem;
     }
-    /* Year inputs */
     .year-input {
       width: 58px;
-      font-size: 0.78rem;
-      padding: 0.38rem 0.45rem;
+      font-size: 0.75rem;
+      padding: 0.4rem 0.45rem;
     }
-    /* Genre badge row: also scrollable */
+    .clear-all-btn {
+      padding: 0.45rem 0.75rem;
+      font-size: 0.75rem;
+    }
     .genre-badges {
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      -webkit-overflow-scrolling: touch;
-      padding-bottom: 0.5rem;
-      scrollbar-width: none;
-    }
-    .genre-badges::-webkit-scrollbar {
       display: none;
+    }
+    .genre-dropdown {
+      position: fixed;
+      left: 0.75rem;
+      right: 0.75rem;
+      width: auto;
+      max-width: none;
+      top: max(72px, env(safe-area-inset-top));
+      bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+      max-height: none;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      z-index: 1200;
+      touch-action: pan-y;
+    }
+    .genre-dropdown-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.4rem;
+    }
+    .genre-opt,
+    .filter-btn,
+    .toggle-btn,
+    .sort-select,
+    .year-input,
+    .clear-all-btn,
+    .clear-x {
+      min-height: 44px;
+    }
+    .rating-panel {
+      position: fixed;
+      left: 0.75rem;
+      right: 0.75rem;
+      width: auto;
+      max-width: none;
+      bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+      top: auto;
+      z-index: 1200;
+      touch-action: pan-y;
     }
   }
 </style>
