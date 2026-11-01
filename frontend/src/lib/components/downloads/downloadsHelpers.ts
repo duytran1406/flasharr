@@ -70,6 +70,13 @@ export interface BatchStatus {
   icon: string;
 }
 
+/** Target of the batch delete confirmation. */
+export interface BatchDeleteTarget {
+  batchId: string;
+  batchName: string;
+  itemCount: number;
+}
+
 export interface ContextMenuPosition {
   x: number;
   y: number;
