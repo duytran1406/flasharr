@@ -36,7 +36,7 @@
   interface Props {
     open: boolean;
     status: FolderCacheStatus | null;
-    onclose?: () => void;
+    onclose: () => void;
   }
 
   let { open, status, onclose }: Props = $props();

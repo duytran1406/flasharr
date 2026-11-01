@@ -46,7 +46,7 @@
   }
 
   let {
-    indexerApiKey,
+    indexerApiKey = $bindable(),
     showIndexerApiKey = false,
     sonarrUrl = $bindable(),
     sonarrApiKey = $bindable(),

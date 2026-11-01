@@ -3,7 +3,7 @@
 
   interface Props {
     open: boolean;
-    onclose?: () => void;
+    onclose: () => void;
     /** Starts the refresh; resolves to an error message, or nothing on success. */
     onsubmit: (url: string) => Promise<string | null | undefined> | string | null | undefined;
   }
