@@ -100,7 +100,7 @@
           type="url"
           bind:value={manualUrl}
           placeholder="https://www.fshare.vn/file/..."
-          required=""
+          required
           disabled={submitting}
         />
         <span class="hint">Fshare file page only. Direct download links are unsupported.</span>
