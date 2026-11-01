@@ -81,6 +81,7 @@ export interface QbitTransferHealth {
 export interface QbitActionResult {
   success: boolean;
   message?: string;
+  error?: string;
   results?: Array<{ hash: string; success: boolean; message?: string }>;
 }
 

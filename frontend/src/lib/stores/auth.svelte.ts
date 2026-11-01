@@ -7,7 +7,7 @@
  */
 import { wsClient } from './websocket';
 
-/** GET /api/auth/setup-status (also the body of login/register responses). */
+/** GET /api/auth/setup-status (also the body of login/setup responses). */
 export interface AuthSession {
   /** An administrator account exists. */
   configured: boolean;
@@ -15,8 +15,8 @@ export interface AuthSession {
   username: string | null;
 }
 
-/** `register` creates the first administrator; `login` signs in. */
-export type AuthMode = 'login' | 'register';
+/** `setup` creates the first administrator; `login` signs in. */
+export type AuthMode = 'login' | 'setup';
 
 const SIGNED_OUT: AuthSession = { configured: true, authenticated: false, username: null };
 
@@ -42,7 +42,7 @@ class AuthStore {
     }
   }
 
-  /** POST /api/auth/{login|register}. Throws a user-facing Error on failure. */
+  /** POST /api/auth/{login|setup}. Throws a user-facing Error on failure. */
   async submit(mode: AuthMode, username: string, password: string): Promise<void> {
     const response = await fetch(`/api/auth/${mode}`, {
       method: 'POST',

@@ -145,11 +145,11 @@
   async function addToQbit() {
     if (!magnet.trim() && !torrentFile) throw new Error("Magnet URL or .torrent file required");
     if (torrentFile) {
-      const result = (await qbitStore.addTorrentFile(torrentFile, addOptions())) as { success?: boolean; error?: string };
+      const result = await qbitStore.addTorrentFile(torrentFile, addOptions());
       if (!result?.success) throw new Error(result?.error || "Failed to add torrent file");
     }
     if (magnet.trim()) {
-      const result = (await qbitStore.addTorrent(magnet.trim(), addOptions())) as { success?: boolean; error?: string };
+      const result = await qbitStore.addTorrent(magnet.trim(), addOptions());
       if (!result?.success) throw new Error(result?.error || "Failed to add torrent URL");
     }
     resetForm();
