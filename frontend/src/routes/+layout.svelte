@@ -4,34 +4,30 @@
   import { page } from "$app/stores";
   import { beforeNavigate, afterNavigate, goto } from "$app/navigation";
   import { onMount, onDestroy } from "svelte";
-  import {
-    animate,
-    animeStagger,
-    stagger as staggerAction,
-    animatePageEntrance,
-  } from "$lib/animations";
-  import { wsClient, connectionIndicator } from "$lib/stores/websocket";
+  import { animate, animeStagger } from "$lib/animations";
+  import { wsClient } from "$lib/stores/websocket";
   import {
     downloadStore,
     engineStats,
     formatSpeed,
-  } from "$lib/stores/downloads";
-  import {
-    AddDownloadModal,
-    SmartSearchModal,
-    SmartGrabModal,
-    Toasts,
-    IntroOverlay,
-    StatusChecker,
-    AccountWarningModal,
-    Button,
-  } from "$lib/components";
-  import MobileNav from "$lib/components/MobileNav.svelte";
+  } from "$lib/stores/downloads.svelte";
+  import { qbitStore } from "$lib/stores/qbit.svelte";
+  import { systemStore } from "$lib/stores/system";
   import { theme } from "$lib/stores/theme";
   import { ui } from "$lib/stores/ui.svelte";
-  import { setupStore } from "$lib/stores/setup.svelte";
   import { settingsStore } from "$lib/stores/settings";
   import { accountStore } from "$lib/stores/account.svelte";
+  import { authStore } from "$lib/stores/auth.svelte";
+  import IntroOverlay from "$lib/components/ui/IntroOverlay.svelte";
+  import AuthGate from "$lib/components/AuthGate.svelte";
+  import AppSidebar from "$lib/components/layout/AppSidebar.svelte";
+  import AppViewport from "$lib/components/layout/AppViewport.svelte";
+  import MobileNav from "$lib/components/MobileNav.svelte";
+  import AccountWarningModal from "$lib/components/AccountWarningModal.svelte";
+  import AddDownloadModal from "$lib/components/AddDownloadModal.svelte";
+  import SmartSearchModal from "$lib/components/SmartSearchModal.svelte";
+  import SmartGrabModal from "$lib/components/SmartGrabModal.svelte";
+  import Toasts from "$lib/components/Toasts.svelte";
 
   interface Props {
     children: Snippet;
@@ -41,39 +37,24 @@
 
   let sidebarOpen = $state(false);
   let sidebarCollapsed = $state(false);
-  let viewContainerEl: HTMLElement | undefined = $state();
+  let viewContainerEl: HTMLDivElement | undefined = $state();
 
   // Account VIP warning modal
   let showAccountWarn = $state(false);
-  // Derived reactively from the account store so it updates if the account changes
   let isAccountVip = $derived(accountStore.isVip);
 
-  // Intro animation states for initial loading
   let showIntro = $derived(ui.showIntro);
-  let isInitialized = $state(false);
 
-  // Reactive connection status from WebSocket store
-  let connectionStatus = $derived($connectionIndicator);
   let stats = $derived($engineStats);
-
-  // Derived values for header display
-  let connected = $derived(connectionStatus.text === "Connected");
   let globalSpeed = $derived(formatSpeed(stats.total_speed));
   let activeCount = $derived(stats.active_downloads);
 
-  // Get current route for active nav highlighting
   let currentRoute = $derived($page.url.pathname);
+  let isAuthenticated = $derived(!!authStore.session?.authenticated);
 
-  // Compute data-view from route for CSS targeting
-  function getViewName(path: string): string {
-    if (path === "/") return "dashboard";
-    if (path.startsWith("/tv/")) return "media/tv";
-    if (path.startsWith("/movie/")) return "media/movie";
-    if (path.startsWith("/collection/"))
-      return "collection/" + path.split("/")[2];
-    return path.split("/")[1] || "dashboard";
-  }
-  let viewName = $derived(getViewName($page.url.pathname));
+  /** Element focused before the mobile drawer opened (restored on close). */
+  let drawerReturnFocus: HTMLElement | null = null;
+  let mobileDrawer = $state(false);
 
   const navItems = [
     { href: "/", label: "Dashboard", icon: "dashboard", route: "dashboard" },
@@ -102,10 +83,10 @@
       route: "downloads",
     },
     {
-      href: "/search",
-      label: "Search",
-      icon: "search",
-      route: "search",
+      href: "/torrents",
+      label: "Torrents",
+      icon: "downloading",
+      route: "torrents",
     },
     {
       href: "/settings",
@@ -115,6 +96,17 @@
     },
   ];
 
+  // Compute data-view from route for CSS targeting
+  function getViewName(path: string): string {
+    if (path === "/") return "dashboard";
+    if (path.startsWith("/tv/")) return "media/tv";
+    if (path.startsWith("/movie/")) return "media/movie";
+    if (path.startsWith("/collection/"))
+      return "collection/" + path.split("/")[2];
+    return path.split("/")[1] || "dashboard";
+  }
+  let viewName = $derived(getViewName(currentRoute));
+
   function isActive(href: string): boolean {
     if (href === "/") return currentRoute === "/";
     return currentRoute.startsWith(href);
@@ -122,49 +114,107 @@
 
   function toggleSidebar() {
     sidebarCollapsed = !sidebarCollapsed;
-    if (sidebarCollapsed) {
-      document.body.classList.add("sidebar-collapsed");
-    } else {
-      document.body.classList.remove("sidebar-collapsed");
-    }
+    document.body.classList.toggle("sidebar-collapsed", sidebarCollapsed);
   }
 
   function closeMobileDrawer() {
     sidebarOpen = false;
+    queueMicrotask(() => drawerReturnFocus?.focus());
   }
 
   function openMobileDrawer() {
+    drawerReturnFocus = document.activeElement as HTMLElement | null;
     sidebarOpen = true;
+    queueMicrotask(() =>
+      document
+        .querySelector<HTMLElement>(".glass-sidebar.show .drawer-close")
+        ?.focus(),
+    );
   }
 
-  // Initialize WebSocket and download store
+  function syncMobileDrawer() {
+    // Same breakpoint as the CSS: phones and short landscape touch screens
+    mobileDrawer = matchMedia(
+      "(max-width: 767px), (pointer: coarse) and (max-height: 500px)",
+    ).matches;
+    if (!mobileDrawer) sidebarOpen = false;
+  }
+
+  /** IntroOverlay asks where to go once the intro has played. */
+  async function resolveStartRoute(): Promise<string> {
+    if (currentRoute.startsWith("/setup")) return "/setup";
+    return (await settingsStore.hasAccounts()) ? "/" : "/setup";
+  }
+
+  /** Runs when the intro finishes: kick off background initialisation. */
+  async function handleIntroComplete(destination: string) {
+    theme.init();
+
+    if (destination === "/setup") {
+      goto("/setup");
+      return;
+    }
+
+    downloadStore.initWebSocket();
+    qbitStore.initWebSocket();
+    systemStore.initIntegrationStatusSync();
+    wsClient.connect();
+
+    try {
+      await systemStore.refreshIntegrationState();
+    } catch (_) {}
+    try {
+      await settingsStore.fetchSettings();
+    } catch (_) {}
+    try {
+      await accountStore.fetch();
+      if (
+        !accountStore.isVip &&
+        !sessionStorage.getItem("vip-warn-dismissed")
+      ) {
+        showAccountWarn = true;
+      }
+    } catch (_) {}
+
+    setTimeout(async () => {
+      try {
+        await downloadStore.fetchAll();
+      } catch (_) {}
+    }, 100);
+  }
+
   // Animate page content on route change
   afterNavigate(() => {
-    if (viewContainerEl) {
-      const wrapper = viewContainerEl.querySelector(".transition-wrapper");
-      if (wrapper) {
-        animate(wrapper, {
-          opacity: [0, 1],
-          translateY: [12, 0],
-          duration: 350,
-          ease: "outQuad",
-        });
-      }
+    const wrapper = viewContainerEl?.querySelector(".transition-wrapper");
+    if (wrapper) {
+      animate(wrapper, {
+        opacity: [0, 1],
+        translateY: [12, 0],
+        duration: 350,
+        ease: "outQuad",
+      });
     }
   });
 
   onMount(() => {
-    // Start the intro animation sequence
+    authStore.refresh();
     ui.startIntroSequence();
+
+    const drawerQuery = matchMedia(
+      "(max-width: 767px), (pointer: coarse) and (max-height: 500px)",
+    );
+    const onDrawerQueryChange = () => syncMobileDrawer();
+    onDrawerQueryChange();
+    drawerQuery.addEventListener("change", onDrawerQueryChange);
 
     // Animate sidebar nav items with stagger
     requestAnimationFrame(() => {
-      const navLinks = document.querySelectorAll(".nav-links .nav-item");
+      const navLinks = document.querySelectorAll<HTMLElement>(
+        ".nav-links .nav-item",
+      );
       if (navLinks.length) {
-        navLinks.forEach((el) => {
-          (el as HTMLElement).style.opacity = "0";
-        });
-        animate(Array.from(navLinks) as HTMLElement[], {
+        navLinks.forEach((el) => (el.style.opacity = "0"));
+        animate(Array.from(navLinks), {
           opacity: [0, 1],
           translateX: [-20, 0],
           duration: 400,
@@ -173,10 +223,33 @@
         });
       }
     });
-    // All check logic now delegated to IntroOverlay via checkConfig/onComplete props.
 
-    // Add keyboard shortcut for Add Download modal (Ctrl+N / Cmd+N)
     function handleKeydown(e: KeyboardEvent) {
+      // Mobile drawer: Escape closes, Tab is trapped inside the drawer
+      if (sidebarOpen && e.key === "Escape") {
+        e.preventDefault();
+        closeMobileDrawer();
+        return;
+      }
+      if (sidebarOpen && e.key === "Tab") {
+        const focusable = [
+          ...document.querySelectorAll<HTMLElement>(
+            '.glass-sidebar.show a[href]:not([tabindex="-1"]), .glass-sidebar.show button:not([disabled]):not([tabindex="-1"])',
+          ),
+        ].filter((el) => el.getClientRects().length > 0);
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable.at(-1)!;
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+
+      // Add Download modal shortcut (Ctrl+N / Cmd+N)
       if ((e.ctrlKey || e.metaKey) && e.key === "n") {
         e.preventDefault();
         ui.openAddDownload();
@@ -186,21 +259,18 @@
 
     return () => {
       window.removeEventListener("keydown", handleKeydown);
+      drawerQuery.removeEventListener("change", onDrawerQueryChange);
     };
   });
 
-  // Clear dynamic header on route change to prevent "ghost" headers from previous tabs
-  beforeNavigate(() => {
+  // Clear the dynamic header on route change to prevent "ghost" headers
+  beforeNavigate(({ to }) => {
+    if (to?.url.pathname === currentRoute) return;
     const headerContainer = document.getElementById("header-dynamic-content");
-    if (headerContainer) {
-      headerContainer.innerHTML = "";
-    }
+    if (headerContainer) headerContainer.innerHTML = "";
   });
 
-  // Cleanup on unmount
-  onDestroy(() => {
-    wsClient.disconnect();
-  });
+  onDestroy(() => wsClient.disconnect());
 </script>
 
 <svelte:head>
@@ -218,411 +288,99 @@
     href="https://fonts.googleapis.com/icon?family=Material+Icons"
     rel="stylesheet"
   />
+  <title>Flasharr</title>
 </svelte:head>
 
-<!-- Global Intro Animation during initial loading -->
-{#if showIntro}
-  <IntroOverlay
-    checkConfig={async () => {
-      // Always respect a minimum display time so Appear + start of Idle is visible
-      const minDelay = new Promise<void>((r) => setTimeout(r, 1200));
-
-      // Setup page handled separately
-      if (currentRoute.startsWith("/setup")) {
-        await minDelay;
-        return "/setup";
-      }
-
-      // Check if a Fshare account has been configured
-      const [hasAccount] = await Promise.all([
-        settingsStore.hasAccounts(),
-        minDelay,
-      ]);
-
-      return hasAccount ? "/" : "/setup";
-    }}
-    onComplete={async (destination) => {
-      theme.init();
-
-      if (destination === "/setup") {
-        goto("/setup");
-        return;
-      }
-
-      // Already on dashboard — kick off background init
-      downloadStore.initWebSocket();
-      wsClient.connect();
-
-      try {
-        await settingsStore.fetchSettings();
-      } catch (_) {}
-      try {
-        await accountStore.fetch();
-        if (
-          !accountStore.isVip &&
-          !sessionStorage.getItem("vip-warn-dismissed")
-        ) {
-          showAccountWarn = true;
-        }
-      } catch (_) {}
-
-      setTimeout(async () => {
-        try {
-          await downloadStore.fetchAll();
-        } catch (_) {}
-      }, 100);
-    }}
-  />
-{/if}
-
-<div class="app-shell" class:hidden={showIntro}>
-  {#if !currentRoute.startsWith("/setup")}
-    <!-- Glass Sidebar -->
-    <nav
-      class="glass-sidebar"
-      class:show={sidebarOpen}
-      class:collapsed={sidebarCollapsed}
-    >
-      <!-- ── Brand Header ── -->
-      <!-- When collapsed: clicking the logo expands the sidebar.
-           When expanded: logo area is display-only; collapse-btn handles collapse. -->
-      <div class="sidebar-brand">
-        <button
-          class="brand-btn"
-          onclick={sidebarCollapsed ? toggleSidebar : undefined}
-          aria-label={sidebarCollapsed ? "Expand sidebar" : "Flasharr"}
-          tabindex={sidebarCollapsed ? 0 : -1}
-          style={sidebarCollapsed
-            ? "cursor:pointer"
-            : "cursor:default; pointer-events:none"}
-        >
-          <div class="logo-container">
-            <img
-              src="/images/flasharr_logo.png"
-              class="brand-logo-img"
-              width="54"
-              height="54"
-              alt="Flasharr"
-            />
-          </div>
-          <div class="brand-info">
-            <span class="brand-name">FLASHARR</span>
-            <span class="brand-tag">MEDIA SUITE</span>
-          </div>
-        </button>
-        <!-- Collapse button hidden when already collapsed -->
-        {#if !sidebarCollapsed}
-          <button
-            class="collapse-btn"
-            onclick={toggleSidebar}
-            aria-label="Collapse sidebar"
-          >
-            <span class="material-icons">chevron_left</span>
-          </button>
-        {/if}
-      </div>
-
-      <!-- ── Divider ── -->
-      <div class="sidebar-divider"></div>
-
-      <!-- ── Nav Items ── -->
-      <div class="nav-links">
-        {#each navItems as item}
-          <a
-            href={item.href}
-            class="nav-item"
-            class:active={isActive(item.href)}
-            data-route={item.route}
-            onclick={closeMobileDrawer}
-            title={sidebarCollapsed ? item.label : ""}
-          >
-            <!-- Halftone hover particle layer -->
-            <span class="nav-hover-particles" aria-hidden="true"></span>
-            <span class="nav-icon material-icons">{item.icon}</span>
-            <span class="nav-label">{item.label}</span>
-          </a>
-        {/each}
-      </div>
-
-      <!-- ── Footer ── -->
-      <div class="sidebar-footer">
-        <div class="sidebar-divider"></div>
-        <div class="version-chip">
-          <span class="version-dot"></span>
-          <span class="version-text">v3.0.0</span>
-        </div>
-      </div>
-    </nav>
-
-    <!-- Main Content Area -->
-    <main class="main-viewport">
-      <!-- Mobile-only slim header (hidden on desktop) -->
-      <header class="mobile-header">
-        <div class="mobile-header-left">
-          <img
-            src="/images/flasharr_logo.png"
-            class="mobile-logo"
-            width="32"
-            height="32"
-            alt="Flasharr"
-          />
-          <span class="mobile-brand-name">FLASHARR</span>
-        </div>
-        <div class="mobile-header-right">
-          <!-- Speed pill (compact) -->
-          <div class="mobile-stat-pill" title="Current Speed">
-            <span class="material-icons">speed</span>
-            <span class="mobile-stat-value">{globalSpeed}</span>
-          </div>
-          <!-- Add download shortcut -->
-          <button
-            class="mobile-icon-btn"
-            onclick={() => ui.openAddDownload()}
-            aria-label="Add Download"
-            title="Add Download"
-          >
-            <span class="material-icons">add_circle</span>
-          </button>
-        </div>
-      </header>
-
-      <!-- Global Header (Glass) — desktop only -->
-      <header class="glass-header desktop-header">
-        <div class="header-left">
-          <div
-            id="header-dynamic-content"
-            style="flex: 1; margin-right: 2rem;"
-          ></div>
-        </div>
-
-        <div class="header-right">
-          <!-- Add Download Button -->
-          {#if currentRoute === "/downloads"}
-            <div class="add-dl-wrap">
-              <Button
-                icon="add_circle"
-                onclick={() => ui.openAddDownload()}
-                title="Add Download (Ctrl+N)"
-              >
-                <span class="dl-btn-text">Add Download</span>
-              </Button>
-            </div>
-          {/if}
-
-          <!-- System Health Status -->
-          <div style="margin-right: 1.5rem;">
-            <StatusChecker />
-          </div>
-
-          <!-- Global Stats Pills -->
-          <div class="stat-pill" title="Current Speed">
-            <span class="material-icons">speed</span>
-            <span class="stat-value" id="global-speed">{globalSpeed}</span>
-          </div>
-
-          <div class="stat-pill" title="Active Downloads">
-            <span class="material-icons">downloading</span>
-            <span class="stat-value" id="global-active">{activeCount}</span>
-          </div>
-        </div>
-      </header>
-
-      <!-- Dynamic View Container -->
-      <div
-        class="view-container"
-        data-view={viewName}
-        bind:this={viewContainerEl}
-      >
-        <div class="transition-wrapper">
-          {@render children()}
-        </div>
-      </div>
-    </main>
-  {:else}
-    <!-- Setup route - render children directly without app shell -->
-    {@render children()}
+{#if authStore.loading}
+  <div class="auth-loading">Loading Flasharr…</div>
+{:else if !isAuthenticated}
+  <AuthGate />
+{:else}
+  <!-- Global intro animation during initial loading -->
+  {#if showIntro}
+    <IntroOverlay
+      checkConfig={resolveStartRoute}
+      onComplete={handleIntroComplete}
+    />
   {/if}
-</div>
 
-<!-- Mobile Drawer Overlay -->
-{#if !currentRoute.startsWith("/setup") && sidebarOpen}
-  <button
-    class="mobile-drawer-overlay active"
-    onclick={closeMobileDrawer}
-    aria-label="Close drawer"
-  ></button>
+  <div class="app-shell" class:hidden={showIntro}>
+    {#if !currentRoute.startsWith("/setup")}
+      <AppSidebar
+        {navItems}
+        {currentRoute}
+        {sidebarOpen}
+        {mobileDrawer}
+        {sidebarCollapsed}
+        {isActive}
+        {toggleSidebar}
+        {closeMobileDrawer}
+      />
+      <AppViewport
+        {children}
+        {currentRoute}
+        {viewName}
+        {globalSpeed}
+        {activeCount}
+        {openMobileDrawer}
+        inert={sidebarOpen}
+        bind:viewContainerEl
+      />
+    {:else}
+      <!-- Setup route renders without the app shell -->
+      {@render children()}
+    {/if}
+  </div>
+
+  <!-- Mobile drawer backdrop -->
+  {#if !currentRoute.startsWith("/setup") && sidebarOpen}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <div
+      class="mobile-drawer-overlay active"
+      onclick={closeMobileDrawer}
+      aria-hidden="true"
+    ></div>
+  {/if}
+
+  {#if !currentRoute.startsWith("/setup")}
+    <MobileNav inert={sidebarOpen} onMore={openMobileDrawer} />
+  {/if}
+
+  {#if showAccountWarn && !isAccountVip}
+    <AccountWarningModal
+      onDismiss={() => {
+        showAccountWarn = false;
+        sessionStorage.setItem("vip-warn-dismissed", "1");
+      }}
+    />
+  {/if}
+
+  <AddDownloadModal bind:isOpen={ui.addDownloadModalOpen} />
+  <SmartSearchModal />
+  <SmartGrabModal />
+  <Toasts />
 {/if}
-
-<!-- Mobile Bottom Navigation (replaces old bottom-nav) -->
-{#if !currentRoute.startsWith("/setup")}
-  <MobileNav />
-{/if}
-
-<!-- Account VIP Warning Modal -->
-{#if showAccountWarn && !isAccountVip}
-  <AccountWarningModal
-    onDismiss={() => {
-      showAccountWarn = false;
-      sessionStorage.setItem("vip-warn-dismissed", "1");
-    }}
-  />
-{/if}
-
-<!-- Add Download Modal -->
-<AddDownloadModal bind:isOpen={ui.addDownloadModalOpen} />
-
-<!-- Smart Search Modal -->
-<SmartSearchModal />
-
-<!-- Smart Grab Modal -->
-<SmartGrabModal />
-
-<!-- Toast Notifications -->
-<Toasts />
 
 <style>
-  /* ═══════════════════════════════════════════════════════════
-     HEADER & MOBILE NAV FIXES
-     ═══════════════════════════════════════════════════════════ */
-  .header-left, .header-right {
-    display: flex;
-    align-items: center;
+  .auth-loading {
+    min-height: 100vh;
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    color: var(--cui-text-secondary);
+    background: var(--cui-surface-0,#071018);
   }
 
-  /* ── Mobile Header (< 768px only) ─────────────────────────── */
-  .mobile-header {
-    display: none;
-    height: var(--mobile-header-height, 56px);
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 1rem;
-    flex-shrink: 0;
-    background: rgba(6, 8, 14, 0.93);
-    backdrop-filter: blur(24px) saturate(160%);
-    -webkit-backdrop-filter: blur(24px) saturate(160%);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    z-index: var(--z-mobile-header, 800);
-    position: sticky;
-    top: 0;
+  .app-shell.hidden {
+    opacity: 0;
+    pointer-events: none;
   }
 
-  .mobile-header-left {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-  }
-
-  .mobile-logo {
-    width: 32px;
-    height: 32px;
-    object-fit: contain;
-    filter: drop-shadow(0 0 6px rgba(0, 243, 255, 0.5));
-  }
-
-  .mobile-brand-name {
-    font-family: var(--font-heading, "Outfit", sans-serif);
-    font-size: 0.78rem;
-    font-weight: 900;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    background: linear-gradient(135deg, #ffffff 0%, var(--color-primary, #00f3ff) 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-  }
-
-  .mobile-header-right {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .mobile-stat-pill {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.3rem 0.6rem;
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 4px;
-  }
-
-  .mobile-stat-pill .material-icons {
-    font-size: 0.9rem;
-    opacity: 0.55;
-    color: var(--color-primary, #00f3ff);
-  }
-
-  .mobile-stat-value {
-    font-family: var(--font-mono, monospace);
-    font-size: 0.72rem;
-    font-weight: 700;
-    color: var(--color-primary, #00f3ff);
-  }
-
-  .mobile-icon-btn {
-    width: 36px;
-    height: 36px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 243, 255, 0.08);
-    border: 1px solid rgba(0, 243, 255, 0.2);
-    border-radius: 6px;
-    color: var(--color-primary, #00f3ff);
-    cursor: pointer;
-    transition: background 0.15s, box-shadow 0.15s;
-  }
-
-  .mobile-icon-btn:hover {
-    background: rgba(0, 243, 255, 0.15);
-    box-shadow: 0 0 10px rgba(0, 243, 255, 0.25);
-  }
-
-  .mobile-icon-btn .material-icons {
-    font-size: 1.2rem;
-  }
-
-  /* ── Desktop header: hidden on mobile ─────────────────────── */
-  .desktop-header {
-    display: flex;
-  }
-
-  @media (max-width: 767px) {
-    .mobile-header {
-      display: flex;
-    }
-    .desktop-header {
-      display: none !important;
-    }
-    .header-right .stat-pill {
-      display: none;
-    }
-    /* Hide desktop sidebar on mobile */
-    .glass-sidebar {
-      display: none !important;
-    }
-    /* Push content above the fixed bottom nav */
-    :global(.view-container) {
-      padding-bottom: calc(60px + env(safe-area-inset-bottom, 0px)) !important;
-    }
-  }
-
-  /* ═══════════════════════════════════════════════════════════ */
-
-  .transition-wrapper {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-  }
-
-  /* Additional mobile overlay styling for Svelte */
   .mobile-drawer-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: var(--z-mobile-overlay, 999);
+    background: #00000080;
+    z-index: var(--z-mobile-overlay,999);
     display: none;
     border: none;
     cursor: pointer;
@@ -632,723 +390,11 @@
     display: block;
   }
 
-  @media (min-width: 768px) {
+  @media (min-width:768px) and (min-height:501px) {
     .mobile-drawer-overlay {
       display: none !important;
     }
+
   }
 
-  /* Add Download wrapper — just spacing */
-  .add-dl-wrap {
-    margin-right: 1.5rem;
-    display: flex;
-    align-items: center;
-  }
-  @media (max-width: 768px) {
-    .add-dl-wrap {
-      margin-right: 1rem;
-    }
-    .dl-btn-text {
-      display: none;
-    }
-  }
-
-  /* Telemetry Panels (Header Stats) */
-  :global(.stat-pill) {
-    background: rgba(0, 0, 0, 0.3) !important;
-    border: 1px solid rgba(255, 255, 255, 0.05) !important;
-    border-radius: 0 !important;
-    padding: 0.4rem 0.75rem !important;
-    height: auto !important;
-    gap: 0.75rem !important;
-    clip-path: polygon(0% 0%, 100% 0%, 100% 75%, 85% 100%, 0% 100%);
-    transition: all 0.3s;
-  }
-
-  :global(.stat-pill .stat-value) {
-    font-family: var(--font-mono, monospace) !important;
-    font-size: 0.8rem !important;
-    font-weight: 700 !important;
-    color: var(--color-primary) !important;
-  }
-
-  :global(.stat-pill .material-icons) {
-    font-size: 1rem !important;
-    opacity: 0.6;
-  }
-
-  :global(.connection-status) {
-    background: rgba(0, 255, 128, 0.02) !important;
-    border: 1px solid rgba(0, 255, 128, 0.1) !important;
-    padding: 0.4rem 0.8rem !important;
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    clip-path: polygon(10px 0%, 100% 0%, 100% 100%, 0% 100%, 0% 10px);
-  }
-
-  :global(.connection-status .status-text) {
-    font-family: var(--font-mono, monospace) !important;
-    color: #00ff80 !important;
-  }
-
-  :global(.connection-status.disconnected) {
-    background: rgba(255, 0, 100, 0.05) !important;
-    border-color: rgba(255, 0, 100, 0.2) !important;
-  }
-
-  :global(.connection-status.disconnected .status-text) {
-    color: #ff0064 !important;
-  }
-
-  /* ============================================================
-     SIDEBAR — Polygonal + Halftone Design System
-     ============================================================ */
-
-  :global(.glass-sidebar) {
-    width: var(--sidebar-width, 280px);
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-    position: relative;
-    z-index: 50;
-    background: rgba(6, 8, 14, 0.92);
-    backdrop-filter: blur(24px);
-    -webkit-backdrop-filter: blur(24px);
-    border-right: 1px solid rgba(255, 255, 255, 0.06);
-    overflow: hidden;
-    flex-shrink: 0;
-    transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-
-  /* Halftone ambient background on right side */
-  :global(.glass-sidebar::before) {
-    content: "";
-    position: absolute;
-    top: 0;
-    right: 0;
-    width: 180px;
-    height: 100%;
-    background-image: radial-gradient(
-      circle,
-      var(--color-primary, #00f3ff) 1px,
-      transparent 1px
-    );
-    background-size: 8px 8px;
-    opacity: 0.025;
-    pointer-events: none;
-    mask-image: linear-gradient(to left, black 0%, transparent 70%);
-    -webkit-mask-image: linear-gradient(to left, black 0%, transparent 70%);
-  }
-
-  /* Right-edge glow line */
-  :global(.glass-sidebar::after) {
-    content: "";
-    position: absolute;
-    top: 8%;
-    bottom: 8%;
-    right: 0;
-    width: 1px;
-    background: linear-gradient(
-      180deg,
-      transparent 0%,
-      var(--color-primary, #00f3ff) 25%,
-      var(--color-primary, #00f3ff) 75%,
-      transparent 100%
-    );
-    opacity: 0.18;
-    filter: blur(0.5px);
-  }
-
-  :global(.glass-sidebar.collapsed) {
-    width: var(--sidebar-collapsed-width, 72px);
-  }
-
-  /* ── Collapsed: center ALL icons symmetrically ── */
-  :global(.glass-sidebar.collapsed .sidebar-brand) {
-    justify-content: center;
-    padding-left: 0 !important;
-    padding-right: 0 !important;
-  }
-
-  /* brand-btn must not stretch so justify-content:center can center it */
-  :global(.glass-sidebar.collapsed .brand-btn) {
-    flex: 0 0 auto; /* shrink to logo size only */
-    gap: 0;
-    pointer-events: auto;
-  }
-
-  /* Fully remove brand-info from the layout — max-width:0 still occupies a flex slot */
-  :global(.glass-sidebar.collapsed .brand-info) {
-    display: none;
-  }
-
-  :global(.glass-sidebar.collapsed .nav-links) {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
-  }
-
-  :global(.glass-sidebar.collapsed .sidebar-footer) {
-    padding-left: 0 !important;
-    padding-right: 0 !important;
-  }
-
-  :global(.glass-sidebar.collapsed .nav-item) {
-    justify-content: center !important;
-    padding-left: 0 !important;
-    padding-right: 0 !important;
-    gap: 0 !important; /* remove gap so label slot doesn't offset icon */
-  }
-
-  /* Fully remove nav-label from layout — opacity:0 still occupies flex space */
-  :global(.glass-sidebar.collapsed .nav-label) {
-    display: none;
-  }
-
-  :global(.glass-sidebar.collapsed .version-chip) {
-    justify-content: center;
-  }
-
-  /* ── Brand Header ── */
-  :global(.sidebar-brand) {
-    display: flex;
-    align-items: center;
-    /* calc aligns logo center-x with nav icon center-x:
-       nav icon center = nav-links-pad(0.6rem) + nav-item-pad(1rem) + half-icon(10px)
-       logo center     = this-padding-left + half-logo(27px)
-       => padding-left = 0.6rem + 1rem + 10px - 27px = calc(1.6rem - 17px) */
-    padding: 1.1rem 0.75rem 0.9rem calc(1.6rem - 17px);
-    gap: 0;
-    flex-shrink: 0;
-    min-height: 64px;
-  }
-
-  :global(.brand-btn) {
-    display: flex;
-    align-items: center;
-    gap: 0.85rem;
-    flex: 1;
-    background: none;
-    border: none;
-    padding: 0;
-    min-width: 0;
-    text-align: left;
-    color: inherit;
-    /* Cursor set via inline style reactively */
-  }
-
-  /* Logo — 54px (36 × 1.5). Container fixed so logo center-x aligns with nav icon center. */
-  :global(.logo-container) {
-    width: 54px;
-    height: 54px;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    position: relative;
-  }
-
-  :global(.brand-info) {
-    display: flex;
-    flex-direction: column;
-    gap: 0.1rem;
-    overflow: hidden;
-    transition:
-      opacity 0.2s 0.05s,
-      max-width 0.35s;
-    max-width: 200px;
-  }
-
-  :global(.glass-sidebar.collapsed .brand-info) {
-    opacity: 0;
-    max-width: 0;
-    pointer-events: none;
-    transition:
-      opacity 0.15s,
-      max-width 0.35s;
-  }
-
-  :global(.brand-name) {
-    font-family: var(--font-heading, "Outfit", sans-serif);
-    font-size: 0.82rem;
-    font-weight: 900;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    background: linear-gradient(
-      135deg,
-      #ffffff 0%,
-      var(--color-primary, #00f3ff) 100%
-    );
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    white-space: nowrap;
-  }
-
-  :global(.brand-tag) {
-    font-family: var(--font-mono, monospace);
-    font-size: 0.48rem;
-    font-weight: 700;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: rgba(0, 243, 255, 0.38);
-    white-space: nowrap;
-  }
-
-  /* Collapse button — hidden when collapsed (logo takes over) */
-  :global(.collapse-btn) {
-    width: 26px;
-    height: 26px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.07);
-    border-radius: 5px;
-    color: var(--text-muted, #64748b);
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: all 0.2s;
-    margin-left: auto;
-  }
-
-  :global(.collapse-btn:hover) {
-    background: rgba(0, 243, 255, 0.08);
-    border-color: rgba(0, 243, 255, 0.28);
-    color: var(--color-primary, #00f3ff);
-  }
-
-  :global(.collapse-btn .material-icons) {
-    font-size: 15px;
-  }
-
-  /* ── Divider ── */
-  :global(.sidebar-divider) {
-    height: 1px;
-    margin: 0.35rem 0.85rem;
-    background: linear-gradient(
-      90deg,
-      transparent 0%,
-      rgba(255, 255, 255, 0.07) 25%,
-      rgba(255, 255, 255, 0.07) 75%,
-      transparent 100%
-    );
-    flex-shrink: 0;
-  }
-
-  /* ── Nav Links Container ── */
-  :global(.nav-links) {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-    padding: 0.4rem 0.6rem;
-    overflow-y: auto;
-    overflow-x: hidden;
-  }
-
-  /* ── Nav Item base: CLIPPED POLYGON ── */
-  :global(.nav-item) {
-    /* Layout */
-    display: flex;
-    align-items: center;
-    gap: 0.9rem;
-    padding: 0.72rem 1rem;
-    /* Clipped polygon — matches the dashboard button style */
-    clip-path: polygon(
-      0% 0%,
-      calc(100% - 10px) 0%,
-      100% 10px,
-      100% 100%,
-      10px 100%,
-      0% calc(100% - 10px)
-    );
-    border-radius: 0;
-    /* Text */
-    color: var(--text-secondary, #94a3b8);
-    text-decoration: none;
-    font-size: 0.78rem;
-    font-weight: 600;
-    letter-spacing: 0.035em;
-    white-space: nowrap;
-    overflow: visible; /* allow ::after pseudo particles to extend */
-    /* State */
-    position: relative;
-    cursor: pointer;
-    background: transparent;
-    width: 100%;
-    text-align: left;
-    border: none;
-    outline: none;
-    /* Transitions */
-    transition:
-      color 0.25s ease,
-      background 0.25s ease;
-  }
-
-  /* ── HOVER: cyan text + animated halftone particle stream ── */
-  :global(.nav-item:hover:not(.active)) {
-    color: var(--color-primary, #00f3ff);
-    background: rgba(0, 243, 255, 0.04);
-  }
-
-  /* Particle layer (span.nav-hover-particles inside each nav-item) */
-  :global(.nav-hover-particles) {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    overflow: hidden;
-    clip-path: polygon(
-      0% 0%,
-      calc(100% - 10px) 0%,
-      100% 10px,
-      100% 100%,
-      10px 100%,
-      0% calc(100% - 10px)
-    );
-    /* Dots that drift rightward */
-    background-image: radial-gradient(
-        circle,
-        var(--color-primary, #00f3ff) 1.2px,
-        transparent 1.2px
-      ),
-      radial-gradient(
-        circle,
-        var(--color-primary, #00f3ff) 1px,
-        transparent 1px
-      ),
-      radial-gradient(
-        circle,
-        var(--color-primary, #00f3ff) 0.8px,
-        transparent 0.8px
-      );
-    background-size:
-      10px 10px,
-      14px 14px,
-      18px 18px;
-    background-position:
-      0 0,
-      4px 5px,
-      9px 2px;
-    opacity: 0;
-    /* fade out toward right */
-    mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 0.55) 0%,
-      transparent 55%
-    );
-    -webkit-mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 0.55) 0%,
-      transparent 55%
-    );
-    transition: opacity 0.3s ease;
-  }
-
-  /* Animate position on hover — dots scroll rightward */
-  :global(.nav-item:hover .nav-hover-particles) {
-    opacity: 1;
-    animation: particles-drift 1.8s linear infinite;
-  }
-
-  @keyframes particles-drift {
-    0% {
-      background-position:
-        0px 0px,
-        4px 5px,
-        9px 2px;
-    }
-    100% {
-      background-position:
-        20px 0px,
-        24px 5px,
-        29px 2px;
-    }
-  }
-
-  /* ── ACTIVE: polygon + gradient fill + halftone bleed left→right ── */
-  :global(.nav-item.active) {
-    background: linear-gradient(
-      90deg,
-      rgba(0, 243, 255, 0.13) 0%,
-      rgba(0, 243, 255, 0.05) 50%,
-      transparent 100%
-    );
-    color: #ffffff;
-  }
-
-  /* Active: left glow accent bar (pseudo element, clipped by polygon so it appears as a tapered edge) */
-  :global(.nav-item.active::before) {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 3px;
-    background: linear-gradient(
-      180deg,
-      var(--color-primary, #00f3ff) 0%,
-      rgba(0, 243, 255, 0.4) 100%
-    );
-    box-shadow:
-      0 0 10px var(--color-primary, #00f3ff),
-      2px 0 12px rgba(0, 243, 255, 0.3);
-    pointer-events: none;
-  }
-
-  /* Active: halftone dot bleed fading to the right (always visible) */
-  :global(.nav-item.active::after) {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background-image: radial-gradient(
-      circle,
-      rgba(0, 243, 255, 0.5) 1.2px,
-      transparent 1.2px
-    );
-    background-size: 6px 6px;
-    pointer-events: none;
-    mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 0.5) 0%,
-      transparent 50%
-    );
-    -webkit-mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 0.5) 0%,
-      transparent 50%
-    );
-    clip-path: polygon(
-      0% 0%,
-      calc(100% - 10px) 0%,
-      100% 10px,
-      100% 100%,
-      10px 100%,
-      0% calc(100% - 10px)
-    );
-  }
-
-  /* Nav icon — always 20px width so logo aligns with icons in collapsed state */
-  :global(.nav-icon) {
-    font-size: 1.15rem;
-    width: 20px;
-    text-align: center;
-    flex-shrink: 0;
-    opacity: 0.65;
-    transition:
-      opacity 0.2s,
-      color 0.2s;
-    position: relative;
-    z-index: 1;
-  }
-
-  :global(.nav-item.active .nav-icon),
-  :global(.nav-item:hover .nav-icon) {
-    opacity: 1;
-    color: var(--color-primary, #00f3ff);
-  }
-
-  /* Nav text label */
-  :global(.nav-label) {
-    flex: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    transition:
-      opacity 0.2s 0.05s,
-      max-width 0.35s;
-    max-width: 200px;
-    position: relative;
-    z-index: 1;
-  }
-
-  :global(.glass-sidebar.collapsed .nav-label) {
-    opacity: 0;
-    max-width: 0;
-    pointer-events: none;
-    transition:
-      opacity 0.12s,
-      max-width 0.35s;
-  }
-
-  /* ── Footer ── */
-  :global(.sidebar-footer) {
-    flex-shrink: 0;
-    padding: 0 0.6rem 0.85rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-  }
-
-  :global(.version-chip) {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    padding: 0.5rem 0;
-    font-family: var(--font-mono, monospace);
-    font-size: 0.58rem;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-    color: rgba(255, 255, 255, 0.15);
-    text-transform: uppercase;
-    transition: opacity 0.2s;
-  }
-
-  :global(.glass-sidebar.collapsed .version-chip) {
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  :global(.version-text) {
-    transition: opacity 0.15s;
-  }
-
-  :global(.version-dot) {
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: var(--color-primary, #00f3ff);
-    opacity: 0.35;
-    flex-shrink: 0;
-    animation: version-pulse 3s ease-in-out infinite;
-  }
-
-  @keyframes version-pulse {
-    0%,
-    100% {
-      opacity: 0.2;
-      box-shadow: none;
-    }
-    50% {
-      opacity: 0.7;
-      box-shadow: 0 0 6px var(--color-primary, #00f3ff);
-    }
-  }
-  /* ============================================
-     LOGO ANIMATION: Lightning Strike + Scan
-     ============================================ */
-
-  :global(.logo-container) {
-    position: relative;
-    width: 54px;
-    height: 54px;
-    overflow: hidden;
-  }
-
-  /* Initial reveal: Vertical scan line */
-  :global(.logo-container::before) {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(
-      to bottom,
-      transparent 0%,
-      rgba(0, 243, 255, 0.6) 50%,
-      transparent 100%
-    );
-    animation: vertical-scan 0.6s ease-out forwards;
-    pointer-events: none;
-    z-index: 2;
-  }
-
-  /* Horizontal light sweep */
-  :global(.logo-container::after) {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(
-      to right,
-      transparent 0%,
-      rgba(0, 243, 255, 0.8) 50%,
-      transparent 100%
-    );
-    animation: horizontal-sweep 0.5s 0.4s ease-out forwards;
-    pointer-events: none;
-    z-index: 2;
-  }
-
-  /* Logo image animations */
-  :global(.logo-container .brand-logo-img) {
-    animation:
-      logo-flash 0.2s 0.8s ease-out,
-      logo-breathe 3s 1.2s ease-in-out infinite;
-    filter: drop-shadow(0 0 0px rgba(0, 243, 255, 0));
-  }
-
-  /* Vertical scan animation */
-  @keyframes vertical-scan {
-    0% {
-      transform: translateY(-100%);
-      opacity: 0;
-    }
-    50% {
-      opacity: 1;
-    }
-    100% {
-      transform: translateY(100%);
-      opacity: 0;
-    }
-  }
-
-  /* Horizontal sweep animation */
-  @keyframes horizontal-sweep {
-    0% {
-      transform: translateX(-100%);
-      opacity: 0;
-    }
-    50% {
-      opacity: 1;
-    }
-    100% {
-      transform: translateX(100%);
-      opacity: 0;
-    }
-  }
-
-  /* Lightning flash at intersection */
-  @keyframes logo-flash {
-    0% {
-      filter: drop-shadow(0 0 0px rgba(0, 243, 255, 0)) brightness(1);
-    }
-    50% {
-      filter: drop-shadow(0 0 20px rgba(0, 243, 255, 1)) brightness(1.5);
-    }
-    100% {
-      filter: drop-shadow(0 0 8px rgba(0, 243, 255, 0.4)) brightness(1);
-    }
-  }
-
-  /* Breathing glow (idle state) */
-  @keyframes logo-breathe {
-    0%,
-    100% {
-      filter: drop-shadow(0 0 8px rgba(0, 243, 255, 0.4));
-      transform: scale(1);
-    }
-    50% {
-      filter: drop-shadow(0 0 12px rgba(0, 243, 255, 0.6));
-      transform: scale(1.02);
-    }
-  }
-
-  /* Hover effect: Intensify glow */
-  :global(.logo-container:hover .brand-logo-img) {
-    animation: logo-breathe 1.5s ease-in-out infinite;
-    filter: drop-shadow(0 0 15px rgba(0, 243, 255, 0.8)) !important;
-  }
-
-  /* ============================================
-     PREMIUM INTRO ANIMATION STYLES
-     ============================================ */
-
-  .app-shell.hidden {
-    opacity: 0;
-    pointer-events: none;
-  }
 </style>
