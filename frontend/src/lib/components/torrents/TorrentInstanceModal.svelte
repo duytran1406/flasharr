@@ -134,8 +134,8 @@
             onclick={() => resetForm()}>New</Button
           >{/if}
       </div>
-      <label><span>Name</span><input bind:value={name} maxlength="80" required="" /></label>
-      <label><span>HTTP(S) URL</span><input type="url" bind:value={url} required="" /></label>
+      <label><span>Name</span><input bind:value={name} maxlength="80" required /></label>
+      <label><span>HTTP(S) URL</span><input type="url" bind:value={url} required /></label>
       <div class="two">
         <label><span>Username</span><input bind:value={username} maxlength="256" /></label><label
           ><span>Password {editing?.has_password ? "(leave blank to keep)" : ""}</span><input
@@ -157,7 +157,7 @@
             min="2"
             max="300"
             bind:value={pollInterval}
-            required=""
+            required
           /></label
         >
       </div>
