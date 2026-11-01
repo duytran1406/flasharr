@@ -103,7 +103,7 @@ impl DownloadService {
     pub async fn get_batch_tasks(&self, batch_id: &str) -> FlasharrResult<Vec<DownloadTask>> {
         let tasks = self
             .db
-            .get_tasks_by_batch_id_async(batch_id.to_string())
+            .get_tasks_by_batch_id_async(batch_id.to_string(), None)
             .await
             .map_err(|e| FlasharrError::Database(e.to_string()))?;
 
@@ -124,7 +124,7 @@ impl DownloadService {
     pub async fn pause_batch(&self, batch_id: &str) -> FlasharrResult<usize> {
         let tasks = self
             .db
-            .get_tasks_by_batch_id_async(batch_id.to_string())
+            .get_tasks_by_batch_id_async(batch_id.to_string(), None)
             .await
             .map_err(|e| FlasharrError::Database(e.to_string()))?;
 
@@ -156,17 +156,21 @@ impl DownloadService {
             .await
             .map_err(|e| FlasharrError::Database(e.to_string()))?;
 
-        // Update TaskManager and broadcast
+        // Update TaskManager, qBittorrent, broadcast
         let mut affected = 0;
         for task in tasks {
             if pauseable_ids.contains(&task.id) {
+                if task.download_source.as_deref() == Some("torrent") {
+                    if let Err(e) = self.orchestrator.pause_external_torrent(&task).await {
+                        tracing::warn!("Failed to pause qBittorrent task {}: {}", task.id, e);
+                    }
+                }
                 if let Some(paused_task) =
                     self.orchestrator.task_manager().pause_task(task.id).await
                 {
                     self.orchestrator.broadcast_task_update(&paused_task);
                     affected += 1;
                 } else {
-                    // Task not in memory, add it as paused
                     let mut paused = task.clone();
                     paused.state = DownloadState::Paused;
                     self.orchestrator
@@ -186,7 +190,7 @@ impl DownloadService {
     pub async fn resume_batch(&self, batch_id: &str) -> FlasharrResult<usize> {
         let tasks = self
             .db
-            .get_tasks_by_batch_id_async(batch_id.to_string())
+            .get_tasks_by_batch_id_async(batch_id.to_string(), None)
             .await
             .map_err(|e| FlasharrError::Database(e.to_string()))?;
 
@@ -207,22 +211,44 @@ impl DownloadService {
             return Ok(0);
         }
 
-        // Update database atomically
-        self.db
-            .batch_update_states_async(resumable_ids.clone(), "QUEUED".to_string())
-            .await
-            .map_err(|e| FlasharrError::Database(e.to_string()))?;
+        let mut local_ids = Vec::new();
 
-        // Update TaskManager and broadcast
+        // Update qBittorrent/TaskManager and broadcast
         let mut affected = 0;
+        let mut should_wake_workers = false;
         for task in tasks {
             if resumable_ids.contains(&task.id) {
-                affected += self.resume_single_task_for_batch(&task).await;
+                if task.download_source.as_deref() == Some("torrent") && task.external_id.is_some()
+                {
+                    if let Err(e) = self.orchestrator.resume_external_torrent(&task).await {
+                        tracing::warn!("Failed to resume qBittorrent task {}: {}", task.id, e);
+                        continue;
+                    }
+                    let mut resumed = task.clone();
+                    resumed.state = DownloadState::Downloading;
+                    self.orchestrator
+                        .task_manager()
+                        .update_task(resumed.clone())
+                        .await;
+                    let _ = self.db.save_task(&resumed);
+                    self.orchestrator.broadcast_task_update(&resumed);
+                    affected += 1;
+                } else {
+                    local_ids.push(task.id);
+                    affected += self.resume_single_task_for_batch(&task).await;
+                    should_wake_workers = true;
+                }
             }
         }
 
-        // Wake workers to process resumed tasks
-        self.orchestrator.wake_workers();
+        self.db
+            .batch_update_states_async(local_ids, "QUEUED".to_string())
+            .await
+            .map_err(|e| FlasharrError::Database(e.to_string()))?;
+
+        if should_wake_workers {
+            self.orchestrator.wake_workers();
+        }
 
         Ok(affected)
     }
@@ -231,14 +257,19 @@ impl DownloadService {
     pub async fn delete_batch(&self, batch_id: &str) -> FlasharrResult<usize> {
         let tasks = self
             .db
-            .get_tasks_by_batch_id_async(batch_id.to_string())
+            .get_tasks_by_batch_id_async(batch_id.to_string(), None)
             .await
             .map_err(|e| FlasharrError::Database(e.to_string()))?;
 
-        // Delete from TaskManager
+        // Delete from qBittorrent and TaskManager
         let mut affected = 0;
         for task in &tasks {
+            if let Err(e) = self.orchestrator.delete_external_torrent(task, false).await {
+                tracing::warn!("Failed to delete qBittorrent task {}: {}", task.id, e);
+            }
             if self.orchestrator.task_manager().delete_task(task.id).await {
+                affected += 1;
+            } else {
                 affected += 1;
             }
         }

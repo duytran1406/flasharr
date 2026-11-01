@@ -1,8 +1,7 @@
 //! Media entities module
 //!
-//! Defines MediaItem and MediaEpisode types for the TMDB-centric data model.
-//! TMDB ID is the primary key for media_items, establishing it as the
-//! universal join key across downloads, *arr integration, and the frontend.
+//! Defines MediaItem and MediaEpisode types for canonical media identity.
+//! TV uses TVDB ID; movies use TMDB ID. `media_key` is the DB primary key.
 
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +9,9 @@ use serde::{Deserialize, Serialize};
 /// This is the central record that links downloads to *arr library state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaItem {
-    /// TMDB ID — the universal key
+    /// Canonical DB key: `tv:{tvdb_id}` or `movie:{tmdb_id}`.
+    pub media_key: String,
+    /// Legacy TMDB bridge; movie canonical source.
     pub tmdb_id: i64,
     /// "movie" or "tv"
     pub media_type: String,
@@ -58,7 +59,9 @@ pub struct MediaItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaEpisode {
     pub id: i64,
-    /// TMDB ID of the parent series
+    /// Canonical DB key of parent series.
+    pub media_key: String,
+    /// Legacy TMDB bridge.
     pub tmdb_id: i64,
     pub season_number: i32,
     pub episode_number: i32,
@@ -83,6 +86,11 @@ impl MediaItem {
     pub fn new(tmdb_id: i64, media_type: &str, title: &str) -> Self {
         let now = chrono::Utc::now().to_rfc3339();
         Self {
+            media_key: if media_type == "movie" {
+                format!("movie:{}", tmdb_id)
+            } else {
+                format!("tv-tmdb:{}", tmdb_id)
+            },
             tmdb_id,
             media_type: media_type.to_string(),
             title: title.to_string(),
@@ -130,6 +138,7 @@ impl MediaEpisode {
         let now = chrono::Utc::now().to_rfc3339();
         Self {
             id: 0, // Will be set by AUTOINCREMENT
+            media_key: format!("tv-tmdb:{}", tmdb_id),
             tmdb_id,
             season_number,
             episode_number,

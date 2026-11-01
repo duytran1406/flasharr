@@ -4,6 +4,23 @@
 
 use crate::downloader::{DownloadState, DownloadTask};
 
+pub fn canonical_tv_batch(
+    tvdb_id: Option<i64>,
+    tmdb_id: Option<i64>,
+    title: Option<&str>,
+) -> anyhow::Result<(String, String)> {
+    let batch_id = match (tvdb_id.filter(|id| *id > 0), tmdb_id.filter(|id| *id > 0)) {
+        (Some(id), _) => format!("media:tv:{id}"),
+        (None, Some(id)) => format!("media:tv-tmdb:{id}"),
+        (None, None) => anyhow::bail!("TV download requires a positive tvdb_id or tmdb_id"),
+    };
+    let batch_name = title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("TV download requires a show title"))?;
+    Ok((batch_id, batch_name.to_string()))
+}
+
 /// Aggregate batch state from individual task states
 /// Returns the most representative state for display
 #[allow(dead_code)]
@@ -92,7 +109,15 @@ impl BatchStats {
         let total_size: u64 = tasks.iter().map(|t| t.size).sum();
         let downloaded_size: u64 = tasks
             .iter()
-            .map(|t| ((t.progress as f64 / 100.0) * t.size as f64) as u64)
+            .map(|t| {
+                if matches!(t.state, DownloadState::Completed) {
+                    t.size
+                } else if t.downloaded > 0 {
+                    t.downloaded.min(t.size)
+                } else {
+                    ((t.progress as f64 / 100.0) * t.size as f64) as u64
+                }
+            })
             .sum();
 
         let progress = if total_size > 0 {
@@ -149,6 +174,20 @@ mod tests {
             },
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn canonical_tv_batch_prefers_tvdb_and_ignores_season() {
+        assert_eq!(
+            canonical_tv_batch(Some(42), Some(84), Some("Test Series")).unwrap(),
+            ("media:tv:42".into(), "Test Series".into())
+        );
+    }
+
+    #[test]
+    fn canonical_tv_batch_requires_identity_and_title() {
+        assert!(canonical_tv_batch(None, None, Some("Test Series")).is_err());
+        assert!(canonical_tv_batch(Some(42), None, Some(" ")).is_err());
     }
 
     #[test]

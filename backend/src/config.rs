@@ -22,6 +22,8 @@ pub struct Config {
 pub struct ExternalConfig {
     /// TMDB API key for metadata enrichment (env: TMDB_API_KEY)
     pub tmdb_api_key: String,
+    /// TVDB API key for TV metadata enrichment (env: TVDB_API_KEY)
+    pub tvdb_api_key: String,
     /// Cache TTL for TMDB queries in seconds (default: 3600)
     pub tmdb_cache_ttl_secs: u64,
     /// Cache TTL for Fshare search results in seconds (default: 300)
@@ -31,9 +33,8 @@ pub struct ExternalConfig {
 impl Default for ExternalConfig {
     fn default() -> Self {
         Self {
-            // Use env var if set, otherwise fallback to the bundled key
-            tmdb_api_key: env::var("TMDB_API_KEY")
-                .unwrap_or_else(|_| "8d95150f3391194ca66fef44df497ad6".to_string()),
+            tmdb_api_key: env::var("TMDB_API_KEY").unwrap_or_default(),
+            tvdb_api_key: env::var("TVDB_API_KEY").unwrap_or_default(),
             tmdb_cache_ttl_secs: 3600,
             fshare_cache_ttl_secs: 300,
         }
@@ -118,7 +119,7 @@ impl Default for Config {
             radarr: None,
             indexer: Some(IndexerConfig {
                 enabled: true,
-                api_key: "flasharr-default-key".to_string(),
+                api_key: String::new(),
             }),
             external: ExternalConfig::default(),
         }

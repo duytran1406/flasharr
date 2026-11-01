@@ -5,9 +5,9 @@
 //! 2. API login via api.fshare.vn with app_key (secondary, fast & reliable)
 //! 3. Web form login via www.fshare.vn/site/login (tertiary, slowest but always works)
 
-use super::base::{AccountStatus, FileInfo, HostHandler, ResolvedUrl};
 use crate::config::FshareConfig;
 use crate::db::Db;
+use crate::hosts::base::{AccountStatus, FileInfo, HostHandler, ResolvedUrl};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use reqwest::Client;
@@ -153,7 +153,7 @@ pub struct FshareHandler {
     db: Option<Arc<Db>>,
     login_mutex: Arc<Mutex<()>>,
     rate_limiter: Arc<LoginRateLimiter>,
-    circuit_breaker: Arc<super::circuit_breaker::CircuitBreaker>,
+    circuit_breaker: Arc<crate::hosts::circuit_breaker::CircuitBreaker>,
 }
 
 impl FshareHandler {
@@ -191,7 +191,7 @@ impl FshareHandler {
             db: None,
             login_mutex: Arc::new(Mutex::new(())),
             rate_limiter: Arc::new(LoginRateLimiter::new()),
-            circuit_breaker: Arc::new(super::circuit_breaker::CircuitBreaker::new()),
+            circuit_breaker: Arc::new(crate::hosts::circuit_breaker::CircuitBreaker::new()),
         }
     }
 
@@ -401,7 +401,7 @@ impl FshareHandler {
             return Err(anyhow::anyhow!("FShare credentials not configured"));
         }
 
-        tracing::info!("[FSHARE] Logging into Fshare for {}", email);
+        tracing::info!("[FSHARE] Starting login");
 
         self.rate_limiter.record_attempt().await;
 
@@ -499,7 +499,7 @@ impl FshareHandler {
 
         if data["code"] != 200 {
             self.rate_limiter.record_failure().await;
-            return Err(anyhow::anyhow!("Fshare login failed: {}", data["msg"]));
+            return Err(anyhow::anyhow!("Fshare login failed"));
         }
 
         let session_id = data["session_id"]
@@ -589,7 +589,7 @@ impl FshareHandler {
             || status == reqwest::StatusCode::TEMPORARY_REDIRECT
         {
             if let Some(location) = resp.headers().get("location").and_then(|v| v.to_str().ok()) {
-                tracing::info!("[FSHARE-API2] Following redirect to: {}", location);
+                tracing::info!("[FSHARE-API2] Following login redirect");
                 self.api2_client
                     .post(location)
                     .json(&serde_json::json!({
@@ -616,22 +616,17 @@ impl FshareHandler {
             .await
             .map_err(|e| anyhow::anyhow!("API2 login: failed to read response body: {}", e))?;
 
-        tracing::info!(
-            "[FSHARE-API2] Login response body: {}",
-            &body_text[..body_text.len().min(500)]
+        tracing::debug!(
+            "[FSHARE-API2] Login response received; bytes={}",
+            body_text.len()
         );
 
-        let data: Value = serde_json::from_str(&body_text).map_err(|e| {
-            anyhow::anyhow!(
-                "API2 login: invalid JSON response ({}): {}",
-                e,
-                &body_text[..body_text.len().min(200)]
-            )
-        })?;
+        let data: Value = serde_json::from_str(&body_text)
+            .map_err(|e| anyhow::anyhow!("API2 login: invalid JSON response: {}", e))?;
 
         if data["code"] != 200 {
             self.rate_limiter.record_failure().await;
-            return Err(anyhow::anyhow!("FShare API2 login failed: {}", data["msg"]));
+            return Err(anyhow::anyhow!("FShare API2 login failed"));
         }
 
         let session_id = data["session_id"]
@@ -730,7 +725,7 @@ impl FshareHandler {
         email: &str,
         password: &str,
     ) -> anyhow::Result<WebSessionData> {
-        tracing::info!("[FSHARE-WEB] Starting web form login for {}", email);
+        tracing::info!("[FSHARE-WEB] Starting web form login");
 
         // Step 1: GET login page to obtain CSRF token and initial cookies
         let login_page_resp = self
@@ -751,10 +746,7 @@ impl FshareHandler {
             anyhow::anyhow!("[FSHARE-WEB] Could not extract CSRF token from login page")
         })?;
 
-        tracing::debug!(
-            "[FSHARE-WEB] Got CSRF token: {}...",
-            &csrf_token[..20.min(csrf_token.len())]
-        );
+        tracing::debug!("[FSHARE-WEB] CSRF token acquired");
 
         // Step 2: POST form login
         let form_body = format!(
@@ -786,8 +778,8 @@ impl FshareHandler {
         tracing::info!(
             "[FSHARE-WEB] Login POST status: {} | Cookies: {}",
             status,
-            if all_cookies.len() > 60 {
-                format!("{}...", &all_cookies[..60])
+            if all_cookies.chars().count() > 60 {
+                format!("{}...", all_cookies.chars().take(60).collect::<String>())
             } else {
                 all_cookies.clone()
             }
@@ -953,7 +945,7 @@ impl FshareHandler {
     /// Fields: `_csrf-app`, `linkcode`, `ushare`, `withFcode5`, `password`, optionally `des`
     /// Response: 302 redirect to the direct download URL, or JSON with `location` key.
     async fn resolve_download_url_web(&self, url: &str) -> anyhow::Result<ResolvedUrl> {
-        tracing::info!("[FSHARE-WEB] Resolving download URL via web for: {}", url);
+        tracing::info!("[FSHARE-WEB] Resolving download URL via web");
 
         let web_session = self.ensure_web_session().await?;
 
@@ -976,13 +968,8 @@ impl FshareHandler {
             .unwrap_or("");
 
         tracing::info!(
-            "[FSHARE-WEB] File code: {}, des: {}, POSTing form to /download/get",
-            fcode,
-            if des_token.is_empty() {
-                "(none)"
-            } else {
-                des_token
-            }
+            "[FSHARE-WEB] POSTing download form; has_des={}",
+            !des_token.is_empty()
         );
 
         const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -1004,10 +991,7 @@ impl FshareHandler {
                 let html = resp.text().await.unwrap_or_default();
                 let csrf = Self::extract_csrf_token(&html)
                     .unwrap_or_else(|| web_session.csrf_token.clone());
-                tracing::debug!(
-                    "[FSHARE-WEB] Got file-page CSRF: {}...",
-                    &csrf[..20.min(csrf.len())]
-                );
+                tracing::debug!("[FSHARE-WEB] Acquired file-page CSRF token");
                 (csrf, merged)
             }
             Err(e) => {
@@ -1031,11 +1015,7 @@ impl FshareHandler {
             form_body.push_str(&format!("&des={}", urlencoding::encode(des_token)));
         }
 
-        tracing::debug!(
-            "[FSHARE-WEB] Form body (sanitised): linkcode={}, des={}",
-            fcode,
-            des_token
-        );
+        tracing::debug!("[FSHARE-WEB] Prepared download form body");
 
         // POST to /download/get with no-redirect client so we can inspect Location header.
         // X-Requested-With marks this as an AJAX request — Fshare's backend now requires it
@@ -1068,10 +1048,7 @@ impl FshareHandler {
                     .to_str()
                     .map_err(|_| anyhow::anyhow!("[FSHARE-WEB] Invalid Location header encoding"))?
                     .to_string();
-                tracing::info!(
-                    "[FSHARE-WEB] Got redirect to download URL: {}...",
-                    &direct_url[..50.min(direct_url.len())]
-                );
+                tracing::info!("[FSHARE-WEB] Received download redirect");
                 return Ok(ResolvedUrl {
                     direct_url,
                     headers: std::collections::HashMap::new(),
@@ -1098,10 +1075,7 @@ impl FshareHandler {
 
             if let Some(url_str) = direct_url {
                 if !url_str.is_empty() {
-                    tracing::info!(
-                        "[FSHARE-WEB] Got download URL from JSON: {}...",
-                        &url_str[..50.min(url_str.len())]
-                    );
+                    tracing::info!("[FSHARE-WEB] Received download URL from JSON");
                     return Ok(ResolvedUrl {
                         direct_url: url_str.to_string(),
                         headers: std::collections::HashMap::new(),
@@ -1111,10 +1085,7 @@ impl FshareHandler {
             }
 
             // Log the full JSON if it doesn't contain what we expect
-            tracing::warn!(
-                "[FSHARE-WEB] JSON response but no download URL: {}",
-                &resp_body[..resp_body.len().min(300)]
-            );
+            tracing::warn!("[FSHARE-WEB] JSON response missing download URL");
         }
 
         // Case 3: Scan HTML for a cdn download link
@@ -1124,10 +1095,7 @@ impl FshareHandler {
                 .or_else(|| resp_body[pos..].find('\''))
             {
                 let direct_url = resp_body[pos..pos + end].to_string();
-                tracing::info!(
-                    "[FSHARE-WEB] Extracted download URL from HTML: {}...",
-                    &direct_url[..50.min(direct_url.len())]
-                );
+                tracing::info!("[FSHARE-WEB] Extracted download URL from HTML");
                 return Ok(ResolvedUrl {
                     direct_url,
                     headers: std::collections::HashMap::new(),
@@ -1137,9 +1105,8 @@ impl FshareHandler {
         }
 
         tracing::error!(
-            "[FSHARE-WEB] Could not extract download URL. Status: {}, Body preview: {}",
-            status,
-            &resp_body[..500.min(resp_body.len())]
+            "[FSHARE-WEB] Could not extract download URL; status={}",
+            status
         );
         Err(anyhow::anyhow!(
             "[FSHARE-WEB] No download URL found in /download/get response (status {})",
@@ -1242,10 +1209,8 @@ impl FshareHandler {
             .and_then(|s| s.parse::<u64>().ok())
             .or_else(|| data["expire_vip"].as_u64());
 
-        tracing::info!("[FSHARE] Raw account data: {}", data);
         tracing::info!(
-            "[FSHARE] Account status verified: email='{}', type='{}', level='{}', is_premium={}, valid_until={:?}",
-            email,
+            "[FSHARE] Account status verified: type='{}', level='{}', is_premium={}, valid_until={:?}",
             account_type,
             level,
             is_premium,
@@ -1305,10 +1270,7 @@ impl HostHandler for FshareHandler {
         }
 
         let data: Value = resp.json().await?;
-        tracing::info!(
-            "[FSHARE] V3 API response: {}",
-            serde_json::to_string(&data).unwrap_or_default()
-        );
+        tracing::debug!("[FSHARE] V3 API response received");
 
         // Check for 404 status in response
         if data["status"].as_i64() == Some(404) {
@@ -1338,7 +1300,7 @@ impl HostHandler for FshareHandler {
 
     async fn resolve_download_url(&self, url: &str) -> anyhow::Result<ResolvedUrl> {
         tracing::info!("=== [FSHARE] resolve_download_url called ===");
-        tracing::info!("[FSHARE] URL to resolve: {}", url);
+        tracing::info!("[FSHARE] Resolving URL");
 
         // Check if this is already a direct download URL (premium link from previous resolution)
         // Direct links look like: https://xxx.fshare.vn/dl/... or contain download tokens
@@ -1390,10 +1352,7 @@ impl HostHandler for FshareHandler {
         }
 
         let session = self.ensure_valid_session().await?;
-        tracing::info!(
-            "[FSHARE] Session ready, session_id: {}...",
-            &session.session_id[..20.min(session.session_id.len())]
-        );
+        tracing::info!("[FSHARE] Session ready");
 
         // If session_id is synthetic (web-session), use web resolution
         if session.session_id == "web-session" {
@@ -1407,10 +1366,7 @@ impl HostHandler for FshareHandler {
             "url": url,
             "password": "",
         });
-        tracing::info!(
-            "[FSHARE] Request payload (sanitized): url={}, password=''",
-            url
-        );
+        tracing::debug!("[FSHARE] Prepared download request payload");
 
         // Determine which API endpoint to use based on session source
         // api.fshare.vn uses /api/session/download with {token, url}
@@ -1444,10 +1400,7 @@ impl HostHandler for FshareHandler {
                     if let Some(location) =
                         resp.headers().get("location").and_then(|v| v.to_str().ok())
                     {
-                        tracing::info!(
-                            "[FSHARE-API2] Following download redirect to: {}",
-                            location
-                        );
+                        tracing::info!("[FSHARE-API2] Following download redirect");
                         match self
                             .api2_client
                             .post(location)
@@ -1475,9 +1428,9 @@ impl HostHandler for FshareHandler {
                 if status.is_success() {
                     // Read body as text first to avoid json decode errors crashing the fallback
                     let body_text = resp.text().await.unwrap_or_default();
-                    tracing::info!(
-                        "[FSHARE-API2] Response body: {}",
-                        &body_text[..body_text.len().min(500)]
+                    tracing::debug!(
+                        "[FSHARE-API2] Download response received; bytes={}",
+                        body_text.len()
                     );
 
                     match serde_json::from_str::<Value>(&body_text) {
@@ -1497,14 +1450,10 @@ impl HostHandler for FshareHandler {
                                     });
                                 }
                             }
-                            tracing::warn!("[FSHARE-API2] No location in response: {}", body_text);
+                            tracing::warn!("[FSHARE-API2] Response missing download location");
                         }
                         Err(e) => {
-                            tracing::warn!(
-                                "[FSHARE-API2] Failed to parse JSON ({}), body: {}",
-                                e,
-                                &body_text[..body_text.len().min(200)]
-                            );
+                            tracing::warn!("[FSHARE-API2] Failed to parse JSON: {}", e);
                         }
                     }
                 }
@@ -1560,26 +1509,21 @@ impl HostHandler for FshareHandler {
 
         let data: Value = resp.json().await?;
 
-        // Debug: Log the full response
-        tracing::info!(
-            "[FSHARE] Full API response: {}",
-            serde_json::to_string(&data).unwrap_or_else(|_| format!("{:?}", data))
-        );
+        tracing::debug!("[FSHARE] Primary API response received");
 
         // Check for errors in response
-        if let Some(error) = data["error"].as_str() {
-            tracing::error!("[FSHARE] Error in response: {}", error);
+        if data["error"].as_str().is_some() {
+            tracing::error!("[FSHARE] API returned an error");
             self.circuit_breaker.record_failure().await;
-            return Err(anyhow::anyhow!("Fshare error: {}", error));
+            return Err(anyhow::anyhow!("Fshare API returned an error"));
         }
 
         // Check for error code
         if let Some(code) = data["code"].as_i64() {
             if code != 200 {
-                let msg = data["msg"].as_str().unwrap_or("Unknown error");
-                tracing::error!("[FSHARE] Error code {} in response: {}", code, msg);
+                tracing::error!("[FSHARE] API returned error code {}", code);
                 self.circuit_breaker.record_failure().await;
-                return Err(anyhow::anyhow!("Fshare error (code {}): {}", code, msg));
+                return Err(anyhow::anyhow!("Fshare error (code {})", code));
             }
         }
 
@@ -1595,17 +1539,11 @@ impl HostHandler for FshareHandler {
                 tokio::spawn(async move {
                     circuit_breaker.record_failure().await;
                 });
-                anyhow::anyhow!(
-                    "No download URL in response. Response: {}",
-                    serde_json::to_string(&data).unwrap_or_default()
-                )
+                anyhow::anyhow!("No download URL in response")
             })?
             .to_string();
 
-        tracing::info!(
-            "[FSHARE] Resolved direct URL: {}...",
-            &direct_url[..50.min(direct_url.len())]
-        );
+        tracing::info!("[FSHARE] Resolved direct URL");
 
         // Success! Record in circuit breaker
         self.circuit_breaker.record_success().await;

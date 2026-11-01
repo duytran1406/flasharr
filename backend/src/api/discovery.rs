@@ -2,18 +2,15 @@
 //!
 //! Smart search and discovery features.
 
-use crate::constants::TMDB_API_KEY;
-use crate::utils::smart_tokenizer::{smart_parse, MediaType};
-use crate::utils::title_matcher::{
-    extract_core_title, get_title_keywords, is_different_franchise_entry,
-};
+use crate::api::search_pipeline::search_folder_cache;
+use crate::utils::smart_tokenizer::smart_parse;
+use crate::utils::title_matcher::{get_title_keywords, is_different_franchise_entry};
 use crate::AppState;
 use axum::{
     extract::{Query, State},
     routing::{get, post},
     Json, Router,
 };
-use futures_util::future::join_all;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -153,7 +150,7 @@ struct AvailabilityResponse {
 
 /// POST /api/discovery/smart-search - Perform smart search with v2 tactics
 async fn smart_search(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Json(payload): Json<SmartSearchRequest>,
 ) -> Json<Value> {
     let client = Client::builder()
@@ -173,7 +170,7 @@ async fn smart_search(
                 "movie"
             },
             tmdb_id,
-            TMDB_API_KEY
+            state.tmdb_service.api_key().await
         );
 
         if let Ok(resp) = client.get(&url).send().await {
@@ -213,24 +210,12 @@ async fn smart_search(
         queries.push(format!("{} S{:02}", payload.title, s));
     }
 
-    // 2. Multi-Search TimFshare
-    let mut all_raw_results = Vec::new();
-    for query in &queries {
-        let url = format!(
-            "https://timfshare.com/api/v1/string-query-search?query={}",
-            urlencoding::encode(query)
-        );
-
-        if let Ok(resp) = client.post(&url).header("Content-Length", "0").send().await {
-            if let Ok(data) = resp.json::<Value>().await {
-                if let Some(items) = data["data"].as_array() {
-                    for item in items {
-                        all_raw_results.push(item.clone());
-                    }
-                }
-            }
-        }
-    }
+    // 2. Search only the synchronized folder cache.
+    let all_raw_results = search_folder_cache(&state.folder_cache_service, &queries, 100)
+        .await
+        .into_iter()
+        .map(|item| json!({"name": item.name, "url": item.url, "size": item.size}))
+        .collect::<Vec<_>>();
 
     // 3. Parse and Filter
     let mut filtered_results = Vec::new();
@@ -390,13 +375,14 @@ async fn smart_search(
 
 /// GET /api/discovery/popular-today - Get popular items with Fshare availability
 async fn popular_today(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Query(params): Query<PopularQuery>,
 ) -> Json<PopularResponse> {
     let client = Client::new();
     let url = format!(
         "https://api.themoviedb.org/3/trending/{}/day?api_key={}",
-        params.media_type, TMDB_API_KEY
+        params.media_type,
+        state.tmdb_service.api_key().await
     );
 
     let mut results: Vec<PopularItem> = Vec::new();
@@ -439,7 +425,7 @@ async fn popular_today(
 
 /// GET /api/discovery/available-on-fshare - Check Fshare availability
 async fn available_on_fshare(
-    State(_state): State<Arc<AppState>>,
+    State(state): State<Arc<AppState>>,
     Query(params): Query<AvailabilityQuery>,
 ) -> Json<AvailabilityResponse> {
     let query = if let Some(ref year) = params.year {
@@ -448,46 +434,32 @@ async fn available_on_fshare(
         params.title.clone()
     };
 
-    let client = Client::new();
-    let url = format!(
-        "https://timfshare.com/api/v1/string-query-search?query={}",
-        urlencoding::encode(&query)
-    );
+    let raw_results = search_folder_cache(&state.folder_cache_service, &[query], 5).await;
 
     let mut results: Vec<SearchResult> = Vec::new();
+    for item in raw_results {
+        let parsed = smart_parse(&item.name);
 
-    if let Ok(resp) = client.post(&url).header("Content-Length", "0").send().await {
-        if let Ok(data) = resp.json::<Value>().await {
-            if let Some(items) = data["data"].as_array() {
-                for item in items.iter().take(5) {
-                    let name = item["name"].as_str().unwrap_or("").to_string();
-                    let url = item["url"].as_str().unwrap_or("").to_string();
-                    let fcode = url.split("/file/").last().unwrap_or("").to_string();
-                    let parsed = smart_parse(&name);
-
-                    results.push(SearchResult {
-                        name: parsed.title,
-                        original_name: name,
-                        url,
-                        size: item["size"].as_u64().unwrap_or(0),
-                        score: 0,
-                        fcode,
-                        quality: format!(
-                            "{} {}",
-                            parsed.resolution.as_deref().unwrap_or(""),
-                            parsed.source.as_deref().unwrap_or("")
-                        )
-                        .trim()
-                        .to_string()
-                        .into(),
-                        resolution: parsed.resolution.clone(),
-                        source: parsed.source.clone(),
-                        viet_sub: parsed.viet_sub,
-                        viet_dub: parsed.viet_dub,
-                    });
-                }
-            }
-        }
+        results.push(SearchResult {
+            name: parsed.title,
+            original_name: item.name,
+            url: item.url,
+            size: item.size,
+            score: 0,
+            fcode: item.fcode,
+            quality: format!(
+                "{} {}",
+                parsed.resolution.as_deref().unwrap_or(""),
+                parsed.source.as_deref().unwrap_or("")
+            )
+            .trim()
+            .to_string()
+            .into(),
+            resolution: parsed.resolution.clone(),
+            source: parsed.source.clone(),
+            viet_sub: parsed.viet_sub,
+            viet_dub: parsed.viet_dub,
+        });
     }
 
     let count = results.len();
@@ -500,175 +472,10 @@ async fn available_on_fshare(
 
 /// GET /api/discovery/trending
 async fn trending() -> Json<TrendingResponse> {
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .cookie_store(true)
-        .build()
-        .unwrap_or_default();
-    let url = "https://timfshare.com/api/key/data-top";
-
-    let mut results = Vec::new();
-
-    if let Ok(resp) = client.get(url).send().await {
-        if let Ok(data) = resp.json::<Value>().await {
-            if let Some(items) = data["dataFile"].as_array() {
-                // Filter video files
-                let video_exts = [
-                    ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v",
-                ];
-
-                for item in items.iter().take(50) {
-                    let name = item["name"].as_str().unwrap_or("").to_string();
-                    let has_video_ext = video_exts
-                        .iter()
-                        .any(|ext| name.to_lowercase().ends_with(ext));
-
-                    if !has_video_ext {
-                        continue;
-                    }
-
-                    let parsed = smart_parse(&name);
-                    let url = format!(
-                        "https://www.fshare.vn/file/{}",
-                        item["linkcode"].as_str().unwrap_or("")
-                    );
-                    let fcode = item["linkcode"].as_str().unwrap_or("").to_string();
-                    let size = item["size"]
-                        .as_str()
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(0);
-
-                    // Quality string
-                    let qual_str = format!(
-                        "{} {}",
-                        parsed.resolution.as_deref().unwrap_or(""),
-                        parsed.source.as_deref().unwrap_or("")
-                    )
-                    .trim()
-                    .to_string();
-                    let quality = if qual_str.is_empty() {
-                        None
-                    } else {
-                        Some(qual_str)
-                    };
-
-                    results.push(TrendingItem {
-                        fcode,
-                        original_filename: name.clone(),
-                        name: parsed.title,
-                        url,
-                        size,
-                        quality,
-                        has_vietsub: parsed.viet_sub,
-                        has_vietdub: parsed.viet_dub,
-                        tmdb_id: None,
-                        tmdb_title: None,
-                        poster_url: None,
-                        vote_average: None,
-                        year: parsed.year.map(|y| y.to_string()),
-                        media_type: if parsed.media_type == MediaType::TvShow {
-                            Some("tv".to_string())
-                        } else {
-                            Some("movie".to_string())
-                        },
-                    });
-
-                    if results.len() >= 20 {
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    // Parallel Enrichment
-    let mut tasks = Vec::new();
-    for item in results.iter() {
-        let clean_title = extract_core_title(&item.name); // Using parsed title
-        let year = item.year.clone();
-        let is_series = item.media_type.as_deref() == Some("tv");
-        let client = client.clone();
-
-        tasks.push(tokio::spawn(async move {
-            let media_type = if is_series { "tv" } else { "movie" };
-            let mut url = format!(
-                "https://api.themoviedb.org/3/search/{}?api_key={}&query={}",
-                media_type,
-                TMDB_API_KEY,
-                urlencoding::encode(&clean_title)
-            );
-            if let Some(y) = &year {
-                if media_type == "movie" {
-                    url.push_str(&format!("&primary_release_year={}", y));
-                } else {
-                    url.push_str(&format!("&first_air_date_year={}", y));
-                }
-            }
-
-            if let Ok(resp) = client.get(&url).send().await {
-                if let Ok(data) = resp.json::<Value>().await {
-                    if let Some(results) = data["results"].as_array() {
-                        if let Some(first) = results.first() {
-                            return Some(first.clone());
-                        }
-                    }
-                }
-            }
-            // Retry without year
-            if year.is_some() {
-                let url = format!(
-                    "https://api.themoviedb.org/3/search/{}?api_key={}&query={}",
-                    media_type,
-                    TMDB_API_KEY,
-                    urlencoding::encode(&clean_title)
-                );
-                if let Ok(resp) = client.get(&url).send().await {
-                    if let Ok(data) = resp.json::<Value>().await {
-                        if let Some(results) = data["results"].as_array() {
-                            if let Some(first) = results.first() {
-                                return Some(first.clone());
-                            }
-                        }
-                    }
-                }
-            }
-            None
-        }));
-    }
-
-    let tmdb_results = join_all(tasks).await;
-
-    for (i, join_res) in tmdb_results.into_iter().enumerate() {
-        if let Ok(Some(data)) = join_res {
-            let item = &mut results[i];
-            item.tmdb_id = data["id"].as_u64().map(|id| id as u32);
-            item.tmdb_title = data["title"]
-                .as_str()
-                .or_else(|| data["name"].as_str())
-                .map(|s| s.to_string());
-            if let Some(path) = data["poster_path"].as_str() {
-                item.poster_url = Some(format!("https://image.tmdb.org/t/p/w500{}", path));
-            }
-            item.vote_average = data["vote_average"].as_f64().map(|v| v as f32);
-
-            // Fix media type if unknown
-            if item.media_type.is_none() {
-                if let Some(mt) = data["media_type"].as_str() {
-                    item.media_type = Some(mt.to_string());
-                }
-            }
-            // Fix year if unknown
-            if item.year.is_none() {
-                if let Some(date) = data.get("release_date").and_then(|v| v.as_str()) {
-                    item.year = date.split('-').next().map(|s| s.to_string());
-                } else if let Some(date) = data.get("first_air_date").and_then(|v| v.as_str()) {
-                    item.year = date.split('-').next().map(|s| s.to_string());
-                }
-            }
-        }
-    }
-
-    Json(TrendingResponse { results })
+    // ponytail: add a local popularity metric before reintroducing trending results.
+    Json(TrendingResponse {
+        results: Vec::new(),
+    })
 }
 
 #[derive(Serialize)]

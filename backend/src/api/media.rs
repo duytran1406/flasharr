@@ -62,9 +62,29 @@ pub struct MediaDownloadsResponse {
 #[derive(Deserialize)]
 pub struct SmartGrabRequest {
     pub tmdb_id: i64,
-    pub media_type: String, // "movie" or "tv"
+    #[serde(default, alias = "tvdbId")]
+    pub tvdb_id: Option<i64>,
+    pub media_type: String,
     pub title: String,
     pub year: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct SmartGrabResponse {
+    pub success: bool,
+    pub tmdb_id: i64,
+    pub media_type: String,
+    pub status: String,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+pub struct SmartGrabErrorResponse {
+    pub success: bool,
+    pub tmdb_id: Option<i64>,
+    pub media_type: Option<String>,
+    pub status: String,
+    pub message: String,
 }
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -189,10 +209,24 @@ async fn get_media_downloads(
             )
         })?;
 
-    let total = downloads.len();
     let mut episodes: HashMap<String, Vec<DownloadInstance>> = HashMap::new();
 
     for dl in downloads {
+        let active = matches!(
+            dl.state,
+            crate::downloader::DownloadState::Queued
+                | crate::downloader::DownloadState::Starting
+                | crate::downloader::DownloadState::Downloading
+                | crate::downloader::DownloadState::Paused
+                | crate::downloader::DownloadState::Waiting
+                | crate::downloader::DownloadState::Importing
+        );
+        if !active
+            && tokio::fs::metadata(&dl.destination).await.is_err()
+            && tokio::fs::symlink_metadata(&dl.destination).await.is_err()
+        {
+            continue;
+        }
         let key = match (dl.tmdb_season, dl.tmdb_episode) {
             (Some(s), Some(e)) => format!("S{:02}E{:02}", s, e),
             _ => "movie".to_string(),
@@ -213,6 +247,7 @@ async fn get_media_downloads(
         });
     }
 
+    let total = episodes.values().map(Vec::len).sum();
     Ok(Json(MediaDownloadsResponse {
         tmdb_id,
         media_type,
@@ -226,18 +261,72 @@ async fn get_media_downloads(
 async fn smart_grab(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<SmartGrabRequest>,
-) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
+) -> Result<Json<Value>, (axum::http::StatusCode, Json<SmartGrabErrorResponse>)> {
+    let media_type = payload.media_type.trim().to_lowercase();
+    let title = payload.title.trim();
+
+    if payload.tmdb_id <= 0 {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(SmartGrabErrorResponse {
+                success: false,
+                tmdb_id: Some(payload.tmdb_id),
+                media_type: Some(media_type),
+                status: "failed".to_string(),
+                message: "tmdb_id must be a positive integer".to_string(),
+            }),
+        ));
+    }
+
+    if media_type != "movie" && media_type != "tv" {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(SmartGrabErrorResponse {
+                success: false,
+                tmdb_id: Some(payload.tmdb_id),
+                media_type: Some(media_type),
+                status: "failed".to_string(),
+                message: "media_type must be 'movie' or 'tv'".to_string(),
+            }),
+        ));
+    }
+
+    if title.is_empty() {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(SmartGrabErrorResponse {
+                success: false,
+                tmdb_id: Some(payload.tmdb_id),
+                media_type: Some(media_type),
+                status: "failed".to_string(),
+                message: "title is required".to_string(),
+            }),
+        ));
+    }
+
     state
         .discovery_service
         .smart_grab(
             payload.tmdb_id,
-            &payload.media_type,
-            &payload.title,
+            payload.tvdb_id,
+            &media_type,
+            title,
             payload.year,
         )
         .await
         .map(Json)
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))
+        .map_err(|(status_code, status, message)| {
+            (
+                status_code,
+                Json(SmartGrabErrorResponse {
+                    success: false,
+                    tmdb_id: Some(payload.tmdb_id),
+                    media_type: Some(media_type),
+                    status,
+                    message,
+                }),
+            )
+        })
 }
 
 /// GET /api/media/history — Get download history

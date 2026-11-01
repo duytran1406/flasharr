@@ -7,27 +7,35 @@
 use crate::arr::ArrClient;
 use crate::db::media::{MediaEpisode, MediaItem};
 use crate::db::Db;
+use crate::downloader::DownloadOrchestrator;
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
 pub struct LibrarySyncService {
     db: Arc<Db>,
-    arr_client: Arc<ArrClient>,
+    download_orchestrator: Arc<DownloadOrchestrator>,
 }
 
 impl LibrarySyncService {
-    pub fn new(db: Arc<Db>, arr_client: Arc<ArrClient>) -> Self {
-        Self { db, arr_client }
+    pub fn new(db: Arc<Db>, download_orchestrator: Arc<DownloadOrchestrator>) -> Self {
+        Self {
+            db,
+            download_orchestrator,
+        }
     }
 
     /// Full synchronization of all series and movies
     pub async fn sync_all(&self) -> anyhow::Result<()> {
+        let Some(arr_client) = self.download_orchestrator.get_arr_client().await else {
+            info!("[SYNC] Skipped: Arr client is not configured");
+            return Ok(());
+        };
         let mut total_updated = 0;
 
         // 1. Sync Sonarr Series & Episodes
-        if self.arr_client.has_sonarr() {
+        if arr_client.has_sonarr() {
             info!("[SYNC] Fetching all series from Sonarr");
-            match self.arr_client.get_all_series().await {
+            match arr_client.get_all_series().await {
                 Ok(series_list) => {
                     for sonarr_series in series_list {
                         let tmdb_id = match sonarr_series.tmdb_id {
@@ -70,7 +78,7 @@ impl LibrarySyncService {
                         // Get poster from images if possible
                         if let Some(images) = sonarr_series.images {
                             for img in images {
-                                if img.cover_type == "poster" {
+                                if img.cover_type.as_deref() == Some("poster") {
                                     item.poster_path = img.remote_url.or(img.url);
                                     break;
                                 }
@@ -83,7 +91,10 @@ impl LibrarySyncService {
                         }
 
                         // Sync Episodes
-                        if let Err(e) = self.sync_series_episodes(tmdb_id, sonarr_series.id).await {
+                        if let Err(e) = self
+                            .sync_series_episodes(&arr_client, tmdb_id, sonarr_series.id)
+                            .await
+                        {
                             warn!(
                                 "[SYNC] Failed to sync episodes for series {}: {}",
                                 item.title, e
@@ -98,9 +109,9 @@ impl LibrarySyncService {
         }
 
         // 2. Sync Radarr Movies
-        if self.arr_client.has_radarr() {
+        if arr_client.has_radarr() {
             info!("[SYNC] Fetching all movies from Radarr");
-            match self.arr_client.get_all_movies().await {
+            match arr_client.get_all_movies().await {
                 Ok(movie_list) => {
                     for radarr_movie in movie_list {
                         // Handle cases where Radarr API returns null for tmdb_id
@@ -132,7 +143,7 @@ impl LibrarySyncService {
                         // Get poster
                         if let Some(images) = radarr_movie.images {
                             for img in images {
-                                if img.cover_type == "poster" {
+                                if img.cover_type.as_deref() == Some("poster") {
                                     item.poster_path = img.remote_url.or(img.url);
                                     break;
                                 }
@@ -155,8 +166,13 @@ impl LibrarySyncService {
     }
 
     /// Sync episodes for a specific series
-    async fn sync_series_episodes(&self, tmdb_id: i64, sonarr_id: i32) -> anyhow::Result<()> {
-        let episodes = self.arr_client.get_episodes(sonarr_id).await?;
+    async fn sync_series_episodes(
+        &self,
+        arr_client: &ArrClient,
+        tmdb_id: i64,
+        sonarr_id: i32,
+    ) -> anyhow::Result<()> {
+        let episodes = arr_client.get_episodes(sonarr_id).await?;
 
         for sonarr_ep in episodes {
             let mut ep =

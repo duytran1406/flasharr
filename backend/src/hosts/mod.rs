@@ -1,9 +1,7 @@
 pub mod base;
 pub mod circuit_breaker;
-pub mod fshare;
 pub mod registry;
 
-use self::fshare::FshareHandler;
 use self::registry::HostRegistry;
 use crate::config::Config;
 use crate::db::Db;
@@ -24,8 +22,6 @@ pub fn create_shared_client() -> Arc<Client> {
 
 pub fn create_registry(config: &Config, client: Arc<Client>, db: Arc<Db>) -> HostRegistry {
     let mut registry = HostRegistry::new();
-    registry.register(Box::new(
-        FshareHandler::new(config.fshare.clone(), client).with_db(db),
-    ));
+    crate::providers::fshare::register(&mut registry, config, client, db);
     registry
 }

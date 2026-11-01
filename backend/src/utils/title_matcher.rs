@@ -77,6 +77,19 @@ pub fn get_franchise_conflicts() -> &'static Vec<(&'static str, Vec<&'static str
                 ],
             ),
             (
+                "dragon ball",
+                vec![
+                    "dragon ball z",
+                    "dragon ball gt",
+                    "dragon ball super",
+                    "dragonball z",
+                    "dragonball gt",
+                    "dragonball super",
+                    "bảy viên ngọc rồng siêu cấp",
+                    "bay vien ngoc rong sieu cap",
+                ],
+            ),
+            (
                 "pirates",
                 vec!["dead man", "world's end", "stranger tides", "dead men"],
             ),
@@ -209,7 +222,7 @@ pub fn calculate_unified_similarity(
     aliases: &[String],
 ) -> SimilarityResult {
     let result = _match_against_title(search_title, filename);
-    if result.is_valid {
+    if result.is_valid || result.match_type == "franchise_conflict" {
         return result;
     }
 
@@ -335,6 +348,16 @@ fn _match_against_title(search_title: &str, filename: &str) -> SimilarityResult 
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamBehaviorHints {
+    #[serde(default, alias = "bingeGroup", skip_serializing_if = "Option::is_none")]
+    pub binge_group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(default, alias = "videoSize", skip_serializing_if = "Option::is_none")]
+    pub video_size: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct SmartSearchResult {
     pub name: String,
     pub url: String,
@@ -353,6 +376,40 @@ pub struct SmartSearchResult {
     pub vietsub: bool,
     pub hdr: bool,
     pub dolby_vision: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indexer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seeders: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leechers: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub info_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_indexer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached: Option<bool>,
+    #[serde(default, alias = "fileIdx", skip_serializing_if = "Option::is_none")]
+    pub file_idx: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sources: Option<Vec<String>>,
+    #[serde(
+        default,
+        alias = "behaviorHints",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub behavior_hints: Option<StreamBehaviorHints>,
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub inspection: Option<crate::api::search::TorrentInspectionSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inspection_score: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

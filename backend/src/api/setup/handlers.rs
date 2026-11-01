@@ -89,7 +89,7 @@ pub async fn get_setup_status(State(state): State<Arc<AppState>>) -> Json<SetupS
 
 /// POST /api/setup/fshare - Validate and save Fshare credentials
 /// Tries API login first, falls back to web form login if API is unreachable
-pub async fn setup_fshare(
+pub async fn setup_fshare_impl(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<FshareCredentials>,
 ) -> Result<Json<TestResult>, StatusCode> {
@@ -304,6 +304,13 @@ pub async fn setup_fshare(
 
 /// POST /api/setup/sonarr/test - Test Sonarr connection
 pub async fn test_sonarr(Json(payload): Json<ArrConfig>) -> Json<TestResult> {
+    if let Err(message) = crate::api::settings::validate_api_key(&payload.api_key) {
+        return Json(TestResult {
+            success: false,
+            message: message.to_string(),
+            version: None,
+        });
+    }
     // Test connection to Sonarr
     let client = &*HTTP_CLIENT;
     let url = format!("{}/api/v3/system/status", payload.url.trim_end_matches('/'));
@@ -348,6 +355,13 @@ pub async fn test_sonarr(Json(payload): Json<ArrConfig>) -> Json<TestResult> {
 
 /// POST /api/setup/radarr/test - Test Radarr connection
 pub async fn test_radarr(Json(payload): Json<ArrConfig>) -> Json<TestResult> {
+    if let Err(message) = crate::api::settings::validate_api_key(&payload.api_key) {
+        return Json(TestResult {
+            success: false,
+            message: message.to_string(),
+            version: None,
+        });
+    }
     // Test connection to Radarr (same API as Sonarr)
     let client = &*HTTP_CLIENT;
     let url = format!("{}/api/v3/system/status", payload.url.trim_end_matches('/'));
@@ -392,6 +406,13 @@ pub async fn test_radarr(Json(payload): Json<ArrConfig>) -> Json<TestResult> {
 
 /// POST /api/setup/jellyfin/test - Test Jellyfin connection
 pub async fn test_jellyfin(Json(payload): Json<JellyfinConfig>) -> Json<TestResult> {
+    if let Err(message) = crate::api::settings::validate_api_key(&payload.api_key) {
+        return Json(TestResult {
+            success: false,
+            message: message.to_string(),
+            version: None,
+        });
+    }
     let client = &*HTTP_CLIENT;
     let url = format!("{}/System/Info", payload.url.trim_end_matches('/'));
 
@@ -489,18 +510,27 @@ pub async fn complete_setup(
         });
     }
 
-    // Collect arr configs for reload
+    let _arr_update_lock = state.arr_config_update_lock.lock().await;
+    // Collect Arr configs for reload.
     let mut sonarr_config = None;
     let mut radarr_config = None;
+    let mut arr_settings_changed = false;
 
     // Save Sonarr config if provided
     if let Some(sonarr) = payload.sonarr {
+        if let Err(message) = crate::api::settings::validate_api_key(&sonarr.api_key) {
+            return Json(SuccessResponse {
+                success: false,
+                message: message.to_string(),
+            });
+        }
         if let Err(e) = state
             .db
-            .save_arr_config("sonarr", &sonarr.url, &sonarr.api_key)
+            .save_arr_config("sonarr", &sonarr.url, &sonarr.api_key, true, true)
         {
             tracing::error!("Failed to save Sonarr config: {}", e);
         } else {
+            arr_settings_changed = true;
             sonarr_config = Some(crate::config::ArrConfig {
                 enabled: true,
                 url: sonarr.url,
@@ -512,12 +542,19 @@ pub async fn complete_setup(
 
     // Save Radarr config if provided
     if let Some(radarr) = payload.radarr {
+        if let Err(message) = crate::api::settings::validate_api_key(&radarr.api_key) {
+            return Json(SuccessResponse {
+                success: false,
+                message: message.to_string(),
+            });
+        }
         if let Err(e) = state
             .db
-            .save_arr_config("radarr", &radarr.url, &radarr.api_key)
+            .save_arr_config("radarr", &radarr.url, &radarr.api_key, true, true)
         {
             tracing::error!("Failed to save Radarr config: {}", e);
         } else {
+            arr_settings_changed = true;
             radarr_config = Some(crate::config::ArrConfig {
                 enabled: true,
                 url: radarr.url,
@@ -526,6 +563,13 @@ pub async fn complete_setup(
             });
         }
     }
+
+    sonarr_config = sonarr_config.or_else(|| {
+        crate::api::settings::effective_arr_config(&state.db, "sonarr", state.config.sonarr.clone())
+    });
+    radarr_config = radarr_config.or_else(|| {
+        crate::api::settings::effective_arr_config(&state.db, "radarr", state.config.radarr.clone())
+    });
 
     // Reload arr_client with new configurations
     if sonarr_config.is_some() || radarr_config.is_some() {
@@ -538,6 +582,12 @@ pub async fn complete_setup(
 
     // Save Jellyfin config if provided
     if let Some(jellyfin) = payload.jellyfin {
+        if let Err(message) = crate::api::settings::validate_api_key(&jellyfin.api_key) {
+            return Json(SuccessResponse {
+                success: false,
+                message: message.to_string(),
+            });
+        }
         if let Err(e) = state
             .db
             .save_jellyfin_config(&jellyfin.url, &jellyfin.api_key)
@@ -555,6 +605,9 @@ pub async fn complete_setup(
         });
     }
 
+    if arr_settings_changed {
+        crate::api::settings::notify_integration_settings_changed(&state);
+    }
     tracing::info!("Setup wizard completed successfully");
     Json(SuccessResponse {
         success: true,

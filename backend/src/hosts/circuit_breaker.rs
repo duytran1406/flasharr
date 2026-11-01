@@ -5,6 +5,20 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
+/// Error weight for breaker failure accounting.
+/// Transient network errors count as 1; rate-limits as 3; auth/ban signals as 5.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BreakerWeight {
+    /// Normal transient error (connection drop, timeout)
+    Normal = 1,
+    /// Rate limit (429) — serious but recoverable
+    RateLimit = 3,
+    /// Auth failure or permanent error — trip immediately
+    Auth = 5,
+    /// URL refresh needed — not a Timfshare health signal, ignored
+    UrlRefresh = 0,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CircuitState {
     Closed,   // Normal operation
@@ -112,40 +126,52 @@ impl CircuitBreaker {
 
     /// Record failed request
     pub async fn record_failure(&self) {
+        self.record_failure_weighted(BreakerWeight::Normal).await;
+    }
+
+    /// Record failed request with weighted severity.
+    pub async fn record_failure_weighted(&self, weight: BreakerWeight) {
+        if matches!(weight, BreakerWeight::UrlRefresh) {
+            return;
+        }
+
         let mut state = self.state.lock().await;
+        let weight_value = weight as usize;
 
         match *state {
             CircuitState::Closed => {
-                // Increment failure count
-                let failures = self.failure_count.fetch_add(1, Ordering::SeqCst) + 1;
+                let failures =
+                    self.failure_count.fetch_add(weight_value, Ordering::SeqCst) + weight_value;
 
                 if failures >= Self::FAILURE_THRESHOLD {
-                    // Too many failures, open circuit
                     *state = CircuitState::Open;
                     let mut last_failure = self.last_failure_time.lock().await;
                     *last_failure = Some(Instant::now());
                     tracing::error!(
-                        "[CIRCUIT_BREAKER] Transitioning to OPEN ({} consecutive failures)",
-                        failures
+                        "[CIRCUIT_BREAKER] Transitioning to OPEN (weighted failures={}, weight={})",
+                        failures,
+                        weight_value
                     );
                 } else {
                     tracing::warn!(
-                        "[CIRCUIT_BREAKER] Failure in CLOSED ({}/{})",
+                        "[CIRCUIT_BREAKER] Failure in CLOSED ({}/{}, weight={})",
                         failures,
-                        Self::FAILURE_THRESHOLD
+                        Self::FAILURE_THRESHOLD,
+                        weight_value
                     );
                 }
             }
             CircuitState::HalfOpen => {
-                // Failure in half-open, go back to open
                 *state = CircuitState::Open;
                 let mut last_failure = self.last_failure_time.lock().await;
                 *last_failure = Some(Instant::now());
                 self.success_count.store(0, Ordering::SeqCst);
-                tracing::error!("[CIRCUIT_BREAKER] Transitioning back to OPEN (recovery failed)");
+                tracing::error!(
+                    "[CIRCUIT_BREAKER] Transitioning back to OPEN (recovery failed, weight={})",
+                    weight_value
+                );
             }
             CircuitState::Open => {
-                // Already open, just update timestamp
                 let mut last_failure = self.last_failure_time.lock().await;
                 *last_failure = Some(Instant::now());
             }

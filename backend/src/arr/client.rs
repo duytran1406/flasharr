@@ -6,8 +6,7 @@
 use crate::config::ArrConfig;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{Mutex, OnceCell};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RootFolder {
@@ -22,7 +21,16 @@ pub struct ArrClient {
     http_client: Client,
     sonarr_config: Option<ArrConfig>,
     radarr_config: Option<ArrConfig>,
-    tmdb_tvdb_cache: Arc<Mutex<HashMap<i64, Arc<OnceCell<Result<i32, String>>>>>>,
+}
+
+fn validated_config(config: Option<ArrConfig>, service: &str) -> Option<ArrConfig> {
+    config.filter(|config| {
+        if let Err(message) = crate::api::settings::validate_api_key(&config.api_key) {
+            tracing::warn!("{} configuration disabled: {}", service, message);
+            return false;
+        }
+        true
+    })
 }
 
 // ============================================================================
@@ -112,9 +120,9 @@ pub struct SonarrCalendarSeries {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RadarrCollection {
-    pub title: String,
+    pub title: Option<String>,
     #[serde(rename = "tmdbId")]
-    pub tmdb_id: i64,
+    pub tmdb_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,7 +156,7 @@ pub struct RadarrMovie {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaImage {
     #[serde(rename = "coverType")]
-    pub cover_type: String,
+    pub cover_type: Option<String>,
     pub url: Option<String>,
     #[serde(rename = "remoteUrl")]
     pub remote_url: Option<String>,
@@ -199,9 +207,8 @@ impl ArrClient {
     pub fn new(sonarr_config: Option<ArrConfig>, radarr_config: Option<ArrConfig>) -> Self {
         Self {
             http_client: Client::new(),
-            sonarr_config,
-            radarr_config,
-            tmdb_tvdb_cache: Arc::new(Mutex::new(HashMap::new())),
+            sonarr_config: validated_config(sonarr_config, "Sonarr"),
+            radarr_config: validated_config(radarr_config, "Radarr"),
         }
     }
 
@@ -247,11 +254,11 @@ impl ArrClient {
     // Series/Movie Management Methods
     // ============================================================================
 
-    /// Add series to Sonarr by TMDB ID
-    /// Returns Sonarr series ID on success
-    pub async fn add_series_by_tmdb(
+    /// Add series to Sonarr by canonical TVDB ID.
+    /// Returns Sonarr series ID on success.
+    pub async fn add_series_by_tvdb(
         &self,
-        tmdb_id: i64,
+        tvdb_id: i32,
         quality_profile_id: i32,
         root_folder_path: &str,
     ) -> anyhow::Result<i32> {
@@ -264,10 +271,6 @@ impl ArrClient {
             anyhow::bail!("Sonarr is disabled");
         }
 
-        // Step 1: Convert TMDB ID to TVDB ID using Sonarr's lookup
-        let tvdb_id = self.tmdb_to_tvdb_via_sonarr(tmdb_id, config).await?;
-
-        // Step 2: Get series details from Sonarr lookup
         let lookup_url = format!(
             "{}/api/v3/series/lookup?term=tvdb:{}",
             config.url.trim_end_matches('/'),
@@ -286,11 +289,14 @@ impl ArrClient {
         }
 
         let mut lookup_results: Vec<serde_json::Value> = lookup_response.json().await?;
+        let series_index = lookup_results
+            .iter()
+            .position(|series| series["tvdbId"].as_i64() == Some(tvdb_id as i64))
+            .unwrap_or(0);
         let series_data = lookup_results
-            .first_mut()
+            .get_mut(series_index)
             .ok_or_else(|| anyhow::anyhow!("No series found for TVDB ID {}", tvdb_id))?;
 
-        // Step 3: Modify series data for adding
         series_data["qualityProfileId"] = serde_json::json!(quality_profile_id);
         series_data["rootFolderPath"] = serde_json::json!(root_folder_path);
         series_data["monitored"] = serde_json::json!(true);
@@ -299,7 +305,6 @@ impl ArrClient {
             "searchForMissingEpisodes": false
         });
 
-        // Step 4: Add series to Sonarr
         let add_url = format!("{}/api/v3/series", config.url.trim_end_matches('/'));
         let add_response = self
             .http_client
@@ -317,8 +322,9 @@ impl ArrClient {
 
         let added_series: SonarrSeries = add_response.json().await?;
         tracing::info!(
-            "Added series '{}' to Sonarr (ID: {})",
+            "Added series '{}' to Sonarr by tvdb_id={} (ID: {})",
             added_series.title,
+            tvdb_id,
             added_series.id
         );
 
@@ -396,9 +402,9 @@ impl ArrClient {
         Ok(added_movie.id)
     }
 
-    /// Check if series exists in Sonarr by TMDB ID
-    /// Returns Sonarr series ID if exists, None otherwise
-    pub async fn series_exists(&self, tmdb_id: i64) -> anyhow::Result<Option<i32>> {
+    /// Check if series exists in Sonarr by canonical TVDB ID.
+    /// Returns Sonarr series ID if exists, None otherwise.
+    pub async fn series_exists_by_tvdb(&self, tvdb_id: i32) -> anyhow::Result<Option<i32>> {
         let config = self
             .sonarr_config
             .as_ref()
@@ -408,7 +414,6 @@ impl ArrClient {
             return Ok(None);
         }
 
-        // Get all series from Sonarr
         let url = format!("{}/api/v3/series", config.url.trim_end_matches('/'));
         let response = self
             .http_client
@@ -422,45 +427,17 @@ impl ArrClient {
         }
 
         let all_series: Vec<SonarrSeries> = response.json().await?;
-
-        // Primary: Match directly by TMDB ID (most reliable, no external API needed)
         for series in &all_series {
-            if series.tmdb_id == Some(tmdb_id as i32) {
+            if series.tvdb_id == Some(tvdb_id) {
                 tracing::info!(
-                    "Found series '{}' in Sonarr by tmdb_id={} (ID: {})",
+                    "Found series '{}' in Sonarr by tvdb_id={} (ID: {})",
                     series.title,
-                    tmdb_id,
+                    tvdb_id,
                     series.id
                 );
                 return Ok(Some(series.id));
             }
         }
-
-        // Fallback: Convert TMDB to TVDB and match (for older series that might not have tmdb_id set)
-        match self.tmdb_to_tvdb_via_sonarr(tmdb_id, config).await {
-            Ok(tvdb_id) => {
-                for series in &all_series {
-                    if series.tvdb_id == Some(tvdb_id) {
-                        tracing::info!(
-                            "Found series '{}' in Sonarr by tvdb_id={} (from tmdb_id={}, ID: {})",
-                            series.title,
-                            tvdb_id,
-                            tmdb_id,
-                            series.id
-                        );
-                        return Ok(Some(series.id));
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::debug!(
-                    "TMDB→TVDB conversion failed for tmdb_id={}: {} (non-fatal, tmdb_id match already tried)",
-                    tmdb_id,
-                    e
-                );
-            }
-        }
-
         Ok(None)
     }
 
@@ -1746,69 +1723,20 @@ impl ArrClient {
         self.sonarr_config.is_some()
     }
 
+    pub fn sonarr_auto_import_enabled(&self) -> bool {
+        self.sonarr_config
+            .as_ref()
+            .is_some_and(|config| config.enabled && config.auto_import)
+    }
+
     /// Check if Radarr is configured
     pub fn has_radarr(&self) -> bool {
         self.radarr_config.is_some()
     }
 
-    // ============================================================================
-    // Helper Methods
-    // ============================================================================
-
-    /// Convert TMDB ID to TVDB ID once per TMDB series ID.
-    ///
-    /// A season pack can enqueue many episodes at the same time. Without this
-    /// shared cell each episode independently hits TMDB's external IDs endpoint,
-    /// and transient lookup differences can make one title partially import.
-    async fn tmdb_to_tvdb_via_sonarr(
-        &self,
-        tmdb_id: i64,
-        _config: &ArrConfig,
-    ) -> anyhow::Result<i32> {
-        let cell = {
-            let mut cache = self.tmdb_tvdb_cache.lock().await;
-            cache
-                .entry(tmdb_id)
-                .or_insert_with(|| Arc::new(OnceCell::new()))
-                .clone()
-        };
-
-        let result = cell
-            .get_or_init(|| async {
-                self.fetch_tvdb_id_from_tmdb(tmdb_id)
-                    .await
-                    .map_err(|e| e.to_string())
-            })
-            .await;
-
-        result.clone().map_err(|e| anyhow::anyhow!(e))
-    }
-
-    async fn fetch_tvdb_id_from_tmdb(&self, tmdb_id: i64) -> anyhow::Result<i32> {
-        use crate::constants::TMDB_API_KEY;
-
-        let external_ids_url = format!(
-            "https://api.themoviedb.org/3/tv/{}/external_ids?api_key={}",
-            tmdb_id, TMDB_API_KEY
-        );
-
-        tracing::info!(
-            "TMDB→TVDB cache MISS for TMDB {} — fetching external IDs",
-            tmdb_id
-        );
-        let ext_response = self.http_client.get(&external_ids_url).send().await?;
-
-        if !ext_response.status().is_success() {
-            anyhow::bail!("Failed to get external IDs: HTTP {}", ext_response.status());
-        }
-
-        let ext_data: serde_json::Value = ext_response.json().await?;
-
-        let tvdb_id = ext_data["tvdb_id"]
-            .as_i64()
-            .ok_or_else(|| anyhow::anyhow!("No TVDB ID found for TMDB ID {}", tmdb_id))?;
-
-        tracing::info!("TMDB→TVDB resolved TMDB {} → TVDB {}", tmdb_id, tvdb_id);
-        Ok(tvdb_id as i32)
+    pub fn radarr_auto_import_enabled(&self) -> bool {
+        self.radarr_config
+            .as_ref()
+            .is_some_and(|config| config.enabled && config.auto_import)
     }
 }

@@ -5,20 +5,20 @@
 
 use crate::db::Db;
 use crate::downloader::{DownloadOrchestrator, TmdbDownloadMetadata};
-use crate::services::TmdbService;
+use crate::services::{FolderCacheService, TmdbService};
 use crate::utils::smart_tokenizer::smart_parse;
 use crate::utils::title_matcher::{calculate_unified_similarity, is_different_franchise_entry};
-use serde_json::{Value, json};
+use axum::http::StatusCode;
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::{info, warn};
-use uuid::Uuid;
 
 pub struct DiscoveryService {
     db: Arc<Db>,
     orchestrator: Arc<DownloadOrchestrator>,
     tmdb_service: Arc<TmdbService>,
-    http_client: Arc<reqwest::Client>,
+    folder_cache_service: Arc<FolderCacheService>,
 }
 
 impl DiscoveryService {
@@ -26,13 +26,13 @@ impl DiscoveryService {
         db: Arc<Db>,
         orchestrator: Arc<DownloadOrchestrator>,
         tmdb_service: Arc<TmdbService>,
-        http_client: Arc<reqwest::Client>,
+        folder_cache_service: Arc<FolderCacheService>,
     ) -> Self {
         Self {
             db,
             orchestrator,
             tmdb_service,
-            http_client,
+            folder_cache_service,
         }
     }
 
@@ -44,10 +44,11 @@ impl DiscoveryService {
     pub async fn smart_grab(
         &self,
         tmdb_id: i64,
+        tvdb_id: Option<i64>,
         media_type: &str,
         title: &str,
         year: Option<String>,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, (StatusCode, String, String)> {
         info!(
             "Starting Atomic Smart Grab for {} (TMDB: {})",
             title, tmdb_id
@@ -55,55 +56,71 @@ impl DiscoveryService {
 
         // 1. Ensure in Library (Arr Suite) — best-effort, non-fatal
         let arr_id = if let Some(arr_client) = self.orchestrator.get_arr_client().await {
-            let result: anyhow::Result<i32> = if media_type == "tv" {
-                let quality_profile_id = self
-                    .db
-                    .get_setting("sonarr_quality_profile_id")
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.parse::<i32>().ok())
-                    .unwrap_or(1);
-                let root_folder = arr_client
-                    .get_sonarr_root_folders()
-                    .await
-                    .ok()
-                    .and_then(|folders| folders.into_iter().next())
-                    .map(|folder| folder.path)
-                    .unwrap_or_else(|| "/data/media/tv".to_string());
-
-                arr_client
-                    .add_series_by_tmdb(tmdb_id, quality_profile_id, &root_folder)
-                    .await
+            let auto_import_enabled = if media_type == "tv" {
+                arr_client.sonarr_auto_import_enabled()
             } else {
-                let quality_profile_id = self
-                    .db
-                    .get_setting("radarr_quality_profile_id")
-                    .ok()
-                    .flatten()
-                    .and_then(|s| s.parse::<i32>().ok())
-                    .unwrap_or(1);
-                let root_folder = arr_client
-                    .get_radarr_root_folders()
-                    .await
-                    .ok()
-                    .and_then(|folders| folders.into_iter().next())
-                    .map(|folder| folder.path)
-                    .unwrap_or_else(|| "/data/media/movies".to_string());
-
-                arr_client
-                    .add_movie_by_tmdb(tmdb_id, quality_profile_id, &root_folder)
-                    .await
+                arr_client.radarr_auto_import_enabled()
             };
-            match result {
-                Ok(id) => Some(id),
-                Err(e) => {
-                    let msg = e.to_string();
-                    if msg.contains("exists") || msg.contains("already") {
-                        info!("Item already in arr library");
-                    } else {
-                        warn!("Failed to add item to arr: {}", msg);
+            if !auto_import_enabled {
+                None
+            } else {
+                let result: anyhow::Result<i32> = if media_type == "tv" {
+                    let quality_profile_id = self
+                        .db
+                        .get_setting("sonarr_quality_profile_id")
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.parse::<i32>().ok())
+                        .unwrap_or(1);
+                    let root_folder = arr_client
+                        .get_sonarr_root_folders()
+                        .await
+                        .ok()
+                        .and_then(|folders| folders.into_iter().next())
+                        .map(|folder| folder.path)
+                        .unwrap_or_else(|| "/data/media/tv".to_string());
+
+                    let tvdb_id = tvdb_id.ok_or_else(|| {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            "missing_tvdb_id".to_string(),
+                            "TV smart-grab requires canonical tvdb_id".to_string(),
+                        )
+                    })?;
+                    arr_client
+                        .add_series_by_tvdb(tvdb_id as i32, quality_profile_id, &root_folder)
+                        .await
+                } else {
+                    let quality_profile_id = self
+                        .db
+                        .get_setting("radarr_quality_profile_id")
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.parse::<i32>().ok())
+                        .unwrap_or(1);
+                    let root_folder = arr_client
+                        .get_radarr_root_folders()
+                        .await
+                        .ok()
+                        .and_then(|folders| folders.into_iter().next())
+                        .map(|folder| folder.path)
+                        .unwrap_or_else(|| "/data/media/movies".to_string());
+
+                    arr_client
+                        .add_movie_by_tmdb(tmdb_id, quality_profile_id, &root_folder)
+                        .await
+                };
+                match result {
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        let msg = e.to_string();
+                        if msg.contains("exists") || msg.contains("already") {
+                            info!("Item already in arr library");
+                        } else {
+                            warn!("Failed to add item to arr: {}", msg);
+                        }
+                        None
                     }
-                    None
                 }
             }
         } else {
@@ -114,20 +131,31 @@ impl DiscoveryService {
         // 2. Perform Smart Search
         let search_results = self
             .perform_internal_search(title, year.clone(), media_type, Some(tmdb_id))
-            .await?;
+            .await
+            .map_err(|e| (StatusCode::BAD_GATEWAY, "failed".to_string(), e))?;
 
         if search_results.is_empty() {
-            return Err("No results found for smart grab".to_string());
+            return Err((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "failed".to_string(),
+                "No results found for smart grab".to_string(),
+            ));
         }
 
         if media_type == "tv" {
             return self
-                .queue_tv_smart_grab(tmdb_id, title, year, arr_id, search_results)
+                .queue_tv_smart_grab(tmdb_id, tvdb_id, title, year, arr_id, search_results)
                 .await;
         }
 
         // 3. Decision Logic (Quick Grab - Highest Score)
-        let best_candidate = search_results.first().ok_or("No valid candidates found")?;
+        let best_candidate = search_results.first().ok_or_else(|| {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "failed".to_string(),
+                "No valid candidates found".to_string(),
+            )
+        })?;
         match self
             .orchestrator
             .add_download_with_metadata(
@@ -137,6 +165,7 @@ impl DiscoveryService {
                 "media".to_string(),
                 Some(TmdbDownloadMetadata {
                     tmdb_id: Some(tmdb_id),
+                    tvdb_id: None,
                     media_type: Some("movie".to_string()),
                     title: Some(title.to_string()),
                     year: year.as_deref().and_then(|y| y.parse::<i32>().ok()),
@@ -146,6 +175,19 @@ impl DiscoveryService {
                 }),
                 None,
                 None,
+                false,
+                Some("fshare".to_string()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
             )
             .await
         {
@@ -153,27 +195,29 @@ impl DiscoveryService {
                 info!("Smart Grab successful for {}", title);
                 Ok(json!({
                     "success": true,
-                    "message": format!("Grab queued: {}", best_candidate.original_name),
-                    "grabbed": {
-                        "name": best_candidate.original_name,
-                        "score": best_candidate.score,
-                        "size": best_candidate.size,
-                    },
-                    "arr_id": arr_id
+                    "tmdb_id": tmdb_id,
+                    "media_type": media_type,
+                    "status": "requested",
+                    "message": "Added to library and started smart grab"
                 }))
             }
-            Err(e) => Err(format!("Failed to initiate download: {}", e)),
+            Err(e) => Err((
+                StatusCode::BAD_GATEWAY,
+                "failed".to_string(),
+                format!("Failed to initiate download: {}", e),
+            )),
         }
     }
 
     async fn queue_tv_smart_grab(
         &self,
         tmdb_id: i64,
+        tvdb_id: Option<i64>,
         title: &str,
         year: Option<String>,
         arr_id: Option<i32>,
         search_results: Vec<InternalSearchResult>,
-    ) -> Result<Value, String> {
+    ) -> Result<Value, (StatusCode, String, String)> {
         let mut best_by_episode: HashMap<(u32, u32), (InternalSearchResult, u32, u32)> =
             HashMap::new();
         let valid_episodes = self.get_valid_tv_episodes(tmdb_id).await;
@@ -199,19 +243,16 @@ impl DiscoveryService {
         }
 
         if best_by_episode.is_empty() {
-            return Err("No episode results found for TV smart grab".to_string());
+            return Err((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "failed".to_string(),
+                "No episode results found for TV smart grab".to_string(),
+            ));
         }
 
         let mut selected: Vec<_> = best_by_episode.into_values().collect();
         selected.sort_by_key(|(_, season, episode)| (*season, *episode));
 
-        let batch_id = Uuid::new_v4().to_string();
-        let batch_name = format!(
-            "{}{}",
-            title,
-            year.as_deref()
-                .map_or(String::new(), |y| format!(" ({})", y))
-        );
         let parsed_year = year.as_deref().and_then(|y| y.parse::<i32>().ok());
         let mut grabbed = Vec::new();
 
@@ -225,6 +266,7 @@ impl DiscoveryService {
                     "tv".to_string(),
                     Some(TmdbDownloadMetadata {
                         tmdb_id: Some(tmdb_id),
+                        tvdb_id,
                         media_type: Some("tv".to_string()),
                         title: Some(title.to_string()),
                         year: parsed_year,
@@ -232,11 +274,30 @@ impl DiscoveryService {
                         season: Some(season as i32),
                         episode: Some(episode as i32),
                     }),
-                    Some(batch_id.clone()),
-                    Some(batch_name.clone()),
+                    None,
+                    None,
+                    false,
+                    Some("fshare".to_string()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
                 )
                 .await
-                .map_err(|e| format!("Failed to initiate download: {}", e))?;
+                .map_err(|e| {
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        "failed".to_string(),
+                        format!("Failed to initiate download: {}", e),
+                    )
+                })?;
 
             grabbed.push(json!({
                 "task_id": task.id,
@@ -248,14 +309,14 @@ impl DiscoveryService {
             }));
         }
 
+        let _ = (arr_id, grabbed, valid_episodes);
+
         Ok(json!({
             "success": true,
-            "message": format!("Queued {} episode(s) for {}", grabbed.len(), title),
-            "grabbed": grabbed,
-            "expected_episodes": valid_episodes.len(),
-            "batch_id": batch_id,
-            "batch_name": batch_name,
-            "arr_id": arr_id
+            "tmdb_id": tmdb_id,
+            "media_type": "tv",
+            "status": "requested",
+            "message": "Added to library and started smart grab"
         }))
     }
 
@@ -333,56 +394,7 @@ impl DiscoveryService {
         let mut all_results = Vec::new();
 
         for query in queries {
-            let url = format!(
-                "https://timfshare.com/api/v1/string-query-search?query={}",
-                urlencoding::encode(&query)
-            );
-
-            if let Ok(resp) = self
-                .http_client
-                .post(&url)
-                .header("Content-Length", "0")
-                .send()
-                .await
-            {
-                if let Ok(data) = resp.json::<Value>().await {
-                    if let Some(items) = data["data"].as_array() {
-                        for item in items {
-                            let name = item["name"].as_str().unwrap_or("").to_string();
-                            let url = item["url"].as_str().unwrap_or("").to_string();
-
-                            // Scoring & Filtering
-                            let sim_res =
-                                calculate_unified_similarity(title, &name, &aliases_for_match);
-                            if !sim_res.is_valid {
-                                continue;
-                            }
-                            if is_different_franchise_entry(title, &name) {
-                                continue;
-                            }
-
-                            let parsed = smart_parse(&name);
-
-                            // Score = relevance (title similarity) + quality (source/resolution/HDR/audio/etc.)
-                            // similarity acts as a gate (filtered above) and minor tiebreaker;
-                            // total_score() from the smart tokenizer dominates ranking so the
-                            // best-quality file wins among equally-relevant results.
-                            let relevance = (sim_res.score * 50.0) as i32; // 0-50 range
-                            let quality = parsed.total_score(); // 10-355 range
-                            let score = relevance + quality;
-
-                            all_results.push(InternalSearchResult {
-                                original_name: name,
-                                url,
-                                size: item["size"].as_u64().unwrap_or(0),
-                                score,
-                            });
-                        }
-                    }
-                }
-            }
-
-            match self.db.search_folder_cache_async(query.clone(), 100).await {
+            match self.folder_cache_service.search(&query, 100).await {
                 Ok(items) => {
                     for item in items {
                         if item.is_directory {

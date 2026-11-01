@@ -3,7 +3,6 @@
 //! Provides Newznab-compatible endpoints for integration with Sonarr/Radarr.
 //! This allows *arr applications to search for content on Fshare.
 
-use crate::constants::TMDB_API_KEY;
 use crate::AppState;
 use axum::{
     extract::{Query, State},
@@ -92,6 +91,37 @@ fn get_search_cache() -> &'static Cache<String, Vec<IndexerResult>> {
 // Handlers
 // ============================================================================
 
+#[derive(Debug)]
+struct SafeIndexerRequestSummary<'a> {
+    mode: &'a str,
+    query: &'a Option<String>,
+    season: Option<u32>,
+    episode: Option<u32>,
+    tmdb_id: &'a Option<String>,
+    imdb_id: &'a Option<String>,
+    tvdb_id: &'a Option<String>,
+    categories: &'a Option<String>,
+    auth_present: bool,
+}
+
+fn safe_indexer_request_summary(params: &IndexerParams) -> SafeIndexerRequestSummary<'_> {
+    SafeIndexerRequestSummary {
+        mode: &params.t,
+        query: &params.q,
+        season: params.season,
+        episode: params.ep,
+        tmdb_id: &params.tmdbid,
+        imdb_id: &params.imdbid,
+        tvdb_id: &params.tvdbid,
+        categories: &params.cat,
+        auth_present: !params.apikey.is_empty(),
+    }
+}
+
+fn indexer_response_summary(xml: &str) -> String {
+    format!("Newznab XML response generated ({} bytes)", xml.len())
+}
+
 /// Main indexer endpoint handler
 async fn handle_indexer(
     State(state): State<Arc<AppState>>,
@@ -108,24 +138,29 @@ async fn handle_indexer(
         .and_then(|h| h.to_str().ok())
         .unwrap_or("localhost:8484");
 
+    let summary = safe_indexer_request_summary(&params);
     tracing::info!(
-        "Newznab API request - mode: {}, q: {:?}, season: {:?}, ep: {:?}, tmdbid: {:?}, imdbid: {:?}, tvdbid: {:?}, cat: {:?}, apikey: {:?}",
-        params.t,
-        params.q,
-        params.season,
-        params.ep,
-        params.tmdbid,
-        params.imdbid,
-        params.tvdbid,
-        params.cat,
-        params.apikey
+        mode = summary.mode,
+        query = ?summary.query,
+        season = ?summary.season,
+        episode = ?summary.episode,
+        tmdb_id = ?summary.tmdb_id,
+        imdb_id = ?summary.imdb_id,
+        tvdb_id = ?summary.tvdb_id,
+        categories = ?summary.categories,
+        auth_present = summary.auth_present,
+        "Newznab API request"
     );
 
     let (status, xml_body) = match params.t.as_str() {
         "caps" => (StatusCode::OK, handle_caps()),
         "search" => {
             if !crate::api::auth::validate_api_key(&state, &params.apikey) {
-                tracing::warn!("Invalid API key provided: {:?}", params.apikey);
+                tracing::warn!(
+                    auth_present = !params.apikey.is_empty(),
+                    auth_valid = false,
+                    "Invalid indexer API key"
+                );
                 (
                     StatusCode::UNAUTHORIZED,
                     generate_error_xml("Invalid API key"),
@@ -136,7 +171,11 @@ async fn handle_indexer(
         }
         "tvsearch" => {
             if !crate::api::auth::validate_api_key(&state, &params.apikey) {
-                tracing::warn!("Invalid API key provided: {:?}", params.apikey);
+                tracing::warn!(
+                    auth_present = !params.apikey.is_empty(),
+                    auth_valid = false,
+                    "Invalid indexer API key"
+                );
                 (
                     StatusCode::UNAUTHORIZED,
                     generate_error_xml("Invalid API key"),
@@ -147,7 +186,11 @@ async fn handle_indexer(
         }
         "movie" => {
             if !crate::api::auth::validate_api_key(&state, &params.apikey) {
-                tracing::warn!("Invalid API key provided: {:?}", params.apikey);
+                tracing::warn!(
+                    auth_present = !params.apikey.is_empty(),
+                    auth_valid = false,
+                    "Invalid indexer API key"
+                );
                 (
                     StatusCode::UNAUTHORIZED,
                     generate_error_xml("Invalid API key"),
@@ -168,17 +211,7 @@ async fn handle_indexer(
     // CRITICAL: Trim to remove any leading/trailing whitespace from r#""# strings
     let trimmed_body = xml_body.trim().to_string();
 
-    // Debug: Log response preview for troubleshooting
-    let preview = if trimmed_body.len() > 500 {
-        format!(
-            "{}... ({} total bytes)",
-            &trimmed_body[..500],
-            trimmed_body.len()
-        )
-    } else {
-        trimmed_body.clone()
-    };
-    tracing::debug!("XML Response Preview: {}", preview);
+    tracing::debug!("{}", indexer_response_summary(&trimmed_body));
 
     // FORCE the response headers and body using explicit builder
     Response::builder()
@@ -190,9 +223,16 @@ async fn handle_indexer(
 
 #[derive(Deserialize)]
 struct NzbDownloadParams {
+    #[serde(default)]
     fcode: String,
+    #[serde(default)]
+    info_hash: Option<String>,
+    #[serde(default)]
+    filename: Option<String>,
     // TMDB metadata for proper file organization
     tmdb_id: Option<String>,
+    tvdb_id: Option<String>,
+    title: Option<String>,
     media_type: Option<String>,
     season: Option<u32>,
     episode: Option<u32>,
@@ -209,61 +249,57 @@ async fn handle_nzb_download(
     use axum::http::header;
     use axum::response::Response;
 
-    let fshare_url = format!("https://www.fshare.vn/file/{}", params.fcode);
-
-    // Build metadata tags
-    let mut metadata_tags = format!("        <meta type=\"fshare_url\">{}</meta>\n", fshare_url);
-    if let Some(tmdb_id) = params.tmdb_id {
-        metadata_tags.push_str(&format!(
-            "        <meta type=\"tmdb_id\">{}</meta>\n",
-            tmdb_id
-        ));
-    }
-    if let Some(media_type) = params.media_type {
-        metadata_tags.push_str(&format!(
-            "        <meta type=\"media_type\">{}</meta>\n",
-            media_type
-        ));
-    }
-    if let Some(season) = params.season {
-        metadata_tags.push_str(&format!(
-            "        <meta type=\"season\">{}</meta>\n",
-            season
-        ));
-    }
-    if let Some(episode) = params.episode {
-        metadata_tags.push_str(&format!(
-            "        <meta type=\"episode\">{}</meta>\n",
-            episode
-        ));
-    }
-    if let Some(ref category) = params.cat {
-        metadata_tags.push_str(&format!(
-            "        <meta type=\"category\">{}</meta>\n",
-            category
-        ));
-    }
-
-    // Generate a minimal valid NZB XML that won't trigger parser errors
-    let nzb_xml = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<nzb xmlns="http://www.newznab.com/DTD/2010/nzb">
-    <head>
-{}    </head>
-    <file poster="Flasharr" date="1706534400" subject="Fshare_Download_{}">
-        <groups><group>alt.binaries.test</group></groups>
-        <segments><segment bytes="1" number="1">fake</segment></segments>
-    </file>
-</nzb>"#,
-        metadata_tags, params.fcode
-    );
+    let metadata = match (params.fcode.is_empty(), params.info_hash) {
+        (false, None) => crate::providers::fshare::FakeNzbMetadata::fshare(format!(
+            "https://www.fshare.vn/file/{}",
+            params.fcode
+        )),
+        (true, Some(hash)) => crate::providers::fshare::FakeNzbMetadata::torrent(
+            normalize_torrent_hash(&hash).unwrap_or(hash),
+        ),
+        _ => {
+            tracing::warn!("Rejected invalid NZB acquisition source");
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(Body::from("invalid acquisition source"))
+                .unwrap();
+        }
+    };
+    let download_name = metadata
+        .fshare_url()
+        .map(extract_file_id)
+        .or_else(|| metadata.torrent_info_hash().map(str::to_string))
+        .unwrap_or_default();
+    let nzb_xml = match crate::providers::fshare::encode_fake_nzb(
+        &crate::providers::fshare::FakeNzbMetadata {
+            tmdb_id: params.tmdb_id,
+            tvdb_id: params.tvdb_id,
+            title: params.filename.or(params.title),
+            media_type: params.media_type,
+            season: params.season,
+            episode: params.episode,
+            category: params.cat,
+            ..metadata
+        },
+    ) {
+        Some(xml) => xml,
+        None => {
+            tracing::warn!("Rejected invalid NZB acquisition source");
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(Body::from("invalid acquisition source"))
+                .unwrap();
+        }
+    };
 
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/x-nzb")
         .header(
             header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{}.nzb\"", params.fcode),
+            format!("attachment; filename=\"{download_name}.nzb\""),
         )
         .body(Body::from(nzb_xml))
         .unwrap()
@@ -299,11 +335,11 @@ fn handle_caps() -> String {
 // ============================================================================
 
 /// Convert TVDB ID to TMDB ID
-async fn tvdb_to_tmdb(tvdb_id: &str) -> Option<String> {
+async fn tvdb_to_tmdb(api_key: &str, tvdb_id: &str) -> Option<String> {
     let client = Client::new();
     let url = format!(
         "https://api.themoviedb.org/3/find/{}?api_key={}&external_source=tvdb_id",
-        tvdb_id, TMDB_API_KEY
+        tvdb_id, api_key
     );
 
     let resp = client.get(&url).send().await.ok()?;
@@ -315,7 +351,7 @@ async fn tvdb_to_tmdb(tvdb_id: &str) -> Option<String> {
 }
 
 /// Convert IMDB ID to TMDB ID
-async fn imdb_to_tmdb(imdb_id: &str) -> Option<String> {
+async fn imdb_to_tmdb(api_key: &str, imdb_id: &str) -> Option<String> {
     let client = Client::new();
 
     // Ensure IMDB ID has 'tt' prefix
@@ -327,7 +363,7 @@ async fn imdb_to_tmdb(imdb_id: &str) -> Option<String> {
 
     let url = format!(
         "https://api.themoviedb.org/3/find/{}?api_key={}&external_source=imdb_id",
-        clean_id, TMDB_API_KEY
+        clean_id, api_key
     );
 
     let resp = client.get(&url).send().await.ok()?;
@@ -365,42 +401,23 @@ fn resolution_allowed(resolution: Option<&str>, allowed: &Option<Vec<&'static st
 /// Convert SmartSearchResponse to Newznab XML
 /// This extracts results from the smart_search response and converts to IndexerResult format
 async fn convert_smart_response_to_xml(
-    response: axum::response::Response,
+    smart_response: crate::api::smart_search::SmartSearchResponse,
     query: &str,
     host: &str,
     apikey: &str,
     tmdb_id: Option<String>,
+    tvdb_id: Option<String>,
+    show_title: Option<String>,
     media_type: &str,
     season: Option<u32>,
     episode: Option<u32>,
     allowed_resolutions: Option<Vec<&'static str>>,
+    tmdb_api_key: &str,
 ) -> String {
-    use crate::api::smart_search::SmartSearchResponse;
-    use axum::body::to_bytes;
-
-    // Extract body bytes from response
-    let (_parts, body) = response.into_parts();
-    let body_bytes = match to_bytes(body, usize::MAX).await {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            tracing::error!("Failed to read response body: {}", e);
-            return generate_search_xml(vec![], query);
-        }
-    };
-
-    // Deserialize SmartSearchResponse
-    let smart_response: SmartSearchResponse = match serde_json::from_slice(&body_bytes) {
-        Ok(resp) => resp,
-        Err(e) => {
-            tracing::error!("Failed to deserialize SmartSearchResponse: {}", e);
-            return generate_search_xml(vec![], query);
-        }
-    };
-
     // Fetch TMDB title AND year for synthesis — year is needed for Sonarr to disambiguate
     // series (e.g. "How Dare You!? (2026)"). Without the year Sonarr reports "Unknown Series".
     let (tmdb_title, tmdb_year) = if let Some(ref id) = tmdb_id {
-        fetch_tmdb_title_and_year(id, media_type).await
+        fetch_tmdb_title_and_year(tmdb_api_key, id, media_type).await
     } else {
         (None, None)
     };
@@ -412,6 +429,12 @@ async fn convert_smart_response_to_xml(
     if let Some(groups) = smart_response.groups {
         for group in groups {
             for file in group.files {
+                if matches!(
+                    file.result_source.as_deref(),
+                    Some("torrent") | Some("torbox")
+                ) {
+                    continue;
+                }
                 if !resolution_allowed(
                     file.quality_attrs.resolution.as_deref(),
                     &allowed_resolutions,
@@ -435,6 +458,8 @@ async fn convert_smart_response_to_xml(
                         host,
                         apikey,
                         &tmdb_id,
+                        &tvdb_id,
+                        &show_title,
                         &Some(media_type.to_string()),
                         &season,
                         &episode,
@@ -450,6 +475,37 @@ async fn convert_smart_response_to_xml(
     // Handle TV seasons structure if present
     if let Some(seasons) = smart_response.seasons {
         for season_group in seasons {
+            for package in season_group.packages {
+                let Some(hash) = normalize_torrent_hash(&package.info_hash) else {
+                    continue;
+                };
+                let file = package.result;
+                let synthesized_title = synthesize_title(
+                    &file,
+                    tmdb_title.as_deref(),
+                    tmdb_year,
+                    Some(season_group.season),
+                    None,
+                );
+                indexer_results.push(IndexerResult {
+                    title: synthesized_title,
+                    guid: format!("torrent://{hash}"),
+                    link: generate_torrent_nzb_url(
+                        &hash,
+                        &file.name,
+                        host,
+                        apikey,
+                        &tmdb_id,
+                        &tvdb_id,
+                        &show_title,
+                        &Some(media_type.to_string()),
+                        &Some(season_group.season),
+                    ),
+                    size: file.size,
+                    pub_date: Utc::now(),
+                    category: determine_category(&file.name),
+                });
+            }
             for episode_group in season_group.episodes_grouped {
                 // Use the episode number from the group, not the outer query filter.
                 // The outer `episode` is the Sonarr search filter (e.g. E03 when searching
@@ -457,6 +513,12 @@ async fn convert_smart_response_to_xml(
                 // own episode number so every result gets the correct S##E## tag.
                 let ep_num = Some(episode_group.episode_number);
                 for file in episode_group.files {
+                    if matches!(
+                        file.result_source.as_deref(),
+                        Some("torrent") | Some("torbox")
+                    ) {
+                        continue;
+                    }
                     if !resolution_allowed(
                         file.quality_attrs.resolution.as_deref(),
                         &allowed_resolutions,
@@ -484,6 +546,8 @@ async fn convert_smart_response_to_xml(
                             host,
                             apikey,
                             &tmdb_id,
+                            &tvdb_id,
+                            &show_title,
                             &Some(media_type.to_string()),
                             &Some(season_group.season),
                             &ep_num,
@@ -509,6 +573,13 @@ async fn convert_smart_response_to_xml(
     generate_search_xml(indexer_results, query)
 }
 
+fn api_key_fingerprint(api_key: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    api_key.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Fetch TMDB title for a given ID — with in-process caching.
 ///
 /// During a batch grab of 71 episodes the orchestrator calls this once per
@@ -518,7 +589,7 @@ async fn convert_smart_response_to_xml(
 ///
 /// This cache keeps `(tmdb_id, media_type)` → title for 24 hours so the
 /// entire batch costs exactly ONE real TMDB call.
-pub async fn fetch_tmdb_title(tmdb_id: &str, media_type: &str) -> Option<String> {
+pub async fn fetch_tmdb_title(api_key: &str, tmdb_id: &str, media_type: &str) -> Option<String> {
     use moka::future::Cache;
     use once_cell::sync::Lazy;
 
@@ -529,7 +600,12 @@ pub async fn fetch_tmdb_title(tmdb_id: &str, media_type: &str) -> Option<String>
             .build()
     });
 
-    let cache_key = format!("{}:{}", media_type, tmdb_id);
+    let cache_key = format!(
+        "{}:{}:{}",
+        api_key_fingerprint(api_key),
+        media_type,
+        tmdb_id
+    );
 
     if let Some(cached) = TITLE_CACHE.get(&cache_key).await {
         tracing::debug!("TMDB title cache HIT: {} → {:?}", cache_key, cached);
@@ -541,7 +617,7 @@ pub async fn fetch_tmdb_title(tmdb_id: &str, media_type: &str) -> Option<String>
     let endpoint = if media_type == "tv" { "tv" } else { "movie" };
     let url = format!(
         "https://api.themoviedb.org/3/{}/{}?api_key={}",
-        endpoint, tmdb_id, TMDB_API_KEY
+        endpoint, tmdb_id, api_key
     );
 
     let result: Option<String> = async {
@@ -586,6 +662,7 @@ pub async fn fetch_tmdb_title(tmdb_id: &str, media_type: &str) -> Option<String>
 /// Shares the same HTTP round-trip budget as `fetch_tmdb_title` using a
 /// dedicated cache keyed on `"year:{media_type}:{tmdb_id}"`.
 pub async fn fetch_tmdb_title_and_year(
+    api_key: &str,
     tmdb_id: &str,
     media_type: &str,
 ) -> (Option<String>, Option<i32>) {
@@ -600,7 +677,12 @@ pub async fn fetch_tmdb_title_and_year(
             .build()
     });
 
-    let cache_key = format!("pair:{}:{}", media_type, tmdb_id);
+    let cache_key = format!(
+        "pair:{}:{}:{}",
+        api_key_fingerprint(api_key),
+        media_type,
+        tmdb_id
+    );
 
     if let Some((cached_title, cached_year_str)) = PAIR_CACHE.get(&cache_key).await {
         let year = cached_year_str
@@ -613,7 +695,7 @@ pub async fn fetch_tmdb_title_and_year(
     let endpoint = if media_type == "tv" { "tv" } else { "movie" };
     let url = format!(
         "https://api.themoviedb.org/3/{}/{}?api_key={}",
-        endpoint, tmdb_id, TMDB_API_KEY
+        endpoint, tmdb_id, api_key
     );
 
     let pair: (Option<String>, Option<String>) = async {
@@ -689,9 +771,10 @@ fn synthesize_title(
             .replace('!', "")
             .replace(',', "");
         parts.push(clean_title.trim().replace(' ', "."));
-    } else {
-        // No TMDB info — fall back to the original filename unchanged
+    } else if season.is_none() || episode.is_some() {
         return file.name.clone();
+    } else {
+        parts.push("Unknown".to_string());
     }
 
     // 2. Release year (critical for Sonarr series disambiguation)
@@ -700,8 +783,11 @@ fn synthesize_title(
     }
 
     // 3. Season & Episode
-    if let (Some(s), Some(e)) = (season, episode) {
-        parts.push(format!("S{:02}E{:02}", s, e));
+    if let Some(s) = season {
+        parts.push(match episode {
+            Some(e) => format!("S{:02}E{:02}", s, e),
+            None => format!("S{:02}", s),
+        });
     }
 
     // 4. Quality metadata — fall back to size-inferred resolution so Radarr/Sonarr
@@ -764,11 +850,52 @@ fn extract_file_id(url: &str) -> String {
 
 /// Generate NZB download URL for Sonarr/Radarr
 /// Points to our /download endpoint which generates a fake NZB with Fshare URL embedded
+fn normalize_torrent_hash(value: &str) -> Option<String> {
+    let value = value.trim();
+    (value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| value.to_ascii_lowercase())
+}
+
+fn generate_torrent_nzb_url(
+    hash: &str,
+    filename: &str,
+    host: &str,
+    apikey: &str,
+    tmdb_id: &Option<String>,
+    tvdb_id: &Option<String>,
+    title: &Option<String>,
+    media_type: &Option<String>,
+    season: &Option<u32>,
+) -> String {
+    let mut url = format!(
+        "http://{host}/newznab/api/download?info_hash={hash}&filename={}&apikey={apikey}",
+        urlencoding::encode(filename),
+    );
+    if let Some(id) = tmdb_id {
+        url.push_str(&format!("&tmdb_id={id}"));
+    }
+    if let Some(id) = tvdb_id {
+        url.push_str(&format!("&tvdb_id={id}"));
+    }
+    if let Some(title) = title {
+        url.push_str(&format!("&title={}", urlencoding::encode(title)));
+    }
+    if let Some(media_type) = media_type {
+        url.push_str(&format!("&media_type={media_type}"));
+    }
+    if let Some(season) = season {
+        url.push_str(&format!("&season={season}"));
+    }
+    url
+}
+
 fn generate_nzb_url(
     fshare_url: &str,
     host: &str,
     apikey: &str,
     tmdb_id: &Option<String>,
+    tvdb_id: &Option<String>,
+    title: &Option<String>,
     media_type: &Option<String>,
     season: &Option<u32>,
     episode: &Option<u32>,
@@ -782,6 +909,12 @@ fn generate_nzb_url(
     // Add TMDB metadata as query parameters
     if let Some(id) = tmdb_id {
         url.push_str(&format!("&tmdb_id={}", id));
+    }
+    if let Some(id) = tvdb_id {
+        url.push_str(&format!("&tvdb_id={}", id));
+    }
+    if let Some(title) = title {
+        url.push_str(&format!("&title={}", urlencoding::encode(title)));
     }
     if let Some(mt) = media_type {
         url.push_str(&format!("&media_type={}", mt));
@@ -820,62 +953,80 @@ async fn handle_search(state: Arc<AppState>, params: IndexerParams) -> String {
     generate_search_xml(results, &query)
 }
 
-/// Handle TV search - Bridge to smart_search with TVDB → TMDB conversion
+/// Handle TV search - TVDB-canonical Sonarr/Newznab path.
+/// TMDB is not used as TV canonical identity here.
 async fn handle_tv_search(state: Arc<AppState>, params: IndexerParams, host: &str) -> String {
     let apikey = params.apikey.clone();
 
-    // Step 1: Convert TVDB ID to TMDB ID if provided
-    let tmdb_id = if let Some(tvdb_id) = params.tvdbid {
-        match tvdb_to_tmdb(&tvdb_id).await {
-            Some(id) => {
-                tracing::info!("Converted TVDB {} → TMDB {}", tvdb_id, id);
-                Some(Value::String(id))
-            }
-            None => {
-                tracing::warn!("Failed to convert TVDB {} to TMDB", tvdb_id);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // Step 2: Build SmartSearchRequest with all available data
-    // If both query and TVDB ID are empty, use a default term for testing
-    let title = params.q.unwrap_or_else(|| {
-        if tmdb_id.is_none() {
-            "phim".to_string() // Vietnamese word - will return some results
-        } else {
-            "".to_string()
-        }
-    });
+    let tvdb_id = params.tvdbid.clone().map(Value::String);
+    let mut title = params.q.unwrap_or_default();
+    if title.trim().is_empty() {
+        title = match params
+            .tvdbid
+            .as_deref()
+            .and_then(|id| id.parse::<i64>().ok())
+        {
+            Some(id) => state
+                .tvdb_service
+                .get_tv_enrichment(id)
+                .await
+                .official_name
+                .unwrap_or_default(),
+            None => "phim".to_string(),
+        };
+    }
 
     let smart_req = crate::api::smart_search::SmartSearchRequest {
         title: title.clone(),
-        tmdb_id,
+        tmdb_id: None,
+        tvdb_id,
         r#type: "tv".to_string(),
         season: params.season,
         episode: params.ep,
-        year: None, // TV shows don't use year in the same way
+        year: None,
+    };
+
+    let parsed = crate::api::smart_search::types::ParsedSmartSearchRequest {
+        contract: crate::api::smart_search::types::RequestContract::Legacy,
+        intent: if let (Some(season), Some(episode)) = (smart_req.season, smart_req.episode) {
+            crate::api::smart_search::types::SmartSearchIntent::TargetEpisode {
+                title: smart_req.title.clone(),
+                year: smart_req.year.clone(),
+                tmdb_id: None,
+                tvdb_id: smart_req.tvdb_id.clone(),
+                season,
+                episode,
+            }
+        } else if let Some(season) = smart_req.season {
+            crate::api::smart_search::types::SmartSearchIntent::Season {
+                title: smart_req.title.clone(),
+                year: smart_req.year.clone(),
+                tmdb_id: None,
+                tvdb_id: smart_req.tvdb_id.clone(),
+                season,
+            }
+        } else {
+            crate::api::smart_search::types::SmartSearchIntent::Season {
+                title: smart_req.title.clone(),
+                year: smart_req.year.clone(),
+                tmdb_id: None,
+                tvdb_id: smart_req.tvdb_id.clone(),
+                season: 1,
+            }
+        },
     };
 
     tracing::info!(
-        "TV Search Bridge: title='{}', tmdb_id={:?}, season={:?}, ep={:?}",
+        "TV Search Bridge: title='{}', tvdb_id={:?}, season={:?}, ep={:?}",
         title,
-        smart_req.tmdb_id,
+        smart_req.tvdb_id,
         smart_req.season,
         smart_req.episode
     );
 
-    // Clone metadata before smart_req is moved
-    let tmdb_id_str = smart_req
-        .tmdb_id
-        .as_ref()
-        .map(|v| v.as_str().unwrap_or("").to_string());
     let season_num = smart_req.season;
     let episode_num = smart_req.episode;
 
-    // Resolve quality filter from Sonarr profile setting
     let allowed_resolutions = state
         .db
         .get_setting("sonarr_quality_profile_id")
@@ -884,20 +1035,26 @@ async fn handle_tv_search(state: Arc<AppState>, params: IndexerParams, host: &st
         .and_then(|s| s.parse::<i32>().ok())
         .and_then(profile_id_to_allowed_resolutions);
 
-    // Step 3: Call smart_search (already has Vietnamese title logic!)
-    let response = crate::api::smart_search::handle_tv_search(state, smart_req).await;
+    let response =
+        crate::api::smart_search::orchestrator::execute_typed(Arc::clone(&state), parsed).await;
 
-    // Step 4: Convert SmartSearchResponse to Newznab XML
     convert_smart_response_to_xml(
         response,
         &title,
         host,
         &apikey,
-        tmdb_id_str,
+        None,
+        smart_req
+            .tvdb_id
+            .as_ref()
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        Some(title.clone()),
         "tv",
         season_num,
         episode_num,
         allowed_resolutions,
+        &state.tmdb_service.api_key().await,
     )
     .await
 }
@@ -911,7 +1068,7 @@ async fn handle_movie_search(state: Arc<AppState>, params: IndexerParams, host: 
         tracing::info!("Using direct TMDB ID from Radarr: {}", id);
         Some(Value::String(id.clone()))
     } else if let Some(imdb_id) = params.imdbid {
-        match imdb_to_tmdb(&imdb_id).await {
+        match imdb_to_tmdb(&state.tmdb_service.api_key().await, &imdb_id).await {
             Some(id) => {
                 tracing::info!("Converted IMDB {} → TMDB {}", imdb_id, id);
                 Some(Value::String(id))
@@ -940,10 +1097,20 @@ async fn handle_movie_search(state: Arc<AppState>, params: IndexerParams, host: 
     let smart_req = crate::api::smart_search::SmartSearchRequest {
         title: title.clone(),
         tmdb_id,
+        tvdb_id: None,
         r#type: "movie".to_string(),
         season: None,
         episode: None,
         year,
+    };
+
+    let parsed = crate::api::smart_search::types::ParsedSmartSearchRequest {
+        contract: crate::api::smart_search::types::RequestContract::Legacy,
+        intent: crate::api::smart_search::types::SmartSearchIntent::TargetMovie {
+            title: smart_req.title.clone(),
+            year: smart_req.year.clone(),
+            tmdb_id: smart_req.tmdb_id.clone(),
+        },
     };
 
     tracing::info!(
@@ -968,8 +1135,9 @@ async fn handle_movie_search(state: Arc<AppState>, params: IndexerParams, host: 
         .and_then(|s| s.parse::<i32>().ok())
         .and_then(profile_id_to_allowed_resolutions);
 
-    // Step 4: Call smart_search (already has Vietnamese title logic!)
-    let response = crate::api::smart_search::handle_movie_search(state, smart_req).await;
+    // Step 4: Call smart_search orchestrator via legacy contract
+    let response =
+        crate::api::smart_search::orchestrator::execute_typed(Arc::clone(&state), parsed).await;
 
     // Step 5: Convert SmartSearchResponse to Newznab XML
     convert_smart_response_to_xml(
@@ -978,10 +1146,13 @@ async fn handle_movie_search(state: Arc<AppState>, params: IndexerParams, host: 
         host,
         &apikey,
         tmdb_id_str,
+        None,
+        Some(title.clone()),
         "movie",
         None,
         None,
         allowed_resolutions,
+        &state.tmdb_service.api_key().await,
     )
     .await
 }
@@ -990,30 +1161,24 @@ async fn handle_movie_search(state: Arc<AppState>, params: IndexerParams, host: 
 // Helper Functions
 // ============================================================================
 
-/// Execute Fshare search and convert to indexer results
-async fn execute_fshare_search_for_indexer(_state: &AppState, query: &str) -> Vec<IndexerResult> {
-    use crate::api::search_pipeline::SearchPipeline;
-    use reqwest::Client;
-
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .unwrap_or_else(|_| Client::new());
-
-    // Use SearchPipeline for consistent Fshare search
-    let raw_results = SearchPipeline::execute_fshare_search(&client, query, 100).await;
-
-    raw_results
-        .into_iter()
-        .map(|r| IndexerResult {
-            title: r.name.clone(),
-            guid: format!("fshare://{}", r.fcode),
-            link: r.url,
-            size: r.size,
-            pub_date: Utc::now(),
-            category: determine_category(&r.name),
-        })
-        .collect()
+/// Search the synchronized folder cache and convert files to indexer results.
+async fn execute_fshare_search_for_indexer(state: &AppState, query: &str) -> Vec<IndexerResult> {
+    crate::api::search_pipeline::search_folder_cache(
+        &state.folder_cache_service,
+        &[query.to_string()],
+        100,
+    )
+    .await
+    .into_iter()
+    .map(|result| IndexerResult {
+        title: result.name.clone(),
+        guid: format!("fshare://{}", result.fcode),
+        link: result.url,
+        size: result.size,
+        pub_date: Utc::now(),
+        category: determine_category(&result.name),
+    })
+    .collect()
 }
 
 /// Determine category from filename with enhanced pattern matching
@@ -1306,12 +1471,76 @@ struct IndexerResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn indexer_smart_search_bridge_uses_typed_response_without_body_roundtrip() {
+        let source = include_str!("indexer.rs");
+        assert!(source.contains("orchestrator::execute_typed"));
+        assert!(!source.contains(&["response_to_", "bytes(response)"].concat()));
+        assert!(!source.contains(&["to_bytes(body, ", "usize::MAX)"].concat()));
+        let smart_search = include_str!("smart_search.rs");
+        assert!(!smart_search.contains("pub(crate) fn response_to_bytes"));
+    }
+
+    #[test]
+    fn indexer_response_summary_never_contains_xml_secrets() {
+        let sentinel = "SUPER-SECRET-INDEXER-KEY";
+        let xml = format!("<link>http://localhost/download?apikey={sentinel}</link>");
+
+        let summary = indexer_response_summary(&xml);
+
+        assert!(summary.contains(&xml.len().to_string()));
+        assert!(!summary.contains(sentinel));
+        assert!(!summary.contains("apikey="));
+    }
+
+    #[test]
+    fn indexer_request_summary_never_contains_api_key() {
+        let sentinel = "SUPER-SECRET-INDEXER-KEY";
+        let params = IndexerParams {
+            t: "tvsearch".into(),
+            apikey: sentinel.into(),
+            q: Some("Show".into()),
+            season: Some(1),
+            ep: Some(2),
+            tmdbid: None,
+            imdbid: None,
+            tvdbid: Some("42".into()),
+            cat: Some("5000".into()),
+        };
+
+        let summary = format!("{:?}", safe_indexer_request_summary(&params));
+
+        assert!(summary.contains("auth_present: true"));
+        assert!(!summary.contains(sentinel));
+    }
+
+    #[tokio::test]
+    async fn nzb_download_rejects_incompatible_fcode_without_panicking() {
+        let response = handle_nzb_download(Query(NzbDownloadParams {
+            fcode: "../invalid?token=secret".into(),
+            info_hash: None,
+            filename: None,
+            tmdb_id: None,
+            tvdb_id: None,
+            title: None,
+            media_type: None,
+            season: None,
+            episode: None,
+            cat: None,
+        }))
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 
     #[test]
     fn test_determine_category_movies_hd() {
         // 1080p movies
         assert_eq!(
-            determine_category("Avengers.2012.1080p.BluRay.x264.mkv"),
+            determine_category("Test.Movie.2012.1080p.BluRay.x264.mkv"),
             2040
         );
         assert_eq!(determine_category("Movie.Name.720p.WEB-DL.mkv"), 2040);
@@ -1323,7 +1552,7 @@ mod tests {
     #[test]
     fn test_determine_category_movies_uhd() {
         // 4K/UHD movies
-        assert_eq!(determine_category("Avengers.2160p.UHD.BluRay.mkv"), 2045);
+        assert_eq!(determine_category("Test.Movie.2160p.UHD.BluRay.mkv"), 2045);
         assert_eq!(determine_category("Movie.4K.HDR.mkv"), 2045);
         assert_eq!(determine_category("Film.2160p.x265.mkv"), 2045);
         assert_eq!(determine_category("Movie.UHD.BluRay.mkv"), 2045);
@@ -1332,7 +1561,7 @@ mod tests {
     #[test]
     fn test_determine_category_tv_hd() {
         // TV shows with season/episode patterns in HD
-        assert_eq!(determine_category("Breaking.Bad.S01E01.1080p.mkv"), 5040);
+        assert_eq!(determine_category("Test.Series.S01E01.1080p.mkv"), 5040);
         assert_eq!(determine_category("Show.Name.S02E05.720p.WEB-DL.mkv"), 5040);
         assert_eq!(
             determine_category("Series.Season.1.Episode.03.1080p.mkv"),
@@ -1346,7 +1575,7 @@ mod tests {
     #[test]
     fn test_determine_category_tv_uhd() {
         // TV shows in 4K/UHD
-        assert_eq!(determine_category("Breaking.Bad.S01E01.2160p.mkv"), 5045);
+        assert_eq!(determine_category("Test.Series.S01E01.2160p.mkv"), 5045);
         assert_eq!(determine_category("Show.S02E05.4K.HDR.mkv"), 5045);
         assert_eq!(determine_category("Series.S01E01.UHD.mkv"), 5045);
     }
@@ -1483,28 +1712,28 @@ mod tests {
     fn test_category_detection_comprehensive() {
         // Movies - HD
         assert_eq!(
-            determine_category("The.Matrix.1999.1080p.BluRay.x264-GROUP.mkv"),
+            determine_category("Test.Movie.1999.1080p.BluRay.x264-GROUP.mkv"),
             2040
         );
         assert_eq!(
-            determine_category("Inception.2010.720p.WEB-DL.AAC2.0.H.264.mkv"),
+            determine_category("Example.Film.2010.720p.WEB-DL.AAC2.0.H.264.mkv"),
             2040
         );
 
         // Movies - UHD
         assert_eq!(
-            determine_category("Avatar.2009.2160p.UHD.BluRay.x265.10bit.HDR.mkv"),
+            determine_category("Test.Movie.2009.2160p.UHD.BluRay.x265.10bit.HDR.mkv"),
             2045
         );
-        assert_eq!(determine_category("Dune.2021.4K.HDR.DV.mkv"), 2045);
+        assert_eq!(determine_category("Example.Film.2021.4K.HDR.DV.mkv"), 2045);
 
         // TV - HD
         assert_eq!(
-            determine_category("Game.of.Thrones.S08E06.1080p.WEB.H264-MEMENTO.mkv"),
+            determine_category("Test.Series.S08E06.1080p.WEB.H264-GROUP.mkv"),
             5040
         );
         assert_eq!(
-            determine_category("The.Office.US.S05E14.720p.BluRay.x264.mkv"),
+            determine_category("Example.Series.S05E14.720p.BluRay.x264.mkv"),
             5040
         );
 
@@ -1587,6 +1816,8 @@ mod tests {
             host,
             apikey,
             &tmdb_id,
+            &Some("42".to_string()),
+            &Some("Test Series".to_string()),
             &media_type,
             &season,
             &episode,
@@ -1621,6 +1852,8 @@ mod tests {
             "192.168.1.10:8484",
             "testkey",
             &tmdb_id,
+            &None,
+            &Some("Movie".to_string()),
             &media_type,
             &None,
             &None,
@@ -1652,6 +1885,8 @@ mod tests {
             "https://www.fshare.vn/file/UNKNOWNCODE",
             "localhost:8484",
             "key",
+            &None,
+            &None,
             &None,
             &None,
             &None,
@@ -1778,7 +2013,194 @@ mod tests {
             vietsub: false,
             hdr: false,
             dolby_vision: false,
+            result_source: None,
+            provider: None,
+            indexer: None,
+            seeders: None,
+            leechers: None,
+            info_hash: None,
+            download_ref: None,
+            origin_provider: None,
+            origin_indexer: None,
+            cached: None,
+            file_idx: None,
+            sources: None,
+            behavior_hints: None,
+            inspection: None,
+            inspection_score: None,
         }
+    }
+
+    #[test]
+    fn season_title_is_parseable_without_tmdb_and_never_invents_episode_zero() {
+        let file = make_test_result("raw.E00.mkv", 1, None, None);
+        let title = synthesize_title(&file, None, None, Some(1), None);
+        assert!(title.contains("S01"));
+        assert!(!title.contains("E00"));
+    }
+
+    #[tokio::test]
+    async fn torrent_nzb_uses_validated_download_name() {
+        let response = handle_nzb_download(Query(NzbDownloadParams {
+            fcode: String::new(),
+            info_hash: Some("AABBCCDDEEFF00112233445566778899AABBCCDD".to_string()),
+            filename: Some("Show.S01.mkv".to_string()),
+            tmdb_id: None,
+            tvdb_id: Some("42".to_string()),
+            title: None,
+            media_type: Some("tv".to_string()),
+            season: Some(1),
+            episode: None,
+            cat: None,
+        }))
+        .await
+        .into_response();
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_DISPOSITION],
+            "attachment; filename=\"aabbccddeeff00112233445566778899aabbccdd.nzb\""
+        );
+    }
+
+    #[tokio::test]
+    async fn season_package_projection_is_once_and_torrent_rows_stay_filtered() {
+        let hash = "AABBCCDDEEFF00112233445566778899AABBCCDD";
+        let mut package = make_test_result("Package.E00.mkv", 2_000_000_000, Some("1080p"), None);
+        package.info_hash = Some(hash.to_string());
+        let mut filtered = make_test_result("Filtered.mkv", 1, None, None);
+        filtered.result_source = Some("torrent".to_string());
+        let response = crate::api::smart_search::types::SmartSearchResponse {
+            query: "Show".to_string(),
+            total_found: 3,
+            r#type: "tv".to_string(),
+            mode: None,
+            kind: None,
+            groups: Some(vec![crate::utils::title_matcher::QualityGroup {
+                quality: "torrent".to_string(),
+                score: 0,
+                count: 1,
+                files: vec![{
+                    let mut row = make_test_result("GroupFiltered.mkv", 1, None, None);
+                    row.result_source = Some("torrent".to_string());
+                    row
+                }],
+            }]),
+            seasons: Some(vec![crate::api::smart_search::SeasonGroup {
+                season: 1,
+                episode_count: 1,
+                aired_episode_count: 1,
+                packages: vec![crate::api::smart_search::TorrentPackage {
+                    info_hash: hash.to_string(),
+                    result: package,
+                    covered_episodes: vec![1],
+                    file_indices: Default::default(),
+                    episode_files: Default::default(),
+                }],
+                episodes_grouped: vec![crate::api::smart_search::EpisodeGroup {
+                    episode_number: 1,
+                    name: "Episode".to_string(),
+                    overview: None,
+                    air_date: None,
+                    still_path: None,
+                    files: vec![filtered],
+                }],
+            }]),
+            sources: None,
+            season_plan: None,
+        };
+        let xml = convert_smart_response_to_xml(
+            response,
+            "Show",
+            "localhost:8484",
+            "key",
+            None,
+            Some("42".to_string()),
+            Some("Show".to_string()),
+            "tv",
+            Some(1),
+            None,
+            None,
+            "",
+        )
+        .await;
+        assert_eq!(
+            xml.matches("torrent://aabbccddeeff00112233445566778899aabbccdd")
+                .count(),
+            2
+        );
+        assert!(!xml.contains("Filtered.mkv"));
+        assert!(!xml.contains("GroupFiltered.mkv"));
+        let link = xml
+            .rsplit("<link>")
+            .next()
+            .unwrap()
+            .split("</link>")
+            .next()
+            .unwrap();
+        let link = link.replace("&amp;", "&");
+        let query = link.split('?').nth(1).unwrap();
+        let fields: std::collections::HashMap<_, _> = url::form_urlencoded::parse(query.as_bytes())
+            .into_owned()
+            .collect();
+        assert_eq!(fields.get("season").map(String::as_str), Some("1"));
+        let download = handle_nzb_download(Query(NzbDownloadParams {
+            fcode: fields.get("fcode").cloned().unwrap_or_default(),
+            info_hash: fields.get("info_hash").cloned(),
+            filename: fields.get("filename").cloned(),
+            tmdb_id: fields.get("tmdb_id").cloned(),
+            tvdb_id: fields.get("tvdb_id").cloned(),
+            title: fields.get("title").cloned(),
+            media_type: fields.get("media_type").cloned(),
+            season: fields.get("season").and_then(|v| v.parse().ok()),
+            episode: fields.get("episode").and_then(|v| v.parse().ok()),
+            cat: fields.get("cat").cloned(),
+        }))
+        .await
+        .into_response();
+        let body = axum::body::to_bytes(download.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let metadata =
+            crate::providers::fshare::decode_fake_nzb(&String::from_utf8(body.to_vec()).unwrap())
+                .unwrap();
+        assert_eq!(
+            metadata.torrent_info_hash(),
+            Some("aabbccddeeff00112233445566778899aabbccdd")
+        );
+        assert_eq!(metadata.season, Some(1));
+        assert_eq!(metadata.episode, None);
+    }
+
+    #[test]
+    fn torrent_season_nzb_preserves_hash_identity_and_season_only_metadata() {
+        let hash = "AABBCCDDEEFF00112233445566778899AABBCCDD";
+        let url = generate_torrent_nzb_url(
+            hash,
+            "Show.S01.1080p.mkv",
+            "localhost:8484",
+            "key",
+            &None,
+            &Some("42".to_string()),
+            &Some("Show".to_string()),
+            &Some("tv".to_string()),
+            &Some(1),
+        );
+        assert!(url.contains("info_hash=AABBCCDDEEFF00112233445566778899AABBCCDD"));
+        assert!(url.contains("filename=Show.S01.1080p.mkv"));
+        assert!(url.contains("season=1"));
+        assert!(!url.contains("episode="));
+        let title = synthesize_title(
+            &make_test_result("Show.S01.1080p.mkv", 2_000_000_000, Some("1080p"), None),
+            Some("Show"),
+            Some(2024),
+            Some(1),
+            None,
+        );
+        assert!(title.contains("S01"));
+        assert!(!title.contains("E00"));
+        assert_eq!(
+            normalize_torrent_hash(hash),
+            Some(hash.to_ascii_lowercase())
+        );
     }
 
     #[test]
@@ -1791,11 +2213,11 @@ mod tests {
             Some("1080p"),
             Some("WEB-DL"),
         );
-        let title = synthesize_title(&file, Some("Breaking Bad"), Some(2008), Some(1), Some(3));
+        let title = synthesize_title(&file, Some("Test Series"), Some(2008), Some(1), Some(3));
 
         // Must start with the sanitized TMDB title
         assert!(
-            title.starts_with("Breaking.Bad."),
+            title.starts_with("Test.Series."),
             "Expected dot-separated title prefix: {}",
             title
         );

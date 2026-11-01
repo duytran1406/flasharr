@@ -4,12 +4,124 @@
 //! Handles URL resolution, retry logic, and progress broadcasting.
 
 use chrono::Utc;
+use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
-use tokio::sync::{Mutex, Notify, RwLock, broadcast};
+use tokio::sync::{broadcast, Mutex, Notify, RwLock};
 use tokio::task::JoinHandle;
+
+fn resolve_download_info_path(tmdb_id: Option<i64>, media_type: Option<&str>) -> Option<String> {
+    match (tmdb_id, media_type) {
+        (Some(tmdb_id), Some("tv")) => Some(format!("/tv/{}", tmdb_id)),
+        (Some(tmdb_id), Some("movie")) => Some(format!("/movie/{}", tmdb_id)),
+        _ => None,
+    }
+}
+
+fn canonical_qbittorrent_input(host: &str, url: &str, info_hash: Option<&str>) -> String {
+    if host == "qbittorrent" {
+        if let Some(magnet) =
+            info_hash.and_then(|hash| crate::sources::torrent::build_magnet_url(hash, None))
+        {
+            return magnet;
+        }
+    }
+    url.to_string()
+}
+
+fn canonical_provider_identity(
+    host: &str,
+    url: &str,
+    info_hash: Option<&str>,
+    external_id: Option<&str>,
+) -> (String, Option<String>) {
+    if host == "qbittorrent" {
+        let extracted = crate::sources::torrent::extract_btih(url);
+        let hash = info_hash
+            .or(external_id)
+            .map(str::to_string)
+            .or(extracted)
+            .map(|v| v.trim().to_ascii_lowercase());
+        return ("torrent".to_string(), hash);
+    }
+    (host.to_ascii_lowercase(), None)
+}
+
+fn reconciled_transfer_state(current: DownloadState, transfer: DownloadState) -> DownloadState {
+    if matches!(
+        current,
+        DownloadState::Importing | DownloadState::Completed | DownloadState::Failed
+    ) {
+        current
+    } else {
+        transfer
+    }
+}
+
+fn import_owns_transfer_state(state: DownloadState) -> bool {
+    matches!(state, DownloadState::Importing | DownloadState::Completed)
+}
+
+fn status_refresh_state(
+    current: DownloadState,
+    observed: DownloadState,
+    arr_announced: bool,
+) -> DownloadState {
+    if observed == DownloadState::Completed && !arr_announced {
+        current
+    } else {
+        reconciled_transfer_state(current, observed)
+    }
+}
+
+fn qbit_source_path(path: &str) -> std::path::PathBuf {
+    std::path::Path::new(path)
+        .strip_prefix("/downloads")
+        .map(|relative| std::path::Path::new("/data/downloads").join(relative))
+        .unwrap_or_else(|_| std::path::PathBuf::from(path))
+}
+
+async fn library_artifact_exists(task: &DownloadTask, arr_path: Option<&str>) -> bool {
+    let Some(arr_path) = arr_path else {
+        return false;
+    };
+    let root = std::path::Path::new(arr_path);
+    let target_dir = task
+        .tmdb_season
+        .map(|season| root.join(format!("Season {season}")))
+        .unwrap_or_else(|| root.to_path_buf());
+    let episode = task
+        .tmdb_season
+        .zip(task.tmdb_episode)
+        .map(|(season, episode)| format!("s{season:02}e{episode:02}"));
+    let Ok(mut entries) = tokio::fs::read_dir(target_dir).await else {
+        return false;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+        let is_media = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|ext| {
+                matches!(
+                    ext.to_ascii_lowercase().as_str(),
+                    "mkv" | "mp4" | "avi" | "m4v" | "ts" | "mov"
+                )
+            });
+        if is_media
+            && episode
+                .as_ref()
+                .is_none_or(|pattern| name.contains(pattern))
+            && tokio::fs::metadata(path).await.is_ok()
+        {
+            return true;
+        }
+    }
+    false
+}
 
 use super::config::DownloadConfig;
 use super::duplicate_detector::DuplicateDetector;
@@ -22,6 +134,214 @@ use super::task::{DownloadState, DownloadTask, UrlMetadata};
 use crate::db::Db;
 use crate::hosts::registry::HostRegistry;
 use crate::utils::parser::FilenameParser;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QbitConfirmationDecision {
+    Confirmed,
+    Pending,
+    Failed(&'static str),
+}
+
+#[derive(Debug, PartialEq)]
+enum RestartAdoption {
+    Adopt,
+    Add,
+    Wait,
+}
+
+fn restart_adoption(
+    health: &str,
+    observed_hash: Option<&str>,
+    expected_hash: &str,
+    restored_external: bool,
+) -> RestartAdoption {
+    if health != "healthy" {
+        return RestartAdoption::Wait;
+    }
+    match observed_hash {
+        Some(hash) if hash.eq_ignore_ascii_case(expected_hash) => RestartAdoption::Adopt,
+        Some(_) => RestartAdoption::Wait,
+        None if restored_external => RestartAdoption::Wait,
+        None => RestartAdoption::Add,
+    }
+}
+
+fn is_restored_external_qbit_task(
+    state: DownloadState,
+    error_message: Option<&str>,
+    external_id: Option<&str>,
+    external_provider: Option<&str>,
+    external_instance_id: Option<&str>,
+) -> bool {
+    let retryable_pre_add_wait = state == DownloadState::Waiting
+        && error_message
+            .is_some_and(|message| message.starts_with("qBittorrent torrent is absent"));
+    state != DownloadState::Queued
+        && !retryable_pre_add_wait
+        && (external_id.is_some()
+            || external_provider == Some("qbittorrent")
+            || external_instance_id.is_some())
+}
+
+async fn run_restart_adoption<T, F, Fut>(decision: RestartAdoption, add: F) -> Option<T>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
+    match decision {
+        RestartAdoption::Add => Some(add().await),
+        RestartAdoption::Adopt | RestartAdoption::Wait => None,
+    }
+}
+
+/// Root-cause reconciliation decision for a single managed qB task.
+///
+/// Shared by both the new-add path (`start_qbittorrent_task`) and the durable
+/// periodic/startup reconcile tick. Hash presence alone is never treated as
+/// transfer confirmation — the exact-hash identity must match AND the transfer
+/// classifier must report meaningful active progress before `Downloading`.
+#[derive(Debug, PartialEq, Eq)]
+enum ManagedQbitDecision {
+    /// Genuinely-new locator, absent from a healthy instance: bounded add once.
+    AddOnce,
+    /// Present placeholder (metaDL/checking/queued/stalled/blank) or a restored
+    /// identity that is absent: hold in STARTING/WAITING with an explicit reason.
+    Starting(&'static str),
+    /// API unavailable, restored-external absent, or otherwise not addable now.
+    Wait(&'static str),
+    /// Exact-hash identity present with meaningful active transfer evidence.
+    Downloading,
+    /// Exact-hash identity present and the transfer is complete.
+    Completed,
+    /// Deadline exceeded without meaningful confirmation: deterministic failure.
+    Failed(&'static str),
+}
+
+/// Unified confirmation predicate. `observed` is the direct exact-hash query
+/// result: `Err(())` = API failure, `Ok(None)` = absent, `Ok(Some((hash,state)))`
+/// = a row whose hash must be identity-checked. `metrics` feed the shared
+/// `classify_qbit` transfer classifier so "present" alone never confirms transfer.
+#[allow(clippy::too_many_arguments)]
+fn managed_qbit_decision(
+    health: &str,
+    expected_hash: &str,
+    observed: Result<Option<(&str, &str)>, ()>,
+    metrics: crate::torrent::state::TransferMetrics,
+    restored_external: bool,
+    deadline_exceeded: bool,
+) -> ManagedQbitDecision {
+    if !health.eq_ignore_ascii_case("healthy") {
+        return ManagedQbitDecision::Wait(
+            "qBittorrent instance is not healthy; reconciliation waits",
+        );
+    }
+    match observed {
+        Err(()) => {
+            ManagedQbitDecision::Wait("qBittorrent API unavailable; reconciliation will retry")
+        }
+        Ok(None) if restored_external => ManagedQbitDecision::Wait(
+            "qBittorrent torrent is absent; restored identity will not be added again",
+        ),
+        Ok(None) if deadline_exceeded => {
+            ManagedQbitDecision::Failed("qBittorrent add/confirmation deadline exceeded")
+        }
+        Ok(None) => ManagedQbitDecision::AddOnce,
+        Ok(Some((hash, _))) if !hash.eq_ignore_ascii_case(expected_hash) => {
+            ManagedQbitDecision::Failed("qBittorrent returned a mismatched torrent hash")
+        }
+        Ok(Some((_, state))) => {
+            let classification = crate::torrent::state::classify_qbit(state, metrics, health);
+            match classification.task_state {
+                DownloadState::Downloading => ManagedQbitDecision::Downloading,
+                DownloadState::Completed => ManagedQbitDecision::Completed,
+                DownloadState::Failed => {
+                    ManagedQbitDecision::Failed("qBittorrent reports the torrent is blocked")
+                }
+                _ => ManagedQbitDecision::Starting(
+                    "qBittorrent is waiting for metadata or transfer evidence",
+                ),
+            }
+        }
+    }
+}
+
+fn qbit_confirmation_decision(
+    expected_hash: &str,
+    observed: Result<Option<&str>, ()>,
+    exhausted: bool,
+) -> QbitConfirmationDecision {
+    match observed {
+        Err(()) => QbitConfirmationDecision::Failed(
+            "qBittorrent confirmation API failed; check the configured instance",
+        ),
+        Ok(Some(hash)) if hash.trim().is_empty() => {
+            qbit_confirmation_decision(expected_hash, Ok(None), exhausted)
+        }
+        Ok(Some(hash)) if hash.eq_ignore_ascii_case(expected_hash) => {
+            QbitConfirmationDecision::Confirmed
+        }
+        Ok(Some(_)) => QbitConfirmationDecision::Failed(
+            "qBittorrent confirmation returned a mismatched torrent hash",
+        ),
+        Ok(None) if exhausted => QbitConfirmationDecision::Failed(
+            "qBittorrent did not confirm the accepted torrent within 60 seconds",
+        ),
+        Ok(None) => QbitConfirmationDecision::Pending,
+    }
+}
+
+fn qbit_confirmation_requires_add(decision: QbitConfirmationDecision) -> bool {
+    matches!(decision, QbitConfirmationDecision::Pending)
+}
+
+async fn poll_qbit_confirmation<F, Fut>(
+    expected_hash: &str,
+    budget: Duration,
+    call_timeout: Duration,
+    mut get_torrent: F,
+) -> QbitConfirmationDecision
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<Option<String>>>,
+{
+    let deadline = tokio::time::Instant::now() + budget;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return qbit_confirmation_decision(expected_hash, Ok(None), true);
+        }
+        let observed = match tokio::time::timeout(call_timeout.min(remaining), get_torrent()).await
+        {
+            Ok(Ok(hash)) => hash,
+            Ok(Err(_)) => return qbit_confirmation_decision(expected_hash, Err(()), false),
+            Err(_) if tokio::time::Instant::now() >= deadline => {
+                return qbit_confirmation_decision(expected_hash, Ok(None), true)
+            }
+            Err(_) => None,
+        };
+        match qbit_confirmation_decision(expected_hash, Ok(observed.as_deref()), false) {
+            QbitConfirmationDecision::Pending => {
+                tokio::time::sleep(
+                    Duration::from_secs(2)
+                        .min(deadline.saturating_duration_since(tokio::time::Instant::now())),
+                )
+                .await;
+            }
+            decision => return decision,
+        }
+    }
+}
+
+async fn run_qbit_add_with_timeout<F, Fut, T>(budget: Duration, add: F) -> anyhow::Result<T>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<T>>,
+{
+    tokio::time::timeout(budget, add())
+        .await
+        .map_err(|_| anyhow::anyhow!("qBittorrent add timed out after 30 seconds"))?
+        .map_err(|_| anyhow::anyhow!("qBittorrent add API failed; check the configured instance"))
+}
 
 /// Outcome of an `request_arr_import` call, carrying enough information for the
 /// worker to enter the `Importing` state and drive closed-loop polling.
@@ -40,6 +360,20 @@ enum ArrMoveOutcome {
     /// A fatal error occurred (e.g. filesystem, arr API hard failure) and the
     /// task could not be placed. Caller should record the error.
     Failed { reason: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BackfillItem {
+    pub id: String,
+    pub filename: String,
+    pub media_type: String,
+    pub source_path: String,
+    pub arr_id: Option<i64>,
+    pub arr_path: Option<String>,
+    #[serde(rename = "hasFile")]
+    pub has_file: Option<bool>,
+    pub reason: String,
+    pub action: String,
 }
 
 async fn looks_like_importable_media(path: &std::path::Path) -> anyhow::Result<bool> {
@@ -119,9 +453,24 @@ pub struct DownloadOrchestrator {
 
     /// Track announced batches to prevent duplicate announcements
     announced_batches: Arc<RwLock<std::collections::HashSet<String>>>,
+
+    /// qBittorrent client for externally-managed torrent downloads.
+    qbittorrent_client: Arc<RwLock<Option<Arc<crate::torrent::qbittorrent::QBittorrentClient>>>>,
+
+    /// qBittorrent instance mirror/control plane.
+    qbit_manager: Option<Arc<crate::torrent::instance_manager::QbitInstanceManager>>,
 }
 
 impl DownloadOrchestrator {
+    fn canonical_qbittorrent_input(host: &str, url: &str, info_hash: Option<&str>) -> String {
+        canonical_qbittorrent_input(host, url, info_hash)
+    }
+
+    #[cfg(test)]
+    fn qbit_url_for_test(host: &str, url: &str, info_hash: Option<&str>) -> String {
+        Self::canonical_qbittorrent_input(host, url, info_hash)
+    }
+
     /// Create new orchestrator
     pub fn new(
         config: DownloadConfig,
@@ -129,6 +478,8 @@ impl DownloadOrchestrator {
         db: Option<Arc<Db>>,
         sonarr_config: Option<crate::config::ArrConfig>,
         radarr_config: Option<crate::config::ArrConfig>,
+        qbittorrent_config: crate::torrent::qbittorrent::QBittorrentConfig,
+        qbit_manager: Option<Arc<crate::torrent::instance_manager::QbitInstanceManager>>,
     ) -> Self {
         let task_manager = Arc::new(DownloadTaskManager::new());
         let download_engine = Arc::new(SimpleDownloadEngine::with_config(config.clone()));
@@ -173,6 +524,18 @@ impl DownloadOrchestrator {
             None
         };
 
+        let qbittorrent_client = if qbittorrent_config.enabled {
+            match crate::torrent::qbittorrent::QBittorrentClient::new(qbittorrent_config) {
+                Ok(client) => Some(Arc::new(client)),
+                Err(e) => {
+                    tracing::warn!("qBittorrent client disabled: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Self {
             task_manager,
             download_engine: Arc::new(RwLock::new(download_engine)),
@@ -188,6 +551,8 @@ impl DownloadOrchestrator {
             artifact_manager: Arc::new(RwLock::new(artifact_manager)),
 
             announced_batches: Arc::new(RwLock::new(std::collections::HashSet::new())),
+            qbittorrent_client: Arc::new(RwLock::new(qbittorrent_client)),
+            qbit_manager,
         }
     }
 
@@ -209,11 +574,6 @@ impl DownloadOrchestrator {
             );
         }
 
-        // Restore tasks from database
-        if let Err(e) = self.restore_from_db().await {
-            tracing::error!("Failed to restore tasks from database: {}", e);
-        }
-
         // Spawn worker tasks
         let mut workers = self.workers.lock().await;
         // Acquire config read lock to get max_concurrent
@@ -222,6 +582,11 @@ impl DownloadOrchestrator {
             let handle = self.spawn_worker(worker_id);
             workers.push(handle);
         }
+        // Instance manager owns qB mirroring; this poller maps mirror rows to Flasharr task lifecycle.
+        workers.push(self.spawn_qbittorrent_mirror_consumer());
+        // Durable reconcile: qB QUEUED/STARTING/DOWNLOADING tasks that never receive a
+        // mirror event (cold restart, metaDL placeholder, blank row) still need a watcher.
+        workers.push(self.spawn_qbit_reconcile_ticker());
     }
 
     /// Stop orchestrator
@@ -247,8 +612,29 @@ impl DownloadOrchestrator {
         host: String,
         category: String,
     ) -> Result<DownloadTask, anyhow::Error> {
-        self.add_download_with_metadata(url, Some(filename), host, category, None, None, None)
-            .await
+        self.add_download_with_metadata(
+            url,
+            Some(filename),
+            host,
+            category,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
     }
 
     /// Add a new download with TMDB metadata for organized folder structure
@@ -261,10 +647,25 @@ impl DownloadOrchestrator {
         mut tmdb_metadata: Option<TmdbDownloadMetadata>,
         batch_id: Option<String>,
         batch_name: Option<String>,
+        force_redownload: bool,
+        download_source: Option<String>,
+        external_provider: Option<String>,
+        initial_size: Option<u64>,
+        seeders: Option<i64>,
+        leechers: Option<i64>,
+        info_hash: Option<String>,
+        external_id: Option<String>,
+        external_instance_id: Option<String>,
+        origin_provider: Option<String>,
+        origin_indexer: Option<String>,
+        file_idx: Option<usize>,
+        source_filename: Option<String>,
     ) -> Result<DownloadTask, anyhow::Error> {
-        // === DEBUG: Log orchestrator input ===
-        tracing::info!("=== [ORCHESTRATOR] add_download_with_metadata called ===");
-        tracing::info!("[ORCHESTRATOR] Input URL: {}", url);
+        tracing::info!("[ORCHESTRATOR] add_download_with_metadata called");
+        tracing::info!(
+            "[ORCHESTRATOR] Input URL present: {}",
+            !url.trim().is_empty()
+        );
         tracing::info!(
             "[ORCHESTRATOR] Input filename_override: {:?}",
             filename_override
@@ -280,30 +681,90 @@ impl DownloadOrchestrator {
             );
         }
 
-        // Extract Fshare code from URL for duplicate detection
-        let fshare_code = Self::extract_fshare_code(&url);
-        tracing::info!("[ORCHESTRATOR] Extracted fshare_code: {:?}", fshare_code);
+        let is_tv = tmdb_metadata.as_ref().is_some_and(|meta| {
+            matches!(meta.media_type.as_deref(), Some("tv") | Some("episode"))
+                || meta.season.is_some()
+                || meta.episode.is_some()
+        }) || category.to_ascii_lowercase().starts_with("tv");
+        let (batch_id, batch_name) = if is_tv {
+            let meta = tmdb_metadata
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("TV download requires show metadata"))?;
+            let (id, name) = crate::utils::batch_utils::canonical_tv_batch(
+                meta.tvdb_id,
+                meta.tmdb_id,
+                meta.title.as_deref(),
+            )?;
+            (Some(id), Some(name))
+        } else {
+            (batch_id, batch_name)
+        };
+
+        let canonical_url = Self::canonical_qbittorrent_input(&host, &url, info_hash.as_deref());
+
+        let (provider_id, torrent_item_id) = canonical_provider_identity(
+            &host,
+            &canonical_url,
+            info_hash.as_deref(),
+            external_id.as_deref(),
+        );
+        let provider_item_id = if provider_id == "fshare" {
+            crate::providers::fshare::item_id_from_url(&canonical_url)
+        } else {
+            torrent_item_id.or_else(|| external_id.clone())
+        };
 
         // Check for duplicates in memory first (fast path)
-        if let Some(code) = &fshare_code {
-            if let Some(existing) = self.find_task_by_fshare_code(code).await {
-                let filename = filename_override.unwrap_or_else(|| "unknown".to_string());
-                return self
-                    .handle_duplicate(existing, url, filename, host, category, code.clone())
-                    .await;
+        if let Some(item_id) = &provider_item_id {
+            if let Some(existing) = self.find_task_by_provider_item(&provider_id, item_id).await {
+                if existing.state == DownloadState::Completed && force_redownload {
+                    tracing::info!(
+                        "Duplicate completed task [code: {}]: deleting stale task {} before re-add",
+                        item_id,
+                        existing.id
+                    );
+                    self.task_manager.delete_task(existing.id).await;
+                    if let Some(db) = &self.db {
+                        let _ = db.delete_task(existing.id);
+                    }
+                } else if matches!(
+                    existing.state,
+                    DownloadState::Failed | DownloadState::Cancelled
+                ) {
+                    self.task_manager.delete_task(existing.id).await;
+                    if let Some(db) = &self.db {
+                        let _ = db.delete_task(existing.id);
+                    }
+                } else {
+                    return self.handle_duplicate(existing, item_id.clone()).await;
+                }
             }
         }
 
         // Check for duplicates in database (slow path - catches evicted tasks)
-        if let (Some(code), Some(db)) = (&fshare_code, &self.db) {
-            match db.find_task_by_fshare_code_async(code).await {
+        if let (Some(item_id), Some(db)) = (&provider_item_id, &self.db) {
+            match db
+                .find_task_by_provider_item_async(&provider_id, item_id)
+                .await
+            {
                 Ok(Some((existing_id, existing_state))) => {
-                    // Found existing task in database with same fshare code
+                    // Found existing task in database with the same provider identity.
                     match existing_state.as_str() {
-                        "QUEUED" | "STARTING" | "DOWNLOADING" | "PAUSED" | "COMPLETED" => {
+                        "COMPLETED" if force_redownload => {
                             tracing::info!(
-                                "Duplicate detected in DB [fshare_code: {}]: Task {} already exists in state {}, skipping",
-                                code,
+                                "Duplicate completed task in DB [provider_item_id: {}]: deleting stale task {} before re-add",
+                                item_id,
+                                existing_id
+                            );
+                            if let Ok(old_id) = uuid::Uuid::parse_str(&existing_id) {
+                                let _ = db.delete_task(old_id);
+                            }
+                        }
+                        "QUEUED" | "STARTING" | "DOWNLOADING" | "PAUSED" | "WAITING"
+                        | "IMPORTING" | "COMPLETED" => {
+                            tracing::info!(
+                                "Duplicate detected in DB [provider_item_id: {}]: Task {} already exists in state {}, skipping",
+                                item_id,
                                 existing_id,
                                 existing_state
                             );
@@ -314,8 +775,8 @@ impl DownloadOrchestrator {
                         }
                         "FAILED" | "CANCELLED" => {
                             tracing::info!(
-                                "Duplicate detected in DB [fshare_code: {}]: Task {} is {}, deleting old and creating new",
-                                code,
+                                "Duplicate detected in DB [provider_item_id: {}]: Task {} is {}, deleting old and creating new",
+                                item_id,
                                 existing_id,
                                 existing_state
                             );
@@ -326,8 +787,8 @@ impl DownloadOrchestrator {
                         }
                         _ => {
                             tracing::info!(
-                                "Duplicate detected in DB [fshare_code: {}]: Task {} in state {}, skipping",
-                                code,
+                                "Duplicate detected in DB [provider_item_id: {}]: Task {} in state {}, skipping",
+                                item_id,
                                 existing_id,
                                 existing_state
                             );
@@ -348,39 +809,54 @@ impl DownloadOrchestrator {
             }
         }
 
-        // Fetch real filename and size from Fshare API
-        let handler_host = if host == "sabnzbd-fshare" {
-            "fshare"
-        } else {
-            host.as_str()
-        };
-
-        let (mut filename, file_size) = if let Some(handler) =
-            self.host_registry.get_handler(handler_host)
+        let external_duplicate_provider = external_provider
+            .as_deref()
+            .or_else(|| (host == "qbittorrent").then_some("qbittorrent"));
+        let external_duplicate_id = external_id.as_deref().or(info_hash.as_deref());
+        if let (Some(provider), Some(id), Some(db)) =
+            (external_duplicate_provider, external_duplicate_id, &self.db)
         {
-            match handler.get_file_info(&url).await {
-                Ok(file_info) => {
-                    tracing::info!(
-                        "Fetched file info from API: name='{}', size={}",
-                        file_info.filename,
-                        file_info.size
-                    );
-                    // Use filename override if provided, otherwise use API name
-                    let final_name = filename_override.unwrap_or(file_info.filename);
-                    (final_name, file_info.size)
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to get file info from API, using fallback: {}", e);
-                    let final_name = filename_override
-                        .unwrap_or_else(|| url.split('/').last().unwrap_or("unknown").to_string());
-                    (final_name, 0u64)
-                }
+            match db.find_task_by_external_async(provider, id).await {
+                Ok(Some((existing_id, existing_state))) => match existing_state.as_str() {
+                    "COMPLETED" if force_redownload => {
+                        if let Ok(old_id) = uuid::Uuid::parse_str(&existing_id) {
+                            let _ = db.delete_task(old_id);
+                        }
+                    }
+                    "FAILED" | "CANCELLED" => {
+                        if let Ok(old_id) = uuid::Uuid::parse_str(&existing_id) {
+                            let _ = db.delete_task(old_id);
+                        }
+                    }
+                    _ => {
+                        return Err(anyhow::anyhow!(
+                            "Download already exists ({})",
+                            existing_state
+                        ))
+                    }
+                },
+                Ok(None) => {}
+                Err(e) => tracing::warn!("Failed to check DB for external duplicate: {}", e),
             }
-        } else {
-            let final_name = filename_override
-                .unwrap_or_else(|| url.split('/').last().unwrap_or("unknown").to_string());
-            (final_name, 0u64)
-        };
+        }
+
+        // Keep queueing cold: do not call Fshare while adding a task. Smart Grab
+        // already supplies a filename; manual adds can use the URL tail until the
+        // worker reaches STARTING and resolves/enriches the task.
+        let mut filename = filename_override.unwrap_or_else(|| {
+            if canonical_url.starts_with("magnet:") {
+                "unknown".to_string()
+            } else {
+                provider_item_id.clone().unwrap_or_else(|| {
+                    canonical_url
+                        .split('/')
+                        .last()
+                        .unwrap_or("unknown")
+                        .to_string()
+                })
+            }
+        });
+        let file_size = initial_size.unwrap_or(0);
 
         // Trim leading slash to prevent Path::join from treating it as an absolute path
         if filename.starts_with('/') {
@@ -413,9 +889,16 @@ impl DownloadOrchestrator {
                             tmdb_id,
                             media_type
                         );
-                        let fetched_title =
-                            crate::api::indexer::fetch_tmdb_title(&tmdb_id.to_string(), media_type)
-                                .await;
+                        let fetched_title = crate::api::indexer::fetch_tmdb_title(
+                            &self
+                                .db
+                                .as_deref()
+                                .map(|db| crate::api::metadata_settings::runtime_key(db, "tmdb"))
+                                .unwrap_or_default(),
+                            &tmdb_id.to_string(),
+                            media_type,
+                        )
+                        .await;
                         if let Some(ref t) = fetched_title {
                             tracing::info!("Fetched TMDB title: {}", t);
                             meta.title = fetched_title.clone();
@@ -486,8 +969,41 @@ impl DownloadOrchestrator {
             self.build_destination_path(&final_filename, &category, &tmdb_metadata, &download_dir);
 
         // Create new task with file size
-        let mut task = DownloadTask::new(url, final_filename, host, category);
-        task.fshare_code = fshare_code;
+        let mut task = DownloadTask::new(
+            canonical_url.clone(),
+            final_filename,
+            host.clone(),
+            category,
+        );
+        task.provider_id = provider_item_id.as_ref().map(|_| provider_id);
+        task.provider_item_id = provider_item_id;
+        if host == "qbittorrent" {
+            task.download_source = Some(
+                download_source
+                    .clone()
+                    .unwrap_or_else(|| "torrent".to_string()),
+            );
+            task.external_provider = Some(
+                external_provider
+                    .clone()
+                    .unwrap_or_else(|| "qbittorrent".to_string()),
+            );
+            task.external_id = external_id.clone().or_else(|| info_hash.clone());
+            task.external_instance_id = external_instance_id.clone();
+        } else {
+            task.download_source = download_source.clone().or_else(|| Some(host.clone()));
+            task.external_provider = external_provider.clone();
+            task.external_id = external_id.clone().or_else(|| info_hash.clone());
+            task.external_instance_id = external_instance_id.clone();
+        }
+        task.info_hash = info_hash;
+        task.file_idx = file_idx;
+        task.source_filename = source_filename;
+
+        task.origin_provider = origin_provider;
+        task.origin_indexer = origin_indexer;
+        task.seeders = seeders;
+        task.leechers = leechers;
         task.destination = destination;
         task.size = file_size;
         task.batch_id = batch_id;
@@ -510,6 +1026,15 @@ impl DownloadOrchestrator {
 
         if let Some(ref meta) = tmdb_metadata {
             task.tmdb_id = meta.tmdb_id;
+            task.tvdb_id = meta.tvdb_id;
+            task.media_type = meta.media_type.clone();
+            task.media_item_id = meta.tmdb_id;
+            task.info_path = match (meta.media_type.as_deref(), meta.tvdb_id, meta.tmdb_id) {
+                (Some("tv") | Some("episode"), Some(tvdb_id), _) => {
+                    Some(format!("/tv/{}", tvdb_id))
+                }
+                _ => resolve_download_info_path(meta.tmdb_id, meta.media_type.as_deref()),
+            };
 
             // Always store the series/movie title in tmdb_title — it is the key used by
             // sabnzbd.rs to report a parseable name to Sonarr (e.g. "How.Dare.You.S01E03.WEB-DL.Flasharr").
@@ -531,6 +1056,12 @@ impl DownloadOrchestrator {
                 });
                 let title = meta.title.clone().unwrap_or_else(|| "Unknown".to_string());
                 let mut media_item = crate::db::media::MediaItem::new(tmdb_id, &media_type, &title);
+                if media_type == "tv" {
+                    if let Some(tvdb_id) = meta.tvdb_id {
+                        media_item.media_key = format!("tv:{}", tvdb_id);
+                        media_item.tvdb_id = Some(tvdb_id as i32);
+                    }
+                }
                 media_item.year = meta.year;
 
                 // Check if item already exists to preserve existing arr state
@@ -582,16 +1113,23 @@ impl DownloadOrchestrator {
             }
         }
 
-        // Add to manager (SSOT)
-        self.task_manager.add_task(task.clone()).await;
-
-        // Wake idle workers
-        self.task_notify.notify_waiters();
-
-        // Persist to database
+        // Persist acceptance/replacement before exposing or starting the new task.
+        let mut replaced = None;
         if let Some(db) = &self.db {
-            db.save_task(&task)?;
+            replaced = db.save_task_replacing_current(&task)?;
         }
+        Self::record_activity(self.db.as_ref(), "queued", &task);
+        if let Some(old) = replaced {
+            self.task_manager.delete_task(old.id).await;
+            self.broadcast_task_removed(&old.id.to_string());
+            if old.download_source.as_deref() == Some("torrent") {
+                if let Err(error) = self.delete_external_torrent(&old, false).await {
+                    tracing::warn!(task_id = %old.id, "Replacement detached locally; qB removal failed safely: {}", error);
+                }
+            }
+        }
+        self.task_manager.add_task(task.clone()).await;
+        self.task_notify.notify_waiters();
 
         // Broadcast task added event (legacy)
         let _ = self.progress_tx.send(ProgressUpdate {
@@ -688,21 +1226,18 @@ impl DownloadOrchestrator {
                                             let all_tasks = task_manager_clone.get_tasks().await;
                                             let mut updated_count = 0;
 
-                                            for mut task in all_tasks {
-                                                if task.tmdb_id == Some(tmdb_id) {
-                                                    // Update appropriate ID based on media type
-                                                    match task.detect_media_type() {
-                                                        crate::downloader::MediaType::TvSeries
-                                                        | crate::downloader::MediaType::TvEpisode =>
-                                                        {
-                                                            task.arr_series_id =
-                                                                Some(arr_id as i64);
-                                                        }
-                                                        crate::downloader::MediaType::Movie => {
-                                                            task.arr_movie_id = Some(arr_id as i64);
-                                                        }
-                                                    }
-                                                    task_manager_clone.update_task(task).await;
+                                            for stale in all_tasks {
+                                                if stale.tmdb_id == Some(tmdb_id) {
+                                                    let current = task_manager_clone
+                                                        .get_task(stale.id)
+                                                        .await
+                                                        .unwrap_or_else(|| stale.clone());
+                                                    let merged = Self::merge_arr_identity(
+                                                        &stale,
+                                                        &current,
+                                                        arr_id as i64,
+                                                    );
+                                                    task_manager_clone.update_task(merged).await;
                                                     updated_count += 1;
                                                 }
                                             }
@@ -778,10 +1313,11 @@ impl DownloadOrchestrator {
         }
 
         tracing::info!(
-            "Added download: {} ({}) [code: {:?}] -> {}",
+            "Added download: {} ({}) [{}:{:?}] -> {}",
             task.filename,
             task.id,
-            task.fshare_code,
+            task.provider_id.as_deref().unwrap_or("unknown"),
+            task.provider_item_id,
             task.destination
         );
         Ok(task)
@@ -789,8 +1325,34 @@ impl DownloadOrchestrator {
 
     /// Build organized destination path based on TMDB metadata
     /// Delegates to PathBuilder module
+    fn record_activity(db: Option<&Arc<Db>>, kind: &str, task: &DownloadTask) {
+        let Some(db) = db else { return };
+        let message = format!(
+            "{}: {}",
+            match kind {
+                "queued" => "Queued",
+                "completed" => "Completed",
+                "failed" => "Failed",
+                _ => return,
+            },
+            task.filename
+        );
+        if let Err(error) = db.record_activity_event(kind, task.id, &message) {
+            tracing::warn!(task_id = %task.id, "Failed to record activity event: {error}");
+        }
+    }
+
     fn build_destination_path(
         &self,
+        filename: &str,
+        category: &str,
+        tmdb: &Option<TmdbDownloadMetadata>,
+        root_dir: &std::path::Path,
+    ) -> String {
+        Self::build_destination_path_static(filename, category, tmdb, root_dir)
+    }
+
+    fn build_destination_path_static(
         filename: &str,
         category: &str,
         tmdb: &Option<TmdbDownloadMetadata>,
@@ -806,113 +1368,99 @@ impl DownloadOrchestrator {
         PathBuilder::sanitize_filename(name)
     }
 
-    /// Extract Fshare file code from URL
-    /// Delegates to DuplicateDetector module
-    fn extract_fshare_code(url: &str) -> Option<String> {
-        DuplicateDetector::extract_fshare_code(url)
+    fn filename_needs_host_metadata(task: &DownloadTask) -> bool {
+        let filename = task.filename.trim();
+        if filename.is_empty() || filename.eq_ignore_ascii_case("unknown") {
+            return true;
+        }
+
+        if task.provider_item_id.as_deref() == Some(filename) {
+            return true;
+        }
+
+        task.original_url
+            .split('/')
+            .last()
+            .map(|tail| tail == filename)
+            .unwrap_or(false)
     }
 
-    /// Find task by Fshare code
-    /// Delegates to DuplicateDetector module
-    async fn find_task_by_fshare_code(&self, code: &str) -> Option<DownloadTask> {
-        DuplicateDetector::find_task_by_fshare_code(&self.task_manager, code).await
+    fn metadata_from_task(task: &DownloadTask) -> Option<TmdbDownloadMetadata> {
+        if task.tmdb_id.is_none()
+            && task.tvdb_id.is_none()
+            && task.media_type.is_none()
+            && task.tmdb_title.is_none()
+            && task.tmdb_season.is_none()
+            && task.tmdb_episode.is_none()
+        {
+            return None;
+        }
+
+        Some(TmdbDownloadMetadata {
+            tmdb_id: task.tmdb_id,
+            tvdb_id: task.tvdb_id,
+            media_type: task.media_type.clone(),
+            title: task.tmdb_title.clone(),
+            year: None,
+            collection_name: None,
+            season: task.tmdb_season.map(|s| s as i32),
+            episode: task.tmdb_episode.map(|e| e as i32),
+        })
+    }
+
+    fn remap_download_source(
+        destination: &str,
+        symlink_real_base: Option<&std::path::Path>,
+    ) -> PathBuf {
+        let raw = std::path::Path::new(destination);
+        if raw.starts_with("/data/media/")
+            || raw.starts_with("/data/flasharr-download/")
+            || raw.starts_with("/data/downloads/")
+        {
+            return raw.to_path_buf();
+        }
+        if let Some(real_base) = symlink_real_base {
+            for segment in ["appData/downloads", "downloads"] {
+                let needle = format!("/{}/", segment);
+                if let Some(pos) = destination.find(&needle) {
+                    return real_base.join(&destination[pos + needle.len()..]);
+                }
+                let prefix = format!("/{}", segment);
+                if destination.starts_with(&prefix) {
+                    return real_base.join(destination[prefix.len()..].trim_start_matches('/'));
+                }
+            }
+        }
+        raw.to_path_buf()
+    }
+
+    async fn find_task_by_provider_item(
+        &self,
+        provider_id: &str,
+        provider_item_id: &str,
+    ) -> Option<DownloadTask> {
+        DuplicateDetector::find_task_by_provider_item(
+            &self.task_manager,
+            provider_id,
+            provider_item_id,
+        )
+        .await
     }
 
     /// Handle duplicate download based on existing task state
     async fn handle_duplicate(
         &self,
         existing: DownloadTask,
-        url: String,
-        filename: String,
-        host: String,
-        category: String,
-        code: String,
+        provider_item_id: String,
     ) -> Result<DownloadTask, anyhow::Error> {
-        use crate::downloader::DownloadState;
-
-        match existing.state {
-            // Active states - skip and return existing
-            DownloadState::Queued
-            | DownloadState::Starting
-            | DownloadState::Downloading
-            | DownloadState::Paused
-            | DownloadState::Completed
-            | DownloadState::Importing => {
-                tracing::info!(
-                    "Duplicate detected [code: {}]: Task {} already exists in state {:?}, skipping",
-                    code,
-                    existing.id,
-                    existing.state
-                );
-                Ok(existing)
-            }
-
-            // Failed/Cancelled states - delete old and create new
-            DownloadState::Failed | DownloadState::Cancelled => {
-                tracing::info!(
-                    "Duplicate detected [code: {}]: Task {} is {:?}, deleting and creating new",
-                    code,
-                    existing.id,
-                    existing.state
-                );
-
-                // Delete old task (this will also delete the file)
-                self.task_manager.delete_task(existing.id).await;
-
-                // Delete from database
-                if let Some(db) = &self.db {
-                    let _ = db.delete_task(existing.id);
-                }
-
-                // Create new task
-                let mut task = DownloadTask::new(url, filename, host, category);
-                task.fshare_code = Some(code);
-                let download_dir = self.config.read().await.download_dir.clone();
-                task.destination = download_dir
-                    .join(&task.filename)
-                    .to_string_lossy()
-                    .to_string();
-
-                // Parse quality metadata from filename
-                let quality_attrs = FilenameParser::extract_quality_attributes(&task.filename);
-                task.quality = Some(quality_attrs.quality_name());
-                task.resolution = quality_attrs.resolution.clone();
-
-                // Add to manager
-                self.task_manager.add_task(task.clone()).await;
-
-                // Persist to database
-                if let Some(db) = &self.db {
-                    db.save_task(&task)?;
-                }
-
-                // Broadcast task added event
-                let _ = self.progress_tx.send(ProgressUpdate {
-                    event: TaskEvent::Added,
-                    task_id: task.id.to_string(),
-                    downloaded_bytes: 0,
-                    total_bytes: task.size,
-                    speed_bytes_per_sec: 0.0,
-                    eta_seconds: 0.0,
-                    percentage: 0.0,
-                    state: "QUEUED".to_string(),
-                });
-
-                tracing::info!("Created new download: {} ({})", task.filename, task.id);
-                Ok(task)
-            }
-
-            // Other states - skip and return existing
-            _ => {
-                tracing::info!(
-                    "Duplicate detected [code: {}]: Task {} in state {:?}, skipping",
-                    code,
-                    existing.id,
-                    existing.state
-                );
-                Ok(existing)
-            }
-        }
+        tracing::info!(
+            "Duplicate detected [code: {}]: Task {} already exists in state {:?}, skipping",
+            provider_item_id,
+            existing.id,
+            existing.state
+        );
+        let state = format!("{:?}", existing.state).to_uppercase();
+        Err(anyhow::anyhow!("Download already exists ({})", state))
     }
 
     /// Get task manager reference
@@ -920,184 +1468,286 @@ impl DownloadOrchestrator {
         &self.task_manager
     }
 
-    /// Re-process all COMPLETED downloads that haven't been confirmed by Sonarr/Radarr.
-    /// For each completed task: resolves the Arr item, requests a downloaded scan, then polls.
-    /// Returns a list of (task_id, filename, status_message) tuples.
-    pub async fn backfill_arr_paths(&self) -> Vec<(String, String, String)> {
-        let mut results = Vec::new();
+    /// Plan or apply recovery for completed downloads not yet confirmed by Sonarr/Radarr.
+    /// Dry-run is read-only: no DB writes, filesystem changes, or ARR commands.
+    pub async fn backfill_arr_paths(
+        &self,
+        dry_run: bool,
+        limit: usize,
+        kind: &str,
+    ) -> Vec<BackfillItem> {
+        use crate::downloader::MediaType;
 
-        // Get all completed tasks from DB
+        let mut results = Vec::new();
+        let client = {
+            let guard = self.arr_client.read().await;
+            guard.clone()
+        };
+        let Some(client) = client else {
+            return vec![BackfillItem {
+                id: String::new(),
+                filename: String::new(),
+                media_type: kind.to_string(),
+                source_path: String::new(),
+                arr_id: None,
+                arr_path: None,
+                has_file: None,
+                reason: "arr not configured".to_string(),
+                action: "blocked".to_string(),
+            }];
+        };
+
+        let symlink_real_base = self.config.read().await.symlink_real_base.clone();
         let completed_tasks: Vec<DownloadTask> = if let Some(db) = &self.db {
             match db
-                .get_tasks_by_states_async(vec!["COMPLETED".to_string()])
+                .get_tasks_by_states_async(vec!["COMPLETED".to_string(), "IMPORTING".to_string()])
                 .await
             {
-                Ok(tasks) => tasks
-                    .into_iter()
-                    .filter(|task| !task.arr_announced && task.tmdb_id.is_some())
-                    .collect(),
+                Ok(tasks) => tasks,
                 Err(e) => {
                     tracing::error!("Backfill: Failed to load completed tasks: {}", e);
-                    return vec![("".into(), "".into(), format!("DB error: {}", e))];
+                    return vec![BackfillItem {
+                        id: String::new(),
+                        filename: String::new(),
+                        media_type: kind.to_string(),
+                        source_path: String::new(),
+                        arr_id: None,
+                        arr_path: None,
+                        has_file: None,
+                        reason: format!("DB error: {}", e),
+                        action: "failed".to_string(),
+                    }];
                 }
             }
         } else {
-            // Fallback to in-memory tasks
-            self.task_manager
-                .get_tasks()
-                .await
-                .into_iter()
-                .filter(|t| {
-                    t.state == DownloadState::Completed && !t.arr_announced && t.tmdb_id.is_some()
-                })
-                .collect()
+            self.task_manager.get_tasks().await
         };
 
-        tracing::info!(
-            "Backfill: Processing {} completed unconfirmed TMDB-backed tasks",
-            completed_tasks.len()
-        );
+        for task in completed_tasks
+            .into_iter()
+            .filter(|t| {
+                matches!(t.state, DownloadState::Completed | DownloadState::Importing)
+                    && !t.arr_announced
+            })
+            .filter(|t| match (kind, t.detect_media_type()) {
+                ("tv", MediaType::TvSeries | MediaType::TvEpisode) => true,
+                ("movie", MediaType::Movie) => true,
+                ("all", _) => true,
+                _ => false,
+            })
+            .take(limit)
+        {
+            let media_type = task.detect_media_type();
+            let media_type_str = match media_type {
+                MediaType::TvSeries | MediaType::TvEpisode => "tv",
+                MediaType::Movie => "movie",
+            };
+            let source = if Self::is_torrent_import(&task) {
+                qbit_source_path(&task.destination)
+            } else {
+                Self::remap_download_source(&task.destination, symlink_real_base.as_deref())
+            };
+            let source_path = source.to_string_lossy().to_string();
 
-        for task in &completed_tasks {
-            let task_id = task.id.to_string();
-            let filename = task.filename.clone();
-
-            // Skip tasks that don't have TMDB metadata (can't look up arr path)
-            if task.tmdb_id.is_none() {
-                results.push((task_id, filename, "skipped: no tmdb_id".into()));
+            let mut item = BackfillItem {
+                id: task.id.to_string(),
+                filename: task.filename.clone(),
+                media_type: media_type_str.to_string(),
+                source_path: source_path.clone(),
+                arr_id: None,
+                arr_path: None,
+                has_file: None,
+                reason: String::new(),
+                action: "blocked".to_string(),
+            };
+            let auto_import_enabled = match media_type {
+                MediaType::TvSeries | MediaType::TvEpisode => client.sonarr_auto_import_enabled(),
+                MediaType::Movie => client.radarr_auto_import_enabled(),
+            };
+            if !auto_import_enabled {
+                item.reason = "automatic Arr import is disabled".to_string();
+                results.push(item);
                 continue;
             }
 
-            // Check if source file exists at current destination
-            let source = std::path::Path::new(&task.destination);
-            let source_exists = tokio::fs::metadata(source).await.is_ok();
-            let source_is_symlink = tokio::fs::symlink_metadata(source)
-                .await
-                .map(|m| m.file_type().is_symlink())
-                .unwrap_or(false);
-
-            if !source_exists && !source_is_symlink {
-                let reason = format!("file not found at {}", task.destination);
-                let mut failed_task = task.clone();
-                failed_task.arr_announce_error = Some(format!("backfill: {}", reason));
-                self.task_manager.update_task(failed_task.clone()).await;
-                if let Some(db) = &self.db {
-                    let _ = db.save_task(&failed_task);
+            let (arr_id, tvdb_id) = match media_type {
+                MediaType::TvSeries | MediaType::TvEpisode => {
+                    let resolved = if let Some(id) = task.arr_series_id {
+                        Ok(Some((id, task.tvdb_id)))
+                    } else if let Some(tvdb_id) = task.tvdb_id {
+                        client
+                            .series_exists_by_tvdb(tvdb_id as i32)
+                            .await
+                            .map(|id| id.map(|id| (id as i64, Some(tvdb_id))))
+                    } else if let Some(tmdb_id) = task.tmdb_id {
+                        client.get_all_series().await.map(|series| {
+                            series.into_iter().find_map(|s| {
+                                (s.tmdb_id == Some(tmdb_id as i32))
+                                    .then_some((s.id as i64, s.tvdb_id.map(|v| v as i64)))
+                            })
+                        })
+                    } else {
+                        Ok(None)
+                    };
+                    match resolved {
+                        Ok(Some(ids)) => ids,
+                        Ok(None) => {
+                            item.reason = "missing sonarr series identity".to_string();
+                            results.push(item);
+                            continue;
+                        }
+                        Err(e) => {
+                            item.reason = format!("sonarr lookup failed: {}", e);
+                            item.action = "failed".to_string();
+                            results.push(item);
+                            continue;
+                        }
+                    }
                 }
+                MediaType::Movie => {
+                    let resolved = if let Some(id) = task.arr_movie_id {
+                        Ok(Some(id))
+                    } else if let Some(tmdb_id) = task.tmdb_id {
+                        client
+                            .movie_exists(tmdb_id)
+                            .await
+                            .map(|id| id.map(|id| id as i64))
+                    } else {
+                        Ok(None)
+                    };
+                    match resolved {
+                        Ok(Some(id)) => (id, None),
+                        Ok(None) => {
+                            item.reason = "missing radarr movie identity".to_string();
+                            results.push(item);
+                            continue;
+                        }
+                        Err(e) => {
+                            item.reason = format!("radarr lookup failed: {}", e);
+                            item.action = "failed".to_string();
+                            results.push(item);
+                            continue;
+                        }
+                    }
+                }
+            };
+            item.arr_id = Some(arr_id);
 
-                results.push((task_id, filename, format!("skipped: {}", reason)));
+            match media_type {
+                MediaType::TvSeries | MediaType::TvEpisode => {
+                    item.arr_path = client.get_series_path(arr_id).await.ok();
+                    if let (Some(season), Some(episode)) = (task.tmdb_season, task.tmdb_episode) {
+                        item.has_file = client
+                            .get_episode_by_details(arr_id as i32, season as i32, episode as i32)
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|e| e.has_file);
+                    }
+                }
+                MediaType::Movie => {
+                    if let Ok(movie) = client.get_movie_by_id(arr_id).await {
+                        item.arr_path = movie.path.clone();
+                        item.has_file = movie.has_file;
+                    }
+                }
+            }
+
+            let physical_artifact = library_artifact_exists(&task, item.arr_path.as_deref()).await;
+            if item.has_file == Some(true) && physical_artifact {
+                if dry_run {
+                    item.reason = "already imported in arr; DB can be marked announced".to_string();
+                    item.action = "would_update_db_only".to_string();
+                } else {
+                    let mut updated = task.clone();
+                    updated.arr_announced = true;
+                    updated.arr_announce_error = None;
+                    match media_type {
+                        MediaType::TvSeries | MediaType::TvEpisode => {
+                            updated.arr_series_id = Some(arr_id);
+                            updated.tvdb_id = updated.tvdb_id.or(tvdb_id);
+                        }
+                        MediaType::Movie => updated.arr_movie_id = Some(arr_id),
+                    }
+                    self.task_manager.update_task(updated.clone()).await;
+                    if let Some(db) = &self.db {
+                        let _ = db.save_task(&updated);
+                    }
+                    item.reason = "already imported in arr; DB marked announced".to_string();
+                    item.action = "marked_announced".to_string();
+                }
+                results.push(item);
                 continue;
             }
 
-            // Try to move/symlink to arr path
-            match Self::move_to_arr_path(
-                task,
-                &self.arr_client,
-                self.config.read().await.symlink_real_base.as_deref(),
-            )
-            .await
+            if source.starts_with("/data/media/") {
+                item.reason =
+                    "source is already in media library; not eligible for downloaded scan"
+                        .to_string();
+                results.push(item);
+                continue;
+            }
+
+            if tokio::fs::metadata(&source).await.is_err()
+                && tokio::fs::symlink_metadata(&source).await.is_err()
             {
-                ArrMoveOutcome::Placed {
-                    task: placed_task,
-                    arr_id,
-                    media_type,
-                } => {
-                    // Backfill: drive closed-loop polling inline (10-min timeout)
-                    let nzo_id = placed_task.id.to_string();
-                    let arr_guard = self.arr_client.read().await;
-                    let confirmed = if let Some(ref client) = *arr_guard {
-                        let poll_result = match media_type {
-                            crate::downloader::MediaType::TvSeries
-                            | crate::downloader::MediaType::TvEpisode => {
-                                if let (Some(season), Some(episode)) =
-                                    (placed_task.tmdb_season, placed_task.tmdb_episode)
-                                {
-                                    client
-                                        .poll_sonarr_episode_import_confirmation(
-                                            arr_id,
-                                            &nzo_id,
-                                            season as i32,
-                                            episode as i32,
-                                            std::time::Duration::from_secs(600),
-                                        )
-                                        .await
-                                } else {
-                                    client
-                                        .poll_sonarr_import_confirmation(
-                                            arr_id,
-                                            &nzo_id,
-                                            std::time::Duration::from_secs(600),
-                                        )
-                                        .await
-                                }
-                            }
-                            crate::downloader::MediaType::Movie => {
-                                client
-                                    .poll_radarr_import_confirmation(
-                                        arr_id,
-                                        &nzo_id,
-                                        std::time::Duration::from_secs(600),
-                                    )
-                                    .await
-                            }
-                        };
-                        poll_result.unwrap_or(false)
-                    } else {
-                        false
-                    };
-                    drop(arr_guard);
+                item.reason = format!("file not found at {}", source_path);
+                results.push(item);
+                continue;
+            }
 
-                    let mut final_task = placed_task.clone();
-                    if confirmed {
-                        final_task.arr_announced = true;
-                        final_task.arr_announce_error = None;
-                    } else {
-                        final_task.arr_announce_error =
-                            Some("backfill: import poll timed out".into());
-                    }
-                    self.task_manager.update_task(final_task.clone()).await;
-                    if let Some(db) = &self.db {
-                        let _ = db.save_task(&final_task);
-                    }
-                    let status = if confirmed {
-                        format!("import confirmed for {}", final_task.destination)
-                    } else {
-                        format!(
-                            "import requested for {} (poll timed out)",
-                            final_task.destination
-                        )
-                    };
-                    results.push((task_id, filename, status));
+            if dry_run {
+                item.reason = "ready for arr downloaded scan".to_string();
+                item.action = "would_scan".to_string();
+                results.push(item);
+                continue;
+            }
+
+            let download_client_id = task.id.to_string();
+            let scan_result = match media_type {
+                MediaType::TvSeries | MediaType::TvEpisode => {
+                    client
+                        .trigger_downloaded_episodes_scan(&source_path, &download_client_id)
+                        .await
                 }
-                ArrMoveOutcome::Skipped { task: skipped_task } => {
-                    let mut final_task = skipped_task.clone();
-                    final_task.arr_announce_error =
-                        Some("backfill: arr not configured or no tmdb_id".into());
-                    self.task_manager.update_task(final_task.clone()).await;
-                    if let Some(db) = &self.db {
-                        let _ = db.save_task(&final_task);
-                    }
-
-                    results.push((
-                        task_id,
-                        filename,
-                        "skipped: arr not configured or no tmdb_id".into(),
-                    ));
+                MediaType::Movie => {
+                    let import_path = source
+                        .parent()
+                        .unwrap_or(source.as_path())
+                        .to_string_lossy();
+                    client
+                        .trigger_downloaded_movies_scan(&import_path, &download_client_id)
+                        .await
                 }
-                ArrMoveOutcome::Failed { reason } => {
-                    let mut failed_task = task.clone();
-                    failed_task.arr_announce_error = Some(format!("backfill: {}", reason));
-                    self.task_manager.update_task(failed_task.clone()).await;
-                    if let Some(db) = &self.db {
-                        let _ = db.save_task(&failed_task);
-                    }
+            };
 
-                    results.push((task_id, filename, format!("failed: {}", reason)));
+            match scan_result {
+                Ok(()) => {
+                    let mut updated = task.clone();
+                    updated.arr_announce_error = None;
+                    match media_type {
+                        MediaType::TvSeries | MediaType::TvEpisode => {
+                            updated.arr_series_id = Some(arr_id);
+                            updated.tvdb_id = updated.tvdb_id.or(tvdb_id);
+                        }
+                        MediaType::Movie => updated.arr_movie_id = Some(arr_id),
+                    }
+                    self.task_manager.update_task(updated.clone()).await;
+                    if let Some(db) = &self.db {
+                        let _ = db.save_task(&updated);
+                    }
+                    item.reason = "arr downloaded scan requested".to_string();
+                    item.action = "scan_requested".to_string();
+                }
+                Err(e) => {
+                    item.reason = format!("arr downloaded scan failed: {}", e);
+                    item.action = "failed".to_string();
                 }
             }
+            results.push(item);
         }
 
-        tracing::info!("Backfill: Completed. {} tasks processed", results.len());
+        tracing::info!("Backfill: {} items planned/applied", results.len());
         results
     }
 
@@ -1149,6 +1799,246 @@ impl DownloadOrchestrator {
     /// Subscribe to task events (event-driven architecture)
     pub fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<super::events::TaskEvent> {
         self.event_bus.subscribe()
+    }
+
+    fn is_external_torrent(task: &DownloadTask) -> bool {
+        task.host == "qbittorrent" || Self::is_torrent_import(task)
+    }
+
+    fn is_sabnzbd_managed_import(task: &DownloadTask) -> bool {
+        matches!(task.host.as_str(), "sabnzbd" | "sabnzbd-fshare")
+    }
+
+    fn is_torrent_import(task: &DownloadTask) -> bool {
+        task.download_source.as_deref() == Some("torrent")
+    }
+
+    fn merge_arr_identity(
+        stale: &DownloadTask,
+        current: &DownloadTask,
+        arr_id: i64,
+    ) -> DownloadTask {
+        let mut merged = stale.clone();
+        match merged.detect_media_type() {
+            crate::downloader::MediaType::TvSeries | crate::downloader::MediaType::TvEpisode => {
+                merged.arr_series_id = Some(arr_id)
+            }
+            crate::downloader::MediaType::Movie => merged.arr_movie_id = Some(arr_id),
+        }
+        merged.state = current.state;
+        merged.progress = current.progress;
+        merged.downloaded = current.downloaded;
+        merged.speed = current.speed;
+        merged.eta = current.eta;
+        merged.started_at = current.started_at;
+        merged.completed_at = current.completed_at;
+        merged.wait_until = current.wait_until;
+        merged.error_message = current.error_message.clone();
+        merged.external_instance_id = current.external_instance_id.clone();
+        merged
+    }
+
+    fn is_direct_http_import(task: &DownloadTask) -> bool {
+        task.download_source.as_deref() == Some("torbox")
+            || task.external_provider.as_deref() == Some("torbox")
+    }
+
+    async fn qbit_client_for_task(
+        task: &DownloadTask,
+        qbit_manager: Option<&Arc<crate::torrent::instance_manager::QbitInstanceManager>>,
+        qbittorrent_client: &Arc<
+            RwLock<Option<Arc<crate::torrent::qbittorrent::QBittorrentClient>>>,
+        >,
+    ) -> anyhow::Result<(
+        Option<String>,
+        Arc<crate::torrent::qbittorrent::QBittorrentClient>,
+    )> {
+        if let Some(manager) = qbit_manager {
+            if let Some(instance_id) = task.external_instance_id.as_deref() {
+                return Ok((
+                    Some(instance_id.to_string()),
+                    manager.client(instance_id).await?,
+                ));
+            }
+            if let Ok((instance_id, client)) = manager.default_client().await {
+                return Ok((Some(instance_id), client));
+            }
+        }
+        let client = qbittorrent_client
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("qBittorrent is not configured"))?;
+        Ok((task.external_instance_id.clone(), client))
+    }
+
+    fn apply_qbittorrent_info(
+        task: &mut DownloadTask,
+        info: &crate::torrent::qbittorrent::QBittorrentInfo,
+    ) {
+        let downloaded = (info.progress.clamp(0.0, 1.0) * info.size.max(0) as f64) as u64;
+        let new_state = crate::torrent::state::classify_qbit(
+            &info.state,
+            crate::torrent::state::TransferMetrics {
+                downloaded,
+                previous_downloaded: Some(task.downloaded),
+                progress: info.progress,
+                dlspeed: info.dlspeed,
+                upspeed: 0,
+                amount_left: info.size.max(0).saturating_sub(downloaded as i64),
+            },
+            "healthy",
+        )
+        .task_state;
+        task.state = reconciled_transfer_state(task.state, new_state);
+        task.size = if info.size > 0 {
+            info.size as u64
+        } else {
+            task.size
+        };
+        task.downloaded = downloaded;
+        task.progress = (info.progress.clamp(0.0, 1.0) * 100.0) as f32;
+        task.speed = info.dlspeed.max(0) as f64;
+        task.eta = info.eta.max(0) as f64;
+        task.seeders = info.num_seeds;
+        task.leechers = info.num_leechs;
+        if !info.content_path.trim().is_empty() {
+            task.destination = info.content_path.clone();
+        } else if !info.save_path.trim().is_empty() && !info.name.trim().is_empty() {
+            task.destination = std::path::Path::new(&info.save_path)
+                .join(&info.name)
+                .to_string_lossy()
+                .into_owned();
+        }
+        if new_state == DownloadState::Completed && task.completed_at.is_none() {
+            task.completed_at = Some(Utc::now());
+        }
+    }
+
+    fn apply_qbit_row(task: &mut DownloadTask, row: &crate::db::QbitTorrentRow, sync_health: &str) {
+        let classification = crate::torrent::state::classify_qbit(
+            &row.state,
+            crate::torrent::state::TransferMetrics {
+                downloaded: row.downloaded.max(0) as u64,
+                previous_downloaded: Some(task.downloaded),
+                progress: row.progress,
+                dlspeed: row.dlspeed,
+                upspeed: row.upspeed,
+                amount_left: row.amount_left,
+            },
+            sync_health,
+        );
+        if sync_health.eq_ignore_ascii_case("healthy") {
+            task.state = reconciled_transfer_state(task.state, classification.task_state);
+        }
+        if row.size > 0 {
+            task.size = row.size as u64;
+        }
+        task.downloaded = row.downloaded.max(0) as u64;
+        task.progress = (row.progress.clamp(0.0, 1.0) * 100.0) as f32;
+        task.speed = row.dlspeed.max(0) as f64;
+        task.eta = row.eta.max(0) as f64;
+        task.seeders = Some(row.num_seeds);
+        task.leechers = Some(row.num_leechs);
+        if classification.task_state == DownloadState::Completed && task.completed_at.is_none() {
+            task.completed_at = Some(Utc::now());
+        }
+    }
+
+    async fn apply_qbit_source_path(task: &mut DownloadTask, row: &crate::db::QbitTorrentRow) {
+        for candidate in [
+            (!row.content_path.trim().is_empty())
+                .then(|| std::path::PathBuf::from(&row.content_path)),
+            (!row.save_path.trim().is_empty() && !row.name.trim().is_empty())
+                .then(|| std::path::PathBuf::from(&row.save_path).join(&row.name)),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if tokio::fs::metadata(&candidate).await.is_ok()
+                && looks_like_importable_media(&candidate)
+                    .await
+                    .unwrap_or(false)
+            {
+                task.destination = candidate.to_string_lossy().to_string();
+                return;
+            }
+        }
+    }
+
+    pub async fn refresh_external_torrent_status(
+        &self,
+        mut task: DownloadTask,
+    ) -> anyhow::Result<DownloadTask> {
+        if !Self::is_external_torrent(&task) {
+            return Ok(task);
+        }
+        let Some(hash) = task.external_id.clone() else {
+            return Ok(task);
+        };
+        // Direct qB API is authoritative; mirror rows may be placeholders.
+        let (_, client) =
+            Self::qbit_client_for_task(&task, self.qbit_manager.as_ref(), &self.qbittorrent_client)
+                .await?;
+        if let Some(info) = client.get_torrent(&hash).await? {
+            let old_state = task.state;
+            Self::apply_qbittorrent_info(&mut task, &info);
+            task.state = status_refresh_state(old_state, task.state, task.arr_announced);
+            if task.state != DownloadState::Completed {
+                task.completed_at = None;
+            }
+            self.task_manager.update_task(task.clone()).await;
+            if let Some(db) = &self.db {
+                let _ = db.save_task(&task);
+            }
+            if old_state != task.state || task.speed > 0.0 {
+                self.broadcast_task_update(&task);
+            }
+        }
+        Ok(task)
+    }
+
+    pub async fn pause_external_torrent(&self, task: &DownloadTask) -> anyhow::Result<()> {
+        if !Self::is_external_torrent(task) {
+            return Ok(());
+        }
+        let Some(hash) = task.external_id.as_deref() else {
+            return Ok(());
+        };
+        let (_, client) =
+            Self::qbit_client_for_task(task, self.qbit_manager.as_ref(), &self.qbittorrent_client)
+                .await?;
+        client.pause(hash).await
+    }
+
+    pub async fn resume_external_torrent(&self, task: &DownloadTask) -> anyhow::Result<()> {
+        if !Self::is_external_torrent(task) {
+            return Ok(());
+        }
+        let Some(hash) = task.external_id.as_deref() else {
+            return Ok(());
+        };
+        let (_, client) =
+            Self::qbit_client_for_task(task, self.qbit_manager.as_ref(), &self.qbittorrent_client)
+                .await?;
+        client.resume(hash).await
+    }
+
+    pub async fn delete_external_torrent(
+        &self,
+        task: &DownloadTask,
+        delete_files: bool,
+    ) -> anyhow::Result<()> {
+        if !Self::is_external_torrent(task) {
+            return Ok(());
+        }
+        let Some(hash) = task.external_id.as_deref() else {
+            return Ok(());
+        };
+        let (_, client) =
+            Self::qbit_client_for_task(task, self.qbit_manager.as_ref(), &self.qbittorrent_client)
+                .await?;
+        client.delete(hash, delete_files).await
     }
 
     /// Broadcast a task update to all WebSocket clients
@@ -1263,26 +2153,69 @@ impl DownloadOrchestrator {
             "IMPORTING".to_string(),
             "DOWNLOADING".to_string(),
             "STARTING".to_string(),
+            "WAITING".to_string(),
         ];
 
         match db.get_tasks_by_states_async(states).await {
             Ok(mut tasks) => {
                 let mut importing_tasks = Vec::new();
 
-                // Reset transient download states to QUEUED
                 for task in tasks.iter_mut() {
-                    if task.state == DownloadState::Downloading
-                        || task.state == DownloadState::Starting
+                    if task.state == DownloadState::Waiting
+                        && task.error_message.as_deref().is_some_and(|message| {
+                            message.starts_with("qBittorrent torrent is absent")
+                        })
                     {
-                        tracing::info!(
-                            "Resetting task {} from {:?} to QUEUED (interrupted by restart)",
-                            task.id,
-                            task.state
-                        );
                         task.state = DownloadState::Queued;
-                        let _ = db.save_task(task); // Save reset state to DB
-                    } else if task.state == DownloadState::Importing {
-                        importing_tasks.push(task.clone());
+                        task.error_message = None;
+                        let _ = db.save_task(task);
+                    }
+                    let state = match task.state {
+                        DownloadState::Queued => "QUEUED",
+                        DownloadState::Paused => "PAUSED",
+                        DownloadState::Starting => "STARTING",
+                        DownloadState::Downloading => "DOWNLOADING",
+                        DownloadState::Importing => "IMPORTING",
+                        DownloadState::Completed => "COMPLETED",
+                        DownloadState::Failed => "FAILED",
+                        _ => "OTHER",
+                    };
+                    match crate::debrid::restart::restart_decision(
+                        crate::debrid::restart::RestartInput {
+                            execution_strategy: task.execution_strategy.as_deref(),
+                            external_id: task.external_id.as_deref(),
+                            state,
+                            remote_state: task.torbox_remote_state.as_deref(),
+                        },
+                    ) {
+                        Ok(crate::debrid::restart::RestartDecision::Preserve) => {}
+                        Ok(crate::debrid::restart::RestartDecision::ResumeExistingRemote(_)) => {
+                            tracing::info!(
+                                "Preserving TorBox task {} in {:?} for remote resume",
+                                task.id,
+                                task.state
+                            );
+                        }
+                        Ok(crate::debrid::restart::RestartDecision::ResumeArrConfirmation) => {
+                            importing_tasks.push(task.clone());
+                        }
+                        Ok(crate::debrid::restart::RestartDecision::ResetQueued)
+                            if !Self::is_external_torrent(task) =>
+                        {
+                            task.state = DownloadState::Queued;
+                            let _ = db.save_task(task);
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::error!(
+                                "Cannot reconcile restored task {}: {}",
+                                task.id,
+                                error
+                            );
+                            task.state = DownloadState::Failed;
+                            task.error_message = Some(error.to_string());
+                            let _ = db.save_task(task);
+                        }
                     }
                 }
 
@@ -1364,11 +2297,21 @@ impl DownloadOrchestrator {
                 }
             }
             Some("tv") | Some("episode") => {
-                // Check Sonarr
+                // Check Sonarr — TV is TVDB-canonical.
                 if let Some(season) = meta.season {
                     if let Some(episode) = meta.episode {
-                        // 1. Resolve Series ID
-                        match client.series_exists(tmdb_id).await {
+                        // 1. Resolve Series ID by canonical TVDB ID.
+                        let series_lookup = match meta.tvdb_id {
+                            Some(tvdb_id) => client.series_exists_by_tvdb(tvdb_id as i32).await,
+                            None => {
+                                tracing::warn!(
+                                    "TV duplicate-check skipped: no tvdb_id on metadata (tmdb_bridge={:?})",
+                                    meta.tmdb_id
+                                );
+                                Ok(None)
+                            }
+                        };
+                        match series_lookup {
                             Ok(Some(series_id)) => {
                                 // 2. Check Episode
                                 match client
@@ -1462,13 +2405,17 @@ impl DownloadOrchestrator {
 
         let affected = tasks.len();
 
-        // 3. Update TaskManager and broadcast for each task
+        // 3. Pause external torrents, update TaskManager, broadcast
         for task in tasks {
-            // Try to pause in TaskManager (for active downloads)
+            if Self::is_external_torrent(&task) {
+                if let Err(e) = self.pause_external_torrent(&task).await {
+                    tracing::warn!("Failed to pause qBittorrent task {}: {}", task.id, e);
+                }
+            }
+
             if let Some(paused_task) = self.task_manager.pause_task(task.id).await {
                 self.broadcast_task_update(&paused_task);
             } else {
-                // Task was only in DB (queued), add to TaskManager and broadcast
                 let mut paused = task.clone();
                 paused.state = DownloadState::Paused;
                 self.task_manager.add_task(paused.clone()).await;
@@ -1507,33 +2454,43 @@ impl DownloadOrchestrator {
             return 0;
         }
 
-        let task_ids: Vec<uuid::Uuid> = tasks.iter().map(|t| t.id).collect();
+        let mut local_ids = Vec::new();
+        let mut affected = 0;
+        let mut should_wake_workers = false;
 
-        // 2. Atomic batch update in DB (single transaction)
+        for task in tasks {
+            if Self::is_external_torrent(&task) && task.external_id.is_some() {
+                if let Err(e) = self.resume_external_torrent(&task).await {
+                    tracing::warn!("Failed to resume qBittorrent task {}: {}", task.id, e);
+                    continue;
+                }
+                let mut resumed = task.clone();
+                resumed.state = DownloadState::Downloading;
+                self.task_manager.update_task(resumed.clone()).await;
+                let _ = db.save_task(&resumed);
+                self.broadcast_task_update(&resumed);
+                affected += 1;
+            } else {
+                local_ids.push(task.id);
+                let mut queued_task = task.clone();
+                queued_task.state = DownloadState::Queued;
+                self.task_manager.add_task(queued_task.clone()).await;
+                self.broadcast_task_update(&queued_task);
+                affected += 1;
+                should_wake_workers = true;
+            }
+        }
+
         if let Err(e) = db
-            .batch_update_states_async(task_ids.clone(), "QUEUED".to_string())
+            .batch_update_states_async(local_ids, "QUEUED".to_string())
             .await
         {
-            tracing::error!("Failed to batch resume tasks: {}", e);
-            return 0;
+            tracing::error!("Failed to batch resume local tasks: {}", e);
         }
 
-        let affected = tasks.len();
-
-        // 3. Add tasks to TaskManager and broadcast
-        for task in tasks {
-            let mut queued_task = task.clone();
-            queued_task.state = DownloadState::Queued;
-
-            // Add to TaskManager so workers can pick it up
-            self.task_manager.add_task(queued_task.clone()).await;
-
-            // Broadcast the state change
-            self.broadcast_task_update(&queued_task);
+        if should_wake_workers {
+            self.wake_workers();
         }
-
-        // 4. Wake workers to process new queued tasks
-        self.wake_workers();
 
         tracing::info!("Resumed {} tasks atomically", affected);
         affected
@@ -1585,8 +2542,16 @@ impl DownloadOrchestrator {
         task.wait_until = None;
         task.started_at = None;
         task.completed_at = None;
-        task.url = task.original_url.clone(); // Force re-resolution
-        task.url_metadata = None;
+        if task.host == "qbittorrent" {
+            task.url = Self::canonical_qbittorrent_input(
+                &task.host,
+                &task.original_url,
+                task.info_hash.as_deref(),
+            );
+        } else {
+            task.url = task.original_url.clone(); // Force re-resolution
+            task.url_metadata = None;
+        }
         task.cancel_token = tokio_util::sync::CancellationToken::new();
 
         // 3. Update memory and DB
@@ -1612,7 +2577,7 @@ impl DownloadOrchestrator {
         })?;
 
         // 1. Get all tasks for this batch
-        let tasks: Vec<DownloadTask> = db.get_tasks_by_batch_id_async(batch_id).await?;
+        let tasks: Vec<DownloadTask> = db.get_tasks_by_batch_id_async(batch_id, None).await?;
         if tasks.is_empty() {
             return Ok(0);
         }
@@ -1629,6 +2594,588 @@ impl DownloadOrchestrator {
         Ok(total)
     }
 
+    fn spawn_qbittorrent_mirror_consumer(&self) -> JoinHandle<()> {
+        let running = self.running.clone();
+        let db = self.db.clone();
+        let task_manager = self.task_manager.clone();
+        let progress_tx = self.progress_tx.clone();
+        let event_bus = self.event_bus.clone();
+        let qbit_manager = self.qbit_manager.clone();
+        let arr_client = self.arr_client.clone();
+        let config = self.config.clone();
+
+        tokio::spawn(async move {
+            let Some(manager) = qbit_manager else {
+                return;
+            };
+            let mut events = manager.subscribe();
+            while running.load(std::sync::atomic::Ordering::Relaxed) {
+                let event = tokio::select! {
+                    event = events.recv() => event,
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => continue,
+                };
+                let event = match event {
+                    Ok(crate::torrent::instance_manager::QbitEvent::TorrentUpsert {
+                        instance_id,
+                        torrent,
+                    }) => (instance_id, torrent),
+                    Ok(crate::torrent::instance_manager::QbitEvent::TorrentRemoved {
+                        instance_id,
+                        hash,
+                    }) => {
+                        let Some(db) = db.as_ref() else {
+                            continue;
+                        };
+                        let states = vec![
+                            "STARTING".to_string(),
+                            "DOWNLOADING".to_string(),
+                            "PAUSED".to_string(),
+                            "QUEUED".to_string(),
+                            "WAITING".to_string(),
+                            "IMPORTING".to_string(),
+                        ];
+                        if let Ok(tasks) = db.get_tasks_by_states_async(states).await {
+                            for task in tasks.into_iter().filter(|task| {
+                                task.download_source.as_deref() == Some("torrent")
+                                    && task.external_instance_id.as_deref() == Some(&instance_id)
+                                    && task
+                                        .external_id
+                                        .as_deref()
+                                        .is_some_and(|id| id.eq_ignore_ascii_case(&hash))
+                            }) {
+                                Self::fail_task(
+                                    0,
+                                    task.id,
+                                    "Torrent was removed from qBittorrent".to_string(),
+                                    &task_manager,
+                                    &progress_tx,
+                                    &event_bus,
+                                    Some(db),
+                                )
+                                .await;
+                            }
+                        }
+                        continue;
+                    }
+                    Ok(_) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                };
+                let (instance_id, row) = event;
+                let Some(db) = db.as_ref() else {
+                    continue;
+                };
+                let states = vec![
+                    "STARTING".to_string(),
+                    "DOWNLOADING".to_string(),
+                    "PAUSED".to_string(),
+                    "QUEUED".to_string(),
+                    "IMPORTING".to_string(),
+                ];
+                let Ok(tasks) = db.get_tasks_by_states_async(states).await else {
+                    continue;
+                };
+                for mut task in tasks.into_iter().filter(|task| {
+                    task.download_source.as_deref() == Some("torrent")
+                        && task.external_instance_id.as_deref() == Some(&instance_id)
+                        && task
+                            .external_id
+                            .as_deref()
+                            .or(task.info_hash.as_deref())
+                            .is_some_and(|hash| hash.eq_ignore_ascii_case(&row.hash))
+                }) {
+                    let old_state = task.state;
+                    let health = db
+                        .get_qbit_instance(&instance_id)
+                        .ok()
+                        .flatten()
+                        .map(|instance| instance.sync_health)
+                        .unwrap_or_else(|| "disconnected".into());
+                    Self::apply_qbit_row(&mut task, &row, &health);
+                    if import_owns_transfer_state(old_state) {
+                        task_manager.update_task(task.clone()).await;
+                        let _ = db.save_task(&task);
+                        continue;
+                    }
+                    let new_state = task.state;
+                    if new_state == DownloadState::Completed && !task.arr_announced {
+                        if Self::is_torrent_import(&task) {
+                            Self::apply_qbit_source_path(&mut task, &row).await;
+                            let symlink_real_base = config.read().await.symlink_real_base.clone();
+                            match Self::move_to_arr_path(
+                                &task,
+                                &arr_client,
+                                symlink_real_base.as_deref(),
+                            )
+                            .await
+                            {
+                                ArrMoveOutcome::Placed {
+                                    task: mut placed_task,
+                                    ..
+                                } => {
+                                    placed_task.state = DownloadState::Importing;
+                                    task_manager.update_task(placed_task.clone()).await;
+                                    let _ = db.save_task(&placed_task);
+                                    let _ = progress_tx.send(ProgressUpdate {
+                                        event: TaskEvent::Updated,
+                                        task_id: placed_task.id.to_string(),
+                                        downloaded_bytes: placed_task.downloaded,
+                                        total_bytes: placed_task.size,
+                                        speed_bytes_per_sec: 0.0,
+                                        eta_seconds: 0.0,
+                                        percentage: 100.0,
+                                        state: "IMPORTING".to_string(),
+                                    });
+                                    event_bus.publish(super::events::TaskEvent::StateChanged {
+                                        task: placed_task.clone(),
+                                        old_state,
+                                        new_state: DownloadState::Importing,
+                                        timestamp: Utc::now(),
+                                    });
+                                    tokio::spawn(Self::poll_import_confirmation(
+                                        placed_task.id,
+                                        Arc::clone(&arr_client),
+                                        Arc::clone(&task_manager),
+                                        Arc::clone(&event_bus),
+                                        Some(Arc::clone(db)),
+                                    ));
+                                    continue;
+                                }
+                                ArrMoveOutcome::Skipped { task: skipped_task } => {
+                                    task = skipped_task;
+                                    task_manager.mark_completed(task.id).await;
+                                }
+                                ArrMoveOutcome::Failed { reason } => {
+                                    task.state = DownloadState::Importing;
+                                    task.arr_announced = false;
+                                    task.arr_announce_error = Some(reason);
+                                    task_manager.update_task(task.clone()).await;
+                                }
+                            }
+                        } else {
+                            task.arr_announced = true;
+                            task.arr_announce_error = None;
+                            task_manager.update_task(task.clone()).await;
+                        }
+                    }
+                    task_manager.update_task(task.clone()).await;
+                    let _ = db.save_task(&task);
+                    if task.state == DownloadState::Completed {
+                        Self::record_activity(Some(db), "completed", &task);
+                    }
+                    let _ = progress_tx.send(ProgressUpdate {
+                        event: TaskEvent::Updated,
+                        task_id: task.id.to_string(),
+                        downloaded_bytes: task.downloaded,
+                        total_bytes: task.size,
+                        speed_bytes_per_sec: task.speed,
+                        eta_seconds: task.eta,
+                        percentage: task.progress as f64,
+                        state: format!("{:?}", task.state).to_uppercase(),
+                    });
+                    event_bus.publish(super::events::TaskEvent::StateChanged {
+                        task: task.clone(),
+                        old_state,
+                        new_state,
+                        timestamp: Utc::now(),
+                    });
+                }
+            }
+        })
+    }
+
+    fn spawn_qbit_reconcile_ticker(&self) -> JoinHandle<()> {
+        let running = self.running.clone();
+        let db = self.db.clone();
+        let task_manager = self.task_manager.clone();
+        let manager = self.qbit_manager.clone();
+        tokio::spawn(async move {
+            let (Some(db), Some(manager)) = (db, manager) else {
+                return;
+            };
+            while running.load(std::sync::atomic::Ordering::Relaxed) {
+                let states = ["QUEUED", "STARTING", "DOWNLOADING", "WAITING"]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect();
+                if let Ok(tasks) = db.get_tasks_by_states_async(states).await {
+                    for mut task in tasks.into_iter().filter(Self::is_external_torrent) {
+                        let Some(hash) = task
+                            .info_hash
+                            .as_deref()
+                            .or(task.external_id.as_deref())
+                            .map(str::to_ascii_lowercase)
+                        else {
+                            continue;
+                        };
+                        let Some(instance_id) = task.external_instance_id.as_deref() else {
+                            continue;
+                        };
+                        let health = db
+                            .get_qbit_instance(instance_id)
+                            .ok()
+                            .flatten()
+                            .map(|i| i.sync_health)
+                            .unwrap_or_else(|| "disconnected".into());
+                        let observed = match manager.client(instance_id).await {
+                            Ok(client) => client.get_torrent(&hash).await.map_err(|_| ()),
+                            Err(_) => Err(()),
+                        };
+                        let deadline_exceeded = task.started_at.is_some_and(|started| {
+                            Utc::now().signed_duration_since(started).num_seconds() >= 60
+                        });
+                        let metrics = observed
+                            .as_ref()
+                            .ok()
+                            .and_then(|v| v.as_ref())
+                            .map(|i| crate::torrent::state::TransferMetrics {
+                                downloaded: task.downloaded,
+                                previous_downloaded: Some(task.downloaded),
+                                progress: i.progress,
+                                dlspeed: i.dlspeed,
+                                upspeed: 0,
+                                amount_left: if i.progress >= 1.0 { 0 } else { i.size.max(1) },
+                            })
+                            .unwrap_or(crate::torrent::state::TransferMetrics {
+                                downloaded: task.downloaded,
+                                previous_downloaded: Some(task.downloaded),
+                                progress: 0.0,
+                                dlspeed: 0,
+                                upspeed: 0,
+                                amount_left: 1,
+                            });
+                        let decision = managed_qbit_decision(
+                            &health,
+                            &hash,
+                            observed
+                                .as_ref()
+                                .map(|v| v.as_ref().map(|i| (i.hash.as_str(), i.state.as_str())))
+                                .map_err(|_| ()),
+                            metrics,
+                            true,
+                            deadline_exceeded,
+                        );
+                        match decision {
+                            ManagedQbitDecision::Downloading => {
+                                task.state = DownloadState::Downloading;
+                                task.error_message = None;
+                            }
+                            ManagedQbitDecision::Completed => {
+                                task.state = status_refresh_state(
+                                    task.state,
+                                    DownloadState::Completed,
+                                    task.arr_announced,
+                                );
+                                if task.state == DownloadState::Completed {
+                                    task.completed_at.get_or_insert_with(Utc::now);
+                                }
+                            }
+                            ManagedQbitDecision::Starting(reason) => {
+                                task.state = DownloadState::Starting;
+                                task.error_message = Some(reason.into());
+                            }
+                            ManagedQbitDecision::Wait(reason) => {
+                                task.state = DownloadState::Waiting;
+                                task.error_message = Some(reason.into());
+                            }
+                            ManagedQbitDecision::Failed(reason) => {
+                                task.state = DownloadState::Failed;
+                                task.error_message = Some(reason.into());
+                                task.completed_at.get_or_insert_with(Utc::now);
+                            }
+                            ManagedQbitDecision::AddOnce => continue, // restored identity: never duplicate
+                        }
+                        task_manager.update_task(task.clone()).await;
+                        let _ = db.save_task(&task);
+                        if task.state == DownloadState::Failed {
+                            Self::record_activity(Some(&db), "failed", &task);
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        })
+    }
+
+    async fn start_qbittorrent_task(
+        worker_id: usize,
+        mut task: DownloadTask,
+        fresh_queued: bool,
+        task_manager: &Arc<DownloadTaskManager>,
+        db: Option<&Arc<Db>>,
+        progress_tx: &broadcast::Sender<ProgressUpdate>,
+        event_bus: &Arc<super::events::EventBus>,
+        qbittorrent_client: &Arc<
+            tokio::sync::RwLock<Option<Arc<crate::torrent::qbittorrent::QBittorrentClient>>>,
+        >,
+        qbit_manager: Option<&Arc<crate::torrent::instance_manager::QbitInstanceManager>>,
+    ) {
+        // Terminal / import states never re-enter the add path on restart.
+        if matches!(
+            task.state,
+            DownloadState::Importing | DownloadState::Completed | DownloadState::Failed
+        ) {
+            return;
+        }
+        // A restored external torrent task already carried qB identity across a
+        // restart; a genuinely new QUEUED acquisition has none yet.
+        let (instance_id, client) =
+            match Self::qbit_client_for_task(&task, qbit_manager, qbittorrent_client).await {
+                Ok(found) => found,
+                Err(_) => {
+                    Self::fail_task(
+                        worker_id,
+                        task.id,
+                        "qBittorrent is not configured".to_string(),
+                        task_manager,
+                        progress_tx,
+                        event_bus,
+                        db,
+                    )
+                    .await;
+                    return;
+                }
+            };
+
+        let torrent_input =
+            Self::canonical_qbittorrent_input(&task.host, &task.url, task.info_hash.as_deref());
+        // Restart-adoption gate: before adding, consult authoritative instance
+        // sync health + persisted mirror row keyed by (instance, hash).
+        //   healthy + exact row  -> adopt from row, no add
+        //   stale/disconnected   -> leave safe STARTING/WAITING, persist, no add, no FAILED
+        //   healthy + missing    -> add only for a genuinely new queued acquisition;
+        //                           a restored external task waits (no duplicate on restart)
+        // Fresh API-created QUEUED tasks carry the expected info hash as
+        // identity, but have not been added to qB yet. Only restored/non-queued
+        // tasks are external identities that must wait instead of re-adding.
+        let restored_external = !fresh_queued
+            && is_restored_external_qbit_task(
+                task.state,
+                task.error_message.as_deref(),
+                task.external_id.as_deref(),
+                task.external_provider.as_deref(),
+                task.external_instance_id.as_deref(),
+            );
+        tracing::info!(
+            task_id = %task.id,
+            state = ?task.state,
+            fresh_queued,
+            restored_external,
+            has_info_hash = task.info_hash.is_some(),
+            has_external_id = task.external_id.is_some(),
+            has_external_instance = task.external_instance_id.is_some(),
+            "qB lifecycle: adoption classification"
+        );
+        let adoption = if let Some(hash) = task.info_hash.as_deref().map(str::to_ascii_lowercase) {
+            let observed = client.get_torrent(&hash).await;
+            let decision = match observed.as_ref() {
+                Ok(Some(info)) => managed_qbit_decision(
+                    "healthy",
+                    &hash,
+                    Ok(Some((&info.hash, &info.state))),
+                    crate::torrent::state::TransferMetrics {
+                        downloaded: 0,
+                        previous_downloaded: None,
+                        progress: info.progress,
+                        dlspeed: info.dlspeed,
+                        upspeed: 0,
+                        amount_left: if info.progress >= 1.0 {
+                            0
+                        } else {
+                            info.size.max(1)
+                        },
+                    },
+                    restored_external,
+                    false,
+                ),
+                Ok(None) => managed_qbit_decision(
+                    "healthy",
+                    &hash,
+                    Ok(None),
+                    crate::torrent::state::TransferMetrics {
+                        downloaded: 0,
+                        previous_downloaded: None,
+                        progress: 0.0,
+                        dlspeed: 0,
+                        upspeed: 0,
+                        amount_left: 1,
+                    },
+                    restored_external,
+                    false,
+                ),
+                Err(_) => managed_qbit_decision(
+                    "healthy",
+                    &hash,
+                    Err(()),
+                    crate::torrent::state::TransferMetrics {
+                        downloaded: 0,
+                        previous_downloaded: None,
+                        progress: 0.0,
+                        dlspeed: 0,
+                        upspeed: 0,
+                        amount_left: 1,
+                    },
+                    restored_external,
+                    false,
+                ),
+            };
+            match decision {
+                ManagedQbitDecision::AddOnce => {
+                    tracing::info!(task_id = %task.id, "qB lifecycle: decision AddOnce");
+                    RestartAdoption::Add
+                }
+                ManagedQbitDecision::Downloading | ManagedQbitDecision::Completed => {
+                    let info = observed
+                        .ok()
+                        .flatten()
+                        .expect("present decision has qB row");
+                    task.provider_id = Some("torrent".to_string());
+                    task.provider_item_id = Some(hash.clone());
+                    task.info_hash = Some(hash.clone());
+                    task.external_id = Some(hash);
+                    // Persist instance identity only after the exact-hash decision succeeds.
+                    task.external_instance_id = instance_id;
+                    task.external_provider = Some("qbittorrent".to_string());
+                    task.download_source = Some("torrent".to_string());
+                    Self::apply_qbittorrent_info(&mut task, &info);
+                    task_manager.update_task(task.clone()).await;
+                    if let Some(db) = db {
+                        let _ = db.save_task(&task);
+                    }
+                    return;
+                }
+                ManagedQbitDecision::Starting(reason) | ManagedQbitDecision::Wait(reason) => {
+                    task.state = DownloadState::Waiting;
+                    task.error_message = Some(reason.to_string());
+                    task_manager.update_task(task.clone()).await;
+                    if let Some(db) = db {
+                        let _ = db.save_task(&task);
+                    }
+                    return;
+                }
+                ManagedQbitDecision::Failed(reason) => {
+                    Self::fail_task(
+                        worker_id,
+                        task.id,
+                        reason.to_string(),
+                        task_manager,
+                        progress_tx,
+                        event_bus,
+                        db,
+                    )
+                    .await;
+                    return;
+                }
+            }
+        } else {
+            RestartAdoption::Add
+        };
+
+        tracing::info!(
+            "Worker {}: qB add input_kind={} task={}",
+            worker_id,
+            if torrent_input.starts_with("magnet:") {
+                "magnet"
+            } else {
+                "http"
+            },
+            task.id
+        );
+
+        let add_outcome = run_restart_adoption(adoption, || {
+            run_qbit_add_with_timeout(Duration::from_secs(30), || {
+                client.add_torrent(&torrent_input)
+            })
+        })
+        .await
+        .expect("add decision invokes qBittorrent exactly once");
+        tracing::info!(
+            task_id = %task.id,
+            add_ok = add_outcome.is_ok(),
+            returned_identity = matches!(&add_outcome, Ok(Some(_))),
+            "qB lifecycle: add returned"
+        );
+        match add_outcome {
+            Ok(Some(hash)) => {
+                let hash = hash.trim().to_ascii_lowercase();
+                let decision = poll_qbit_confirmation(
+                    &hash,
+                    Duration::from_secs(60),
+                    Duration::from_secs(10),
+                    || async { Ok(client.get_torrent(&hash).await?.map(|torrent| torrent.hash)) },
+                )
+                .await;
+                tracing::info!(
+                    task_id = %task.id,
+                    decision = ?decision,
+                    "qB lifecycle: confirmation completed"
+                );
+                if let QbitConfirmationDecision::Failed(message) = decision {
+                    Self::fail_task(
+                        worker_id,
+                        task.id,
+                        message.to_string(),
+                        task_manager,
+                        progress_tx,
+                        event_bus,
+                        db,
+                    )
+                    .await;
+                    return;
+                }
+                task.external_id = Some(hash);
+                task.external_instance_id = instance_id;
+                task.external_provider = Some("qbittorrent".to_string());
+                task.download_source = Some("torrent".to_string());
+                task.state = DownloadState::Downloading;
+                task_manager.update_task(task.clone()).await;
+                if let Some(db) = db {
+                    let _ = db.save_task(&task);
+                }
+                let _ = progress_tx.send(ProgressUpdate {
+                    event: TaskEvent::Updated,
+                    task_id: task.id.to_string(),
+                    downloaded_bytes: task.downloaded,
+                    total_bytes: task.size,
+                    speed_bytes_per_sec: task.speed,
+                    eta_seconds: task.eta,
+                    percentage: task.progress as f64,
+                    state: "DOWNLOADING".to_string(),
+                });
+                event_bus.publish(super::events::TaskEvent::StateChanged {
+                    task,
+                    old_state: DownloadState::Starting,
+                    new_state: DownloadState::Downloading,
+                    timestamp: Utc::now(),
+                });
+            }
+            Ok(None) => {
+                Self::fail_task(
+                    worker_id,
+                    task.id,
+                    "qBittorrent accepted the torrent but did not return a resolvable hash; task cannot be managed safely".to_string(),
+                    task_manager,
+                    progress_tx,
+                    event_bus,
+                    db,
+                )
+                .await;
+            }
+            Err(e) => {
+                Self::fail_task(
+                    worker_id,
+                    task.id,
+                    e.to_string(),
+                    task_manager,
+                    progress_tx,
+                    event_bus,
+                    db,
+                )
+                .await;
+            }
+        }
+    }
+
     /// Spawn a worker
     fn spawn_worker(&self, worker_id: usize) -> JoinHandle<()> {
         let running = self.running.clone();
@@ -1641,6 +3188,8 @@ impl DownloadOrchestrator {
         let config = self.config.clone();
         let task_notify = self.task_notify.clone();
         let arr_client = self.arr_client.clone();
+        let qbittorrent_client = self.qbittorrent_client.clone();
+        let qbit_manager = self.qbit_manager.clone();
 
         tokio::spawn(async move {
             tracing::debug!("Worker {} started", worker_id);
@@ -1680,6 +3229,8 @@ impl DownloadOrchestrator {
                         &event_bus,
                         &current_config,
                         &arr_client,
+                        &qbittorrent_client,
+                        qbit_manager.as_ref(),
                     )
                     .await;
                 } else {
@@ -1708,7 +3259,22 @@ impl DownloadOrchestrator {
         event_bus: &Arc<super::events::EventBus>,
         config: &DownloadConfig,
         arr_client: &Arc<tokio::sync::RwLock<Option<Arc<crate::arr::ArrClient>>>>,
+        qbittorrent_client: &Arc<
+            tokio::sync::RwLock<Option<Arc<crate::torrent::qbittorrent::QBittorrentClient>>>,
+        >,
+        qbit_manager: Option<&Arc<crate::torrent::instance_manager::QbitInstanceManager>>,
     ) {
+        let fresh_queued = task.state == DownloadState::Queued;
+        tracing::info!(
+            task_id = %task.id,
+            state_at_process_entry = ?task.state,
+            fresh_queued,
+            is_torrent = Self::is_torrent_import(&task),
+            has_info_hash = task.info_hash.is_some(),
+            has_external_id = task.external_id.is_some(),
+            has_external_instance = task.external_instance_id.is_some(),
+            "qB lifecycle: worker process entry"
+        );
         // Update state to Starting
         task.state = DownloadState::Starting;
         task.started_at = Some(Utc::now());
@@ -1726,6 +3292,22 @@ impl DownloadOrchestrator {
             let _ = db.save_task(&task);
         }
 
+        if Self::is_torrent_import(&task) {
+            Self::start_qbittorrent_task(
+                worker_id,
+                task,
+                fresh_queued,
+                task_manager,
+                db,
+                progress_tx,
+                event_bus,
+                qbittorrent_client,
+                qbit_manager,
+            )
+            .await;
+            return;
+        }
+
         // Resolve URL using host handler
         let handler_host = if task.host == "sabnzbd-fshare" {
             "fshare"
@@ -1734,12 +3316,105 @@ impl DownloadOrchestrator {
         };
 
         let download_url = match host_registry.get_handler(handler_host) {
+            _ if task.execution_strategy.as_deref() == Some("torbox_http")
+                && matches!(
+                    task.state,
+                    DownloadState::Starting | DownloadState::Downloading
+                ) =>
+            {
+                let Some(db) = db else {
+                    Self::fail_task(
+                        worker_id,
+                        task.id,
+                        "TorBox restart resume requires database".into(),
+                        task_manager,
+                        progress_tx,
+                        event_bus,
+                        None,
+                    )
+                    .await;
+                    return;
+                };
+                let Some(remote_id) = task.external_id.as_deref() else {
+                    Self::fail_task(
+                        worker_id,
+                        task.id,
+                        "TorBox task missing remote ID".into(),
+                        task_manager,
+                        progress_tx,
+                        event_bus,
+                        Some(db),
+                    )
+                    .await;
+                    return;
+                };
+                match crate::sources::torbox::resume_link_from_db(
+                    db,
+                    remote_id,
+                    Duration::from_secs(300),
+                )
+                .await
+                {
+                    Ok(link) => link,
+                    Err(error) => {
+                        Self::fail_task(
+                            worker_id,
+                            task.id,
+                            format!("TorBox restart resume failed: {error}"),
+                            task_manager,
+                            progress_tx,
+                            event_bus,
+                            Some(db),
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            }
             Some(handler) => {
                 tracing::info!(
                     "Worker {}: Resolving URL with {} handler",
                     worker_id,
                     handler_host
                 );
+
+                let should_update_filename = Self::filename_needs_host_metadata(&task);
+                if task.size == 0 || should_update_filename {
+                    match handler.get_file_info(&task.original_url).await {
+                        Ok(file_info) => {
+                            let mut changed = false;
+                            if task.size == 0 && file_info.size > 0 {
+                                task.size = file_info.size;
+                                changed = true;
+                            }
+                            if should_update_filename && !file_info.filename.trim().is_empty() {
+                                task.filename = file_info.filename.clone();
+                                let metadata = Self::metadata_from_task(&task);
+                                task.destination = Self::build_destination_path_static(
+                                    &task.filename,
+                                    &task.category,
+                                    &metadata,
+                                    &config.download_dir,
+                                );
+                                changed = true;
+                            }
+                            if changed {
+                                task_manager.update_task(task.clone()).await;
+                                if let Some(db) = db {
+                                    let _ = db.save_task(&task);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Worker {}: Failed to enrich file info at STARTING: {}",
+                                worker_id,
+                                e
+                            );
+                        }
+                    }
+                }
+
                 match handler.resolve_download_url(&task.original_url).await {
                     Ok(resolved) => {
                         task.url = resolved.direct_url.clone();
@@ -1764,6 +3439,60 @@ impl DownloadOrchestrator {
                         )
                         .await;
 
+                        return;
+                    }
+                }
+            }
+            None if Self::is_direct_http_import(&task) => {
+                let Some(db) = db else {
+                    Self::fail_task(
+                        worker_id,
+                        task.id,
+                        "TorBox link renewal requires database settings".to_string(),
+                        task_manager,
+                        progress_tx,
+                        event_bus,
+                        None,
+                    )
+                    .await;
+                    return;
+                };
+                let Some(remote_id) = task.external_id.as_deref() else {
+                    Self::fail_task(
+                        worker_id,
+                        task.id,
+                        "TorBox task is missing its remote ID; re-add this download".to_string(),
+                        task_manager,
+                        progress_tx,
+                        event_bus,
+                        Some(db),
+                    )
+                    .await;
+                    return;
+                };
+                match crate::sources::torbox::refresh_link_from_db(db, remote_id).await {
+                    Ok(link) => {
+                        task.url = link.clone();
+                        task.original_url = link.clone();
+                        task.url_metadata = Some(UrlMetadata {
+                            resolved_at: Utc::now(),
+                            expires_at: Utc::now() + chrono::Duration::hours(6),
+                        });
+                        task_manager.update_task(task.clone()).await;
+                        let _ = db.save_task(&task);
+                        link
+                    }
+                    Err(error) => {
+                        Self::fail_task(
+                            worker_id,
+                            task.id,
+                            format!("TorBox link renewal failed: {error}"),
+                            task_manager,
+                            progress_tx,
+                            event_bus,
+                            Some(db),
+                        )
+                        .await;
                         return;
                     }
                 }
@@ -1853,9 +3582,7 @@ impl DownloadOrchestrator {
                 // Post-completion: symlink into arr library and drive closed-loop import polling.
                 if let Some(completed_task) = task_manager.get_task(task_id).await {
                     let symlink_real_base = config.symlink_real_base.clone();
-                    let outcome = if completed_task.host == "sabnzbd"
-                        || completed_task.host == "sabnzbd-fshare"
-                    {
+                    let outcome = if Self::is_sabnzbd_managed_import(&completed_task) {
                         tracing::info!(
                             "Worker {}: Task {} initiated by SABnzbd API, skipping move_to_arr_path to let *arr handle import natively",
                             worker_id,
@@ -1865,6 +3592,14 @@ impl DownloadOrchestrator {
                             task: completed_task.clone(),
                         }
                     } else {
+                        if Self::is_direct_http_import(&completed_task) {
+                            tracing::info!(
+                                "Worker {}: Task {} completed via direct HTTP flow ({:?}); importing as local file, not torrent",
+                                worker_id,
+                                task_id,
+                                completed_task.download_source
+                            );
+                        }
                         Self::move_to_arr_path(
                             &completed_task,
                             arr_client,
@@ -2033,6 +3768,9 @@ impl DownloadOrchestrator {
 
                 // Broadcast final completion (immediate sync)
                 if let Some(completed_task) = task_manager.get_task(task_id).await {
+                    if completed_task.state == DownloadState::Completed {
+                        Self::record_activity(db, "completed", &completed_task);
+                    }
                     event_bus.publish(super::events::TaskEvent::Completed {
                         task: completed_task,
                         timestamp: chrono::Utc::now(),
@@ -2139,9 +3877,22 @@ impl DownloadOrchestrator {
                                 task.retry_count += 1;
                                 task.state = DownloadState::Waiting;
                                 // Clear the resolved URL so process_task_static re-resolves
-                                // a fresh VIP link on the next attempt via resolve_download_url()
-                                task.url = task.original_url.clone();
-                                task.url_metadata = None;
+                                // a fresh VIP link on the next attempt via resolve_download_url().
+                                // ponytail: qB torrent tasks keep canonical magnet instead.
+                                if task.host == "qbittorrent" {
+                                    task.url = Self::canonical_qbittorrent_input(
+                                        &task.host,
+                                        &task.original_url,
+                                        task.info_hash.as_deref(),
+                                    );
+                                } else if Self::is_direct_http_import(&task) {
+                                    task.url.clear();
+                                    task.original_url.clear();
+                                    task.url_metadata = None;
+                                } else {
+                                    task.url = task.original_url.clone();
+                                    task.url_metadata = None;
+                                }
                                 // Short delay — just enough to avoid hammering the API
                                 task.wait_until = Some(Utc::now() + chrono::Duration::seconds(3));
                                 task.error_message = Some(format!(
@@ -2204,6 +3955,10 @@ impl DownloadOrchestrator {
                                     task.retry_count, max_retries
                                 ));
                                 task_manager.update_task(task.clone()).await;
+                                task_manager.release_processing(task_id).await;
+                                if let Some(db) = &db {
+                                    let _ = db.save_task(&task);
+                                }
 
                                 // Publish StateChanged event (immediate sync)
                                 event_bus.publish(super::events::TaskEvent::StateChanged {
@@ -2371,10 +4126,11 @@ impl DownloadOrchestrator {
         });
 
         if let Some(failed_task) = task_manager.get_task(task_id).await {
-            // Save to database
+            // Save to database before exposing a durable failure outcome.
             if let Some(db) = db {
                 let _ = db.save_task(&failed_task);
             }
+            Self::record_activity(db, "failed", &failed_task);
 
             // Publish Failed event (immediate sync)
             event_bus.publish(super::events::TaskEvent::Failed {
@@ -2407,13 +4163,20 @@ impl DownloadOrchestrator {
         };
 
         let Some(arr_id) = arr_id else {
-            let mut completed = task;
-            completed.state = DownloadState::Completed;
-            completed.arr_announce_error = Some("import resume: missing arr id".to_string());
-            task_manager.update_task(completed.clone()).await;
+            let mut importing = task;
+            importing.state = DownloadState::Importing;
+            importing.arr_announced = false;
+            importing.arr_announce_error = Some(format!("missing Arr {:?} id", media_type));
+            task_manager.update_task(importing.clone()).await;
             if let Some(db) = &db {
-                let _ = db.save_task(&completed);
+                let _ = db.save_task(&importing);
             }
+            event_bus.publish(super::events::TaskEvent::StateChanged {
+                task: importing,
+                old_state: DownloadState::Importing,
+                new_state: DownloadState::Importing,
+                timestamp: chrono::Utc::now(),
+            });
             return;
         };
 
@@ -2424,7 +4187,33 @@ impl DownloadOrchestrator {
             match media_type {
                 crate::downloader::MediaType::TvSeries
                 | crate::downloader::MediaType::TvEpisode => {
-                    if let (Some(season), Some(episode)) = (task.tmdb_season, task.tmdb_episode) {
+                    if let Some(episodes) = task.selected_episodes.as_deref() {
+                        async {
+                            let episodes: Vec<(u32, u32)> = serde_json::from_str(episodes)
+                                .map_err(|e| {
+                                    anyhow::anyhow!("invalid selected episode set: {e}")
+                                })?;
+                            let mut confirmed = true;
+                            for (season, episode) in episodes {
+                                confirmed &= client
+                                    .poll_sonarr_episode_import_confirmation(
+                                        arr_id,
+                                        &nzo_id,
+                                        season as i32,
+                                        episode as i32,
+                                        poll_timeout,
+                                    )
+                                    .await?;
+                                if !confirmed {
+                                    break;
+                                }
+                            }
+                            Ok(confirmed)
+                        }
+                        .await
+                    } else if let (Some(season), Some(episode)) =
+                        (task.tmdb_season, task.tmdb_episode)
+                    {
                         client
                             .poll_sonarr_episode_import_confirmation(
                                 arr_id,
@@ -2452,19 +4241,27 @@ impl DownloadOrchestrator {
         drop(client_guard);
 
         if let Some(mut final_task) = task_manager.get_task(task_id).await {
-            final_task.state = DownloadState::Completed;
+            let confirmed = matches!(&poll_result, Ok(true));
             match poll_result {
                 Ok(true) => {
+                    // Contract 6: only mark COMPLETED once Arr import is confirmed.
+                    final_task.state = DownloadState::Completed;
                     final_task.arr_announced = true;
                     final_task.arr_announce_error = None;
                 }
                 Ok(false) => {
+                    // Import not yet confirmed. Keep the task in IMPORTING so a
+                    // restart re-reconciles rather than falsely reporting COMPLETED.
+                    final_task.state = DownloadState::Importing;
+                    final_task.arr_announced = false;
                     final_task.arr_announce_error = Some(format!(
                         "import poll timed out after {}s",
                         poll_timeout.as_secs()
                     ));
                 }
                 Err(e) => {
+                    final_task.state = DownloadState::Importing;
+                    final_task.arr_announced = false;
                     final_task.arr_announce_error = Some(format!("import poll error: {}", e));
                 }
             }
@@ -2473,10 +4270,20 @@ impl DownloadOrchestrator {
             if let Some(db) = &db {
                 let _ = db.save_task(&final_task);
             }
-            event_bus.publish(super::events::TaskEvent::Completed {
-                task: final_task,
-                timestamp: chrono::Utc::now(),
-            });
+            if confirmed {
+                Self::record_activity(db.as_ref(), "completed", &final_task);
+                event_bus.publish(super::events::TaskEvent::Completed {
+                    task: final_task,
+                    timestamp: chrono::Utc::now(),
+                });
+            } else {
+                event_bus.publish(super::events::TaskEvent::StateChanged {
+                    task: final_task,
+                    old_state: DownloadState::Importing,
+                    new_state: DownloadState::Importing,
+                    timestamp: chrono::Utc::now(),
+                });
+            }
         }
     }
 
@@ -2489,6 +4296,11 @@ impl DownloadOrchestrator {
             let mut restored_count = 0;
 
             for task in tasks {
+                if Self::is_external_torrent(&task) && task.external_id.is_some() {
+                    self.task_manager.add_task(task.clone()).await;
+                    restored_count += 1;
+                    continue;
+                }
                 match task.state {
                     DownloadState::Downloading
                     | DownloadState::Starting
@@ -2602,6 +4414,17 @@ impl DownloadOrchestrator {
         };
 
         let media_type = task.detect_media_type();
+        let auto_import_enabled = match media_type {
+            MediaType::TvSeries | MediaType::TvEpisode => client.sonarr_auto_import_enabled(),
+            MediaType::Movie => client.radarr_auto_import_enabled(),
+        };
+        if !auto_import_enabled {
+            tracing::debug!(
+                "Automatic Arr import disabled; skipping placement for task {}",
+                task.id
+            );
+            return ArrMoveOutcome::Skipped { task: task.clone() };
+        }
 
         // Resolve arr ID and library root folder
         let (arr_folder, arr_id) = match media_type {
@@ -2609,24 +4432,28 @@ impl DownloadOrchestrator {
                 let series_id = match task.arr_series_id {
                     Some(id) => id,
                     None => {
-                        let tmdb_id = match task.tmdb_id {
-                            Some(id) => id,
-                            None => return ArrMoveOutcome::Skipped { task: task.clone() },
+                        let tvdb_id = match task.tvdb_id {
+                            Some(id) => id as i32,
+                            None => {
+                                return ArrMoveOutcome::Failed {
+                                    reason: "TV import requires canonical tvdb_id".to_string(),
+                                }
+                            }
                         };
-                        tracing::info!("Looking up series by TMDB ID: {}", tmdb_id);
-                        match client.series_exists(tmdb_id).await {
+                        tracing::info!("Looking up series by canonical TVDB ID: {}", tvdb_id);
+                        match client.series_exists_by_tvdb(tvdb_id).await {
                             Ok(Some(id)) => {
                                 tracing::info!(
-                                    "Found series in Sonarr by TMDB {}: ID {}",
-                                    tmdb_id,
+                                    "Found series in Sonarr by TVDB {}: ID {}",
+                                    tvdb_id,
                                     id
                                 );
                                 id as i64
                             }
                             Ok(None) => {
                                 tracing::warn!(
-                                    "Series not in Sonarr for TMDB {} — auto-adding as fallback",
-                                    tmdb_id
+                                    "Series not in Sonarr for TVDB {} — auto-adding as fallback",
+                                    tvdb_id
                                 );
                                 let root_path = match client.get_sonarr_root_folders().await {
                                     Ok(folders) => folders
@@ -2635,19 +4462,19 @@ impl DownloadOrchestrator {
                                         .unwrap_or_else(|| "/data/media/tv".to_string()),
                                     Err(_) => "/data/media/tv".to_string(),
                                 };
-                                match client.add_series_by_tmdb(tmdb_id, 1, &root_path).await {
+                                match client.add_series_by_tvdb(tvdb_id, 1, &root_path).await {
                                     Ok(id) => {
                                         tracing::info!(
-                                            "Fallback: added series to Sonarr TMDB {} -> ID {}",
-                                            tmdb_id,
+                                            "Fallback: added series to Sonarr TVDB {} -> ID {}",
+                                            tvdb_id,
                                             id
                                         );
                                         id as i64
                                     }
                                     Err(e) => {
                                         tracing::error!(
-                                            "Fallback: failed to add series to Sonarr for TMDB {}: {}",
-                                            tmdb_id,
+                                            "Fallback: failed to add series to Sonarr for TVDB {}: {}",
+                                            tvdb_id,
                                             e
                                         );
                                         return ArrMoveOutcome::Failed {
@@ -2658,8 +4485,8 @@ impl DownloadOrchestrator {
                             }
                             Err(e) => {
                                 tracing::warn!(
-                                    "Failed to look up series by TMDB {}: {}",
-                                    tmdb_id,
+                                    "Failed to look up series by TVDB {}: {}",
+                                    tvdb_id,
                                     e
                                 );
                                 return ArrMoveOutcome::Failed {
@@ -2868,43 +4695,11 @@ impl DownloadOrchestrator {
                 }
             }
 
-            let import_path = match media_type {
-                MediaType::TvSeries | MediaType::TvEpisode => source,
-                MediaType::Movie => source.parent().unwrap_or(source),
-            };
-            let import_path_str = import_path.to_string_lossy().to_string();
-            let download_client_id = task.id.to_string();
-
-            let import_result = match media_type {
-                MediaType::TvSeries | MediaType::TvEpisode => {
-                    client
-                        .trigger_downloaded_episodes_scan(&import_path_str, &download_client_id)
-                        .await
-                }
-                MediaType::Movie => {
-                    client
-                        .trigger_downloaded_movies_scan(&import_path_str, &download_client_id)
-                        .await
-                }
-            };
-
-            if let Err(e) = import_result {
-                return ArrMoveOutcome::Failed {
-                    reason: format!("arr downloaded scan failed: {}", e),
-                };
-            }
-
             tracing::info!(
-                "Requested arr import from shared download path {} for task {}",
-                import_path_str,
+                "Validated completed media source {} for symlink placement (task {})",
+                source.display(),
                 task.id
             );
-
-            return ArrMoveOutcome::Placed {
-                task: make_placed(task.clone()),
-                arr_id,
-                media_type,
-            };
         }
 
         let target_dir = match media_type {
@@ -2923,6 +4718,52 @@ impl DownloadOrchestrator {
             }
             MediaType::Movie => std::path::PathBuf::from(&arr_folder),
         };
+
+        if Self::is_torrent_import(task) {
+            let targets = match crate::downloader::artifact_placement::place_torrent(
+                source,
+                &std::path::PathBuf::from(&arr_folder),
+                matches!(media_type, MediaType::Movie),
+                task.file_idx,
+                task.source_filename.as_deref(),
+            ) {
+                Ok(targets) => targets,
+                Err(reason) => return ArrMoveOutcome::Failed { reason },
+            };
+            for target in &targets {
+                let result = match media_type {
+                    MediaType::TvSeries | MediaType::TvEpisode => {
+                        client
+                            .trigger_series_rescan_with_path(arr_id, target.to_str())
+                            .await
+                    }
+                    MediaType::Movie => {
+                        client
+                            .trigger_movie_refresh_with_path(arr_id, target.to_str())
+                            .await
+                    }
+                };
+                if let Err(e) = result {
+                    return ArrMoveOutcome::Failed {
+                        reason: format!("Arr scan trigger failed for {}: {e}", target.display()),
+                    };
+                }
+            }
+            let mut placed = make_placed(task.clone());
+            placed.destination = targets[0].to_string_lossy().into_owned();
+            if !matches!(media_type, MediaType::Movie) {
+                let episodes: Vec<_> = targets
+                    .iter()
+                    .filter_map(|p| crate::downloader::artifact_placement::episode_number(p))
+                    .collect();
+                placed.selected_episodes = serde_json::to_string(&episodes).ok();
+            }
+            return ArrMoveOutcome::Placed {
+                task: placed,
+                arr_id,
+                media_type,
+            };
+        }
 
         let target_path = target_dir.join(filename);
 
@@ -2959,26 +4800,15 @@ impl DownloadOrchestrator {
             };
         }
 
-        // ── Case 2: target dir not mountable — arr imports autonomously via SABnzbd ────────
+        // ── Case 2: target dir not mountable — record error; Completed remains retryable ────
         if let Err(e) = tokio::fs::create_dir_all(&target_dir).await {
-            tracing::warn!(
-                "Cannot create target dir {:?}: {} — media path not mounted. \
-                 Trusting arr SABnzbd import; triggering rescan and entering Importing state.",
-                target_dir,
-                e
-            );
-            if let Err(re) = match media_type {
-                MediaType::TvSeries | MediaType::TvEpisode => {
-                    client.trigger_series_rescan_with_path(arr_id, None).await
-                }
-                MediaType::Movie => client.trigger_movie_refresh_with_path(arr_id, None).await,
-            } {
-                tracing::warn!("Arr rescan trigger failed (non-fatal): {}", re);
-            }
-            return ArrMoveOutcome::Placed {
-                task: make_placed(task.clone()),
-                arr_id,
-                media_type,
+            tracing::warn!("Cannot create target dir {:?}: {}", target_dir, e);
+            return ArrMoveOutcome::Failed {
+                reason: format!(
+                    "target dir create failed at {}: {}",
+                    target_dir.display(),
+                    e
+                ),
             };
         }
 
@@ -3079,21 +4909,30 @@ impl DownloadOrchestrator {
             }
         }
 
-        // ── Case 5: normal path — create symlink then trigger rescan ────────────────────────
-        if target_path.exists() || tokio::fs::symlink_metadata(&target_path).await.is_ok() {
-            tracing::info!("Removing existing file/symlink at {:?}", target_path);
-            let _ = tokio::fs::remove_file(&target_path).await;
+        // ── Case 5: direct HTTP providers move the completed file into the library ─────────
+        if let Ok(target_meta) = tokio::fs::symlink_metadata(&target_path).await {
+            if target_meta.file_type().is_symlink() {
+                tracing::info!("Removing existing symlink at {:?}", target_path);
+                let _ = tokio::fs::remove_file(&target_path).await;
+            } else {
+                return ArrMoveOutcome::Failed {
+                    reason: format!(
+                        "target already exists and is not a symlink; refusing to overwrite {}",
+                        target_path.display()
+                    ),
+                };
+            }
         }
 
         tracing::info!(
-            "Creating library symlink: {:?} -> {:?}",
-            target_path,
-            source
+            "Moving direct download into library: {:?} -> {:?}",
+            source,
+            target_path
         );
 
-        match tokio::fs::symlink(&source, &target_path).await {
+        match crate::downloader::artifact_placement::move_exact(source, &target_path) {
             Ok(()) => {
-                tracing::info!("Symlink created: {:?} -> {:?}", target_path, source);
+                tracing::info!("Direct download moved into library: {:?}", target_path);
                 // Trigger rescan (fire-and-forget); polling loop will confirm import
                 let target_path_str = target_path.to_str().unwrap_or("");
                 if let Err(e) = match media_type {
@@ -3120,13 +4959,13 @@ impl DownloadOrchestrator {
             }
             Err(e) => {
                 tracing::error!(
-                    "Failed to create symlink {:?} -> {:?}: {}",
-                    target_path,
+                    "Failed to move direct download {:?} -> {:?}: {}",
                     source,
+                    target_path,
                     e
                 );
                 ArrMoveOutcome::Failed {
-                    reason: format!("symlink creation failed: {}", e),
+                    reason: format!("direct download move failed: {}", e),
                 }
             }
         }
@@ -3175,9 +5014,474 @@ impl DownloadOrchestrator {
         );
     }
 
+    /// Reload qBittorrent client with new configuration (dynamic update without restart)
+    pub async fn reload_qbittorrent_client(
+        &self,
+        config: crate::torrent::qbittorrent::QBittorrentConfig,
+    ) {
+        let new_client = if config.enabled {
+            match crate::torrent::qbittorrent::QBittorrentClient::new(config) {
+                Ok(client) => Some(Arc::new(client)),
+                Err(e) => {
+                    tracing::warn!("qBittorrent client disabled: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let mut guard = self.qbittorrent_client.write().await;
+        *guard = new_client;
+        tracing::info!("Reloaded qBittorrent client: enabled={}", guard.is_some());
+    }
+
     /// Get access to the arr client for API proxying
     pub async fn get_arr_client(&self) -> Option<Arc<crate::arr::ArrClient>> {
         let guard = self.arr_client.read().await;
         guard.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DownloadOrchestrator;
+    use crate::downloader::{DownloadState, DownloadTask};
+
+    #[test]
+    fn arr_identity_update_preserves_worker_state() {
+        let mut stale = DownloadTask::new(
+            "https://example.invalid/file".to_string(),
+            "movie.mkv".to_string(),
+            "qbittorrent".to_string(),
+            "movies".to_string(),
+        );
+        stale.state = DownloadState::Queued;
+        let mut current = stale.clone();
+        current.state = DownloadState::Starting;
+
+        let merged = DownloadOrchestrator::merge_arr_identity(&stale, &current, 36);
+
+        assert_eq!(merged.state, DownloadState::Starting);
+        assert_eq!(merged.arr_movie_id, Some(36));
+    }
+
+    #[test]
+    fn fresh_queued_qbit_identity_is_not_mistaken_for_restored() {
+        use super::is_restored_external_qbit_task;
+        use crate::downloader::DownloadState;
+
+        assert!(!is_restored_external_qbit_task(
+            DownloadState::Queued,
+            None,
+            Some("expected-hash"),
+            Some("qbittorrent"),
+            None,
+        ));
+        // Production worker captures QUEUED before transitioning to STARTING.
+        let fresh_queued = true;
+        assert!(
+            !(!fresh_queued
+                && is_restored_external_qbit_task(
+                    DownloadState::Starting,
+                    None,
+                    Some("expected-hash"),
+                    Some("qbittorrent"),
+                    None,
+                ))
+        );
+        assert!(is_restored_external_qbit_task(
+            DownloadState::Waiting,
+            None,
+            Some("expected-hash"),
+            Some("qbittorrent"),
+            None,
+        ));
+        for message in [
+            "qBittorrent torrent is absent; restored identity will not be added again",
+            "qBittorrent torrent is absent; restored ...",
+        ] {
+            assert!(!is_restored_external_qbit_task(
+                DownloadState::Waiting,
+                Some(message),
+                Some("expected-hash"),
+                Some("qbittorrent"),
+                None,
+            ));
+        }
+    }
+
+    #[test]
+    fn managed_qbit_reconciliation_matrix() {
+        use super::{managed_qbit_decision, ManagedQbitDecision};
+        use crate::torrent::state::TransferMetrics;
+
+        let idle = TransferMetrics {
+            downloaded: 0,
+            previous_downloaded: None,
+            progress: 0.0,
+            dlspeed: 0,
+            upspeed: 0,
+            amount_left: 100,
+        };
+        let active = TransferMetrics { dlspeed: 1, ..idle };
+        let complete = TransferMetrics {
+            downloaded: 100,
+            progress: 1.0,
+            amount_left: 0,
+            ..idle
+        };
+
+        assert_eq!(
+            managed_qbit_decision("healthy", "abc", Ok(None), idle, true, false),
+            ManagedQbitDecision::Wait(
+                "qBittorrent torrent is absent; restored identity will not be added again"
+            )
+        );
+        assert_eq!(
+            managed_qbit_decision("healthy", "abc", Ok(None), idle, false, false),
+            ManagedQbitDecision::AddOnce
+        );
+        assert_eq!(
+            managed_qbit_decision("healthy", "abc", Err(()), idle, true, false),
+            ManagedQbitDecision::Wait("qBittorrent API unavailable; reconciliation will retry")
+        );
+        for state in ["metaDL", "checkingDL", "queuedDL", "stalledDL", ""] {
+            assert_eq!(
+                managed_qbit_decision(
+                    "healthy",
+                    "abc",
+                    Ok(Some(("ABC", state))),
+                    idle,
+                    true,
+                    false
+                ),
+                ManagedQbitDecision::Starting(
+                    "qBittorrent is waiting for metadata or transfer evidence"
+                )
+            );
+        }
+        assert_eq!(
+            managed_qbit_decision(
+                "healthy",
+                "abc",
+                Ok(Some(("abc", "downloading"))),
+                active,
+                true,
+                false
+            ),
+            ManagedQbitDecision::Downloading
+        );
+        assert_eq!(
+            managed_qbit_decision(
+                "healthy",
+                "abc",
+                Ok(Some(("abc", "uploading"))),
+                complete,
+                true,
+                false
+            ),
+            ManagedQbitDecision::Completed
+        );
+        for state in ["metaDL", "checkingDL", ""] {
+            assert_eq!(
+                managed_qbit_decision("healthy", "abc", Ok(Some(("abc", state))), idle, true, true),
+                ManagedQbitDecision::Starting(
+                    "qBittorrent is waiting for metadata or transfer evidence"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn restart_authority_adopts_only_healthy_exact_hash() {
+        assert_eq!(
+            super::restart_adoption("healthy", Some("ABC"), "abc", true),
+            super::RestartAdoption::Adopt
+        );
+        assert_eq!(
+            super::restart_adoption("stale", Some("abc"), "abc", true),
+            super::RestartAdoption::Wait
+        );
+        assert_eq!(
+            super::restart_adoption("disconnected", Some("abc"), "abc", true),
+            super::RestartAdoption::Wait
+        );
+        assert_eq!(
+            super::restart_adoption("healthy", None, "abc", false),
+            super::RestartAdoption::Add
+        );
+        assert_eq!(
+            super::restart_adoption("healthy", None, "abc", true),
+            super::RestartAdoption::Wait
+        );
+    }
+
+    #[tokio::test]
+    async fn production_restart_adoption_calls_add_only_for_new_healthy_missing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = AtomicUsize::new(0);
+        for decision in [
+            super::RestartAdoption::Adopt,
+            super::RestartAdoption::Wait,
+            super::RestartAdoption::Wait,
+            super::RestartAdoption::Add,
+        ] {
+            super::run_restart_adoption(decision, || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+            })
+            .await;
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn torbox_tasks_are_direct_http_not_external_torrent() {
+        let mut task = DownloadTask::new(
+            "https://torbox.example/direct.mkv".to_string(),
+            "direct.mkv".to_string(),
+            "torbox".to_string(),
+            "movies".to_string(),
+        );
+        task.download_source = Some("torbox".to_string());
+        task.external_provider = Some("torbox".to_string());
+
+        assert!(!DownloadOrchestrator::is_external_torrent(&task));
+        assert!(!DownloadOrchestrator::is_torrent_import(&task));
+        assert!(DownloadOrchestrator::is_direct_http_import(&task));
+    }
+
+    #[test]
+    fn qbittorrent_tasks_prefer_info_hash_magnet() {
+        assert_eq!(
+            DownloadOrchestrator::qbit_url_for_test(
+                "qbittorrent",
+                "https://prowlarr.example/download?apikey=secret",
+                Some("22A2E1DF69B9016D5130D3E20DEEC478EEDADF8B"),
+            ),
+            "magnet:?xt=urn:btih:22a2e1df69b9016d5130d3e20deec478eedadf8b"
+        );
+        assert_eq!(
+            DownloadOrchestrator::qbit_url_for_test(
+                "qbittorrent",
+                "https://example.test/file.torrent",
+                None,
+            ),
+            "https://example.test/file.torrent"
+        );
+        assert_eq!(
+            DownloadOrchestrator::qbit_url_for_test(
+                "qbittorrent",
+                "",
+                Some("22A2E1DF69B9016D5130D3E20DEEC478EEDADF8B"),
+            ),
+            "magnet:?xt=urn:btih:22a2e1df69b9016d5130d3e20deec478eedadf8b"
+        );
+        assert_eq!(
+            DownloadOrchestrator::qbit_url_for_test(
+                "fshare",
+                "https://example.test/file",
+                Some("22A2E1DF69B9016D5130D3E20DEEC478EEDADF8B"),
+            ),
+            "https://example.test/file"
+        );
+    }
+
+    #[test]
+    fn torrent_identity_is_hash_scoped_not_qbit_scoped() {
+        // Contract 1: canonical torrent identity = provider_id='torrent',
+        // provider_item_id = lowercase normalized info_hash. Cross-provider safe.
+        assert_eq!(
+            super::canonical_provider_identity(
+                "qbittorrent",
+                "magnet:?xt=urn:btih:22A2E1DF69B9016D5130D3E20DEEC478EEDADF8B",
+                Some("22A2E1DF69B9016D5130D3E20DEEC478EEDADF8B"),
+                None,
+            ),
+            (
+                "torrent".to_string(),
+                Some("22a2e1df69b9016d5130d3e20deec478eedadf8b".to_string())
+            )
+        );
+        assert_eq!(
+            super::canonical_provider_identity("qbittorrent", "", None, Some("ABCDEF")),
+            ("torrent".to_string(), Some("abcdef".to_string()))
+        );
+        assert_eq!(
+            super::canonical_provider_identity("fshare", "https://fshare.vn/file/X", None, None),
+            ("fshare".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn qbit_confirmation_pending_stays_starting() {
+        assert_eq!(
+            super::qbit_confirmation_decision("abcdef", Ok(None), false),
+            super::QbitConfirmationDecision::Pending
+        );
+    }
+
+    #[test]
+    fn qbit_confirmation_exhaustion_fails_sanitized() {
+        let decision = super::qbit_confirmation_decision("abcdef", Ok(None), true);
+        assert_eq!(
+            decision,
+            super::QbitConfirmationDecision::Failed(
+                "qBittorrent did not confirm the accepted torrent within 60 seconds"
+            )
+        );
+        let message = format!("{decision:?}");
+        assert!(!message.contains("http"));
+        assert!(!message.contains("prowlarr-ref"));
+    }
+
+    #[test]
+    fn qbit_confirmation_api_error_fails_sanitized() {
+        let decision = super::qbit_confirmation_decision("abcdef", Err(()), false);
+        assert_eq!(
+            decision,
+            super::QbitConfirmationDecision::Failed(
+                "qBittorrent confirmation API failed; check the configured instance"
+            )
+        );
+        let message = format!("{decision:?}");
+        assert!(!message.contains("http"));
+        assert!(!message.contains("prowlarr-ref"));
+    }
+
+    #[test]
+    fn qbit_confirmation_exact_normalized_hash_allows_downloading() {
+        assert_eq!(
+            super::qbit_confirmation_decision("ABCDEF", Ok(Some("abcdef")), false),
+            super::QbitConfirmationDecision::Confirmed
+        );
+    }
+
+    #[test]
+    fn qbit_confirmation_mismatched_hash_fails_closed() {
+        assert_eq!(
+            super::qbit_confirmation_decision("abcdef", Ok(Some("fedcba")), false),
+            super::QbitConfirmationDecision::Failed(
+                "qBittorrent confirmation returned a mismatched torrent hash"
+            )
+        );
+    }
+
+    #[test]
+    fn qbit_existing_confirmed_hash_is_adopted_without_add() {
+        assert!(!super::qbit_confirmation_requires_add(
+            super::qbit_confirmation_decision("ABCDEF", Ok(Some("abcdef")), false)
+        ));
+    }
+
+    #[test]
+    fn qbit_restart_transient_confirmation_uses_authority_without_duplicate_add() {
+        assert!(!super::qbit_confirmation_requires_add(
+            super::qbit_confirmation_decision("abcdef", Ok(Some("ABCDEF")), false)
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn qbit_add_timeout_is_terminal_and_sanitized() {
+        let result =
+            super::run_qbit_add_with_timeout(std::time::Duration::from_secs(30), || async {
+                std::future::pending::<()>().await;
+                Ok(None::<String>)
+            });
+        tokio::pin!(result);
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        let message = result
+            .await
+            .expect_err("hung add must fail terminally")
+            .to_string();
+        assert_eq!(message, "qBittorrent add timed out after 30 seconds");
+        assert!(!message.contains("http"));
+        assert!(!message.contains("prowlarr-ref"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn qbit_actual_confirmation_loop_bounds_hung_calls_by_absolute_budget() {
+        let result = super::poll_qbit_confirmation(
+            "abcdef",
+            std::time::Duration::from_secs(60),
+            std::time::Duration::from_secs(10),
+            || async {
+                std::future::pending::<()>().await;
+                Ok(None)
+            },
+        );
+        tokio::pin!(result);
+        tokio::time::advance(std::time::Duration::from_secs(61)).await;
+        assert_eq!(
+            result.await,
+            super::QbitConfirmationDecision::Failed(
+                "qBittorrent did not confirm the accepted torrent within 60 seconds"
+            )
+        );
+    }
+
+    #[test]
+    fn status_refresh_cannot_claim_completion_before_import_owner() {
+        assert_eq!(
+            super::status_refresh_state(
+                DownloadState::Downloading,
+                DownloadState::Completed,
+                false
+            ),
+            DownloadState::Downloading
+        );
+        assert_eq!(
+            super::status_refresh_state(DownloadState::Importing, DownloadState::Completed, false),
+            DownloadState::Importing
+        );
+        assert_eq!(
+            super::status_refresh_state(DownloadState::Completed, DownloadState::Completed, true),
+            DownloadState::Completed
+        );
+    }
+
+    #[test]
+    fn import_lifecycle_never_regresses_to_transfer_state() {
+        use crate::downloader::DownloadState;
+        // Contract 6/7: state cannot regress from imported/completed to downloading.
+        assert_eq!(
+            super::reconciled_transfer_state(DownloadState::Importing, DownloadState::Downloading),
+            DownloadState::Importing
+        );
+        assert_eq!(
+            super::reconciled_transfer_state(DownloadState::Completed, DownloadState::Downloading),
+            DownloadState::Completed
+        );
+        assert_eq!(
+            super::reconciled_transfer_state(DownloadState::Downloading, DownloadState::Paused),
+            DownloadState::Paused
+        );
+        assert_eq!(
+            super::reconciled_transfer_state(DownloadState::Failed, DownloadState::Starting),
+            DownloadState::Failed
+        );
+    }
+
+    #[test]
+    fn production_reconcile_does_not_promote_zero_evidence_hash() {
+        let mut task = crate::downloader::DownloadTask::default();
+        task.state = crate::downloader::DownloadState::Starting;
+        super::DownloadOrchestrator::apply_qbittorrent_info(
+            &mut task,
+            &crate::torrent::qbittorrent::QBittorrentInfo {
+                hash: "a".repeat(40),
+                name: "fixture".into(),
+                size: 100,
+                progress: 0.0,
+                dlspeed: 0,
+                eta: 0,
+                state: "downloading".into(),
+                save_path: String::new(),
+                content_path: String::new(),
+                num_seeds: None,
+                num_leechs: None,
+            },
+        );
+        assert_ne!(task.state, crate::downloader::DownloadState::Downloading);
     }
 }

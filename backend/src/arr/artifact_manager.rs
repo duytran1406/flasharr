@@ -43,61 +43,82 @@ impl ArrArtifactManager {
     /// 3. Create new, update existing, or skip
     /// 4. Store arr_id in database
     pub async fn manage_artifact(&self, task: &DownloadTask) -> anyhow::Result<ArtifactStatus> {
-        // Require TMDB ID for artifact management
-        let tmdb_id = match task.tmdb_id {
-            Some(id) => id,
-            None => {
-                return Ok(ArtifactStatus::Skipped {
-                    reason: "No TMDB ID available".to_string(),
-                });
-            }
-        };
-
         // Detect media type
         let media_type = task.detect_media_type();
         tracing::info!(
-            "Managing artifact for {} (TMDB: {}, Type: {:?})",
+            "Managing artifact for {} (TVDB: {:?}, TMDB: {:?}, Type: {:?})",
             task.filename,
-            tmdb_id,
+            task.tvdb_id,
+            task.tmdb_id,
             media_type
         );
 
-        // Route to appropriate handler
-        match media_type {
+        let auto_import_enabled = match media_type {
             MediaType::TvSeries | MediaType::TvEpisode => {
-                self.manage_tv_series(task, tmdb_id).await
+                self.arr_client.sonarr_auto_import_enabled()
             }
-            MediaType::Movie => self.manage_movie(task, tmdb_id).await,
+            MediaType::Movie => self.arr_client.radarr_auto_import_enabled(),
+        };
+        if !auto_import_enabled {
+            return Ok(ArtifactStatus::Skipped {
+                reason: "Automatic Arr import is disabled".to_string(),
+            });
+        }
+
+        // Route to appropriate handler. TV is TVDB-canonical; TMDB is legacy bridge only.
+        match media_type {
+            MediaType::TvSeries | MediaType::TvEpisode => self.manage_tv_series(task).await,
+            MediaType::Movie => {
+                let tmdb_id = match task.tmdb_id {
+                    Some(id) => id,
+                    None => {
+                        return Ok(ArtifactStatus::Skipped {
+                            reason: "No TMDB ID available for movie".to_string(),
+                        });
+                    }
+                };
+                self.manage_movie(task, tmdb_id).await
+            }
         }
     }
 
-    /// Manage TV series artifact in Sonarr
-    async fn manage_tv_series(
-        &self,
-        _task: &DownloadTask,
-        tmdb_id: i64,
-    ) -> anyhow::Result<ArtifactStatus> {
-        // Check if series already exists
-        match self.arr_client.series_exists(tmdb_id).await {
+    /// Manage TV series artifact in Sonarr. TVDB ID is canonical; TMDB ID is legacy bridge.
+    async fn manage_tv_series(&self, task: &DownloadTask) -> anyhow::Result<ArtifactStatus> {
+        let tvdb_id = if let Some(id) = task.tvdb_id {
+            id as i32
+        } else {
+            return Ok(ArtifactStatus::Skipped {
+                reason: "No canonical TVDB ID available for TV series".to_string(),
+            });
+        };
+
+        // Check if series already exists by canonical TVDB ID.
+        match self.arr_client.series_exists_by_tvdb(tvdb_id).await {
             Ok(Some(series_id)) => {
                 tracing::info!(
                     "Series already exists in Sonarr (ID: {}), updating database",
                     series_id
                 );
 
-                // Update ALL downloads with this TMDB ID
-                if let Err(e) = self
-                    .db
-                    .update_arr_series_id_by_tmdb(tmdb_id, series_id as i64)
-                {
-                    tracing::warn!("Failed to update arr_series_id for TMDB {}: {}", tmdb_id, e);
+                // Legacy DB updater is still TMDB-keyed; only use it when bridge ID exists.
+                if let Some(tmdb_id) = task.tmdb_id {
+                    if let Err(e) = self
+                        .db
+                        .update_arr_series_id_by_tmdb(tmdb_id, series_id as i64)
+                    {
+                        tracing::warn!(
+                            "Failed to update arr_series_id for TMDB {}: {}",
+                            tmdb_id,
+                            e
+                        );
+                    }
                 }
 
                 Ok(ArtifactStatus::AlreadyMonitored { arr_id: series_id })
             }
             Ok(None) => {
                 // Series doesn't exist, create it
-                tracing::info!("Creating new series in Sonarr (TMDB: {})", tmdb_id);
+                tracing::info!("Creating new series in Sonarr (TVDB: {})", tvdb_id);
 
                 // Get configuration
                 let quality_profile_id = self
@@ -130,22 +151,24 @@ impl ArrArtifactManager {
                 // Add series to Sonarr
                 match self
                     .arr_client
-                    .add_series_by_tmdb(tmdb_id, quality_profile_id, &root_folder)
+                    .add_series_by_tvdb(tvdb_id, quality_profile_id, &root_folder)
                     .await
                 {
                     Ok(series_id) => {
                         tracing::info!("Successfully created series in Sonarr (ID: {})", series_id);
 
-                        // Update database
-                        if let Err(e) = self
-                            .db
-                            .update_arr_series_id_by_tmdb(tmdb_id, series_id as i64)
-                        {
-                            tracing::warn!(
-                                "Failed to update arr_series_id for TMDB {}: {}",
-                                tmdb_id,
-                                e
-                            );
+                        // Legacy DB updater is still TMDB-keyed; only use it when bridge ID exists.
+                        if let Some(tmdb_id) = task.tmdb_id {
+                            if let Err(e) = self
+                                .db
+                                .update_arr_series_id_by_tmdb(tmdb_id, series_id as i64)
+                            {
+                                tracing::warn!(
+                                    "Failed to update arr_series_id for TMDB {}: {}",
+                                    tmdb_id,
+                                    e
+                                );
+                            }
                         }
 
                         Ok(ArtifactStatus::Created { arr_id: series_id })
@@ -180,12 +203,10 @@ impl ArrArtifactManager {
                 );
 
                 // Update database - both per-task and by TMDB
-                if let Err(e) = self.db.update_download_arr_status(
-                    &task.id.to_string(),
-                    true,
-                    None,
-                    Some(movie_id),
-                ) {
+                if let Err(e) =
+                    self.db
+                        .update_download_arr_ids(&task.id.to_string(), None, Some(movie_id))
+                {
                     tracing::warn!("Failed to update arr_movie_id for task {}: {}", task.id, e);
                 }
                 if let Err(e) = self
@@ -239,9 +260,8 @@ impl ArrArtifactManager {
                         tracing::info!("Successfully created movie in Radarr (ID: {})", movie_id);
 
                         // Update database
-                        if let Err(e) = self.db.update_download_arr_status(
+                        if let Err(e) = self.db.update_download_arr_ids(
                             &task.id.to_string(),
-                            true,
                             None,
                             Some(movie_id),
                         ) {
@@ -265,9 +285,8 @@ impl ArrArtifactManager {
                                     "Found existing movie in Radarr after 400 (ID: {}), updating database",
                                     movie_id
                                 );
-                                if let Err(e) = self.db.update_download_arr_status(
+                                if let Err(e) = self.db.update_download_arr_ids(
                                     &task.id.to_string(),
-                                    true,
                                     None,
                                     Some(movie_id),
                                 ) {

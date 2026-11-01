@@ -87,11 +87,7 @@ pub async fn handle_get(
 ) -> axum::response::Response {
     let mode = params.mode.as_deref().unwrap_or("queue");
 
-    tracing::info!(
-        "SABnzbd API request - mode: {}, apikey: {:?}",
-        mode,
-        params.apikey
-    );
+    tracing::info!("SABnzbd API request - mode: {}", mode);
 
     let result = match mode {
         "addurl" => handle_add_url(state, params).await,
@@ -137,7 +133,46 @@ pub async fn handle_post(
     // Handle addfile mode with multipart data
     if mode == "addfile" {
         if let Some(ref mut mp) = multipart {
-            return match handle_add_file(state, params, mp).await {
+            let lookup_state = Arc::clone(&state);
+            return match handle_add_file(
+                params,
+                mp,
+                move |lookup| {
+                    let state = Arc::clone(&lookup_state);
+                    async move { lookup_download_title(state, lookup).await }
+                },
+                move |request| async move {
+                    state
+                        .download_orchestrator
+                        .add_download_with_metadata(
+                            request.url,
+                            request.filename,
+                            request.host,
+                            request.category,
+                            request.tmdb_metadata,
+                            None,
+                            None,
+                            false,
+                            request.download_source,
+                            None,
+                            None,
+                            None,
+                            None,
+                            request.info_hash,
+                            request.external_id,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
+                        .await
+                        .map(|task| task.id.to_string())
+                        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+                },
+            )
+            .await
+            {
                 Ok(json) => (StatusCode::OK, json).into_response(),
                 Err(status) => status.into_response(),
             };
@@ -157,208 +192,204 @@ pub async fn handle_post(
     handle_get(State(state), Query(params)).await
 }
 
-/// Handle NZB file upload (addfile mode)
-async fn handle_add_file(
+struct QueueSource {
+    url: String,
+    filename: Option<String>,
+    host: String,
+    download_source: String,
+    info_hash: Option<String>,
+    external_id: Option<String>,
+}
+
+fn queue_source(
+    source: crate::providers::fshare::AcquisitionSource,
+    title: Option<String>,
+) -> Option<QueueSource> {
+    match source {
+        crate::providers::fshare::AcquisitionSource::FshareUrl(url) => Some(QueueSource {
+            url,
+            filename: None,
+            host: "sabnzbd-fshare".to_string(),
+            download_source: "fshare".to_string(),
+            info_hash: None,
+            external_id: None,
+        }),
+        crate::providers::fshare::AcquisitionSource::TorrentInfoHash(hash) => Some(QueueSource {
+            url: crate::sources::torrent::build_magnet_url(&hash, title.as_deref())?,
+            filename: title,
+            host: "qbittorrent".to_string(),
+            download_source: "torrent".to_string(),
+            info_hash: Some(hash.clone()),
+            external_id: Some(hash),
+        }),
+    }
+}
+
+struct DownloadTitleLookup {
+    tmdb_id: Option<i64>,
+    raw_tmdb_id: Option<String>,
+    media_type: String,
+    title: Option<String>,
+}
+
+struct DownloadQueueRequest {
+    url: String,
+    filename: Option<String>,
+    host: String,
+    category: String,
+    tmdb_metadata: Option<crate::downloader::TmdbDownloadMetadata>,
+    download_source: Option<String>,
+    info_hash: Option<String>,
+    external_id: Option<String>,
+}
+
+async fn lookup_download_title(
     state: Arc<AppState>,
+    lookup: DownloadTitleLookup,
+) -> Result<(Option<String>, Option<i32>), StatusCode> {
+    if let Some(item) = lookup
+        .tmdb_id
+        .and_then(|id| state.db.get_media_item(id).ok().flatten())
+    {
+        Ok((Some(item.title), item.year))
+    } else if lookup.media_type == "tv" {
+        Ok((lookup.title, None))
+    } else if let Some(id) = lookup.raw_tmdb_id {
+        Ok(crate::api::indexer::fetch_tmdb_title_and_year(
+            &state.tmdb_service.api_key().await,
+            &id,
+            &lookup.media_type,
+        )
+        .await)
+    } else {
+        Ok((lookup.title, None))
+    }
+}
+
+/// Parse an uploaded NZB and dispatch the exact orchestrator queue request.
+async fn handle_add_file<Lookup, LookupFuture, Queue, QueueFuture>(
     params: SabParams,
     multipart: &mut axum::extract::Multipart,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+    lookup_title: Lookup,
+    queue_download: Queue,
+) -> Result<Json<serde_json::Value>, StatusCode>
+where
+    Lookup: FnOnce(DownloadTitleLookup) -> LookupFuture,
+    LookupFuture: std::future::Future<Output = Result<(Option<String>, Option<i32>), StatusCode>>,
+    Queue: FnOnce(DownloadQueueRequest) -> QueueFuture,
+    QueueFuture: std::future::Future<Output = Result<String, StatusCode>>,
+{
     tracing::info!("SABnzbd: Handling addfile request (NZB upload)");
-
-    // Extract category from params (Sonarr sends it as query param)
     let category = params.cat.unwrap_or_else(|| "other".to_string());
 
-    // Parse multipart form data
-    while let Some(field) = multipart.next_field().await.map_err(|e| {
-        tracing::error!("Failed to read multipart field: {}", e);
+    while let Some(field) = multipart.next_field().await.map_err(|error| {
+        tracing::error!("Failed to read multipart field: {}", error);
         StatusCode::BAD_REQUEST
     })? {
         let field_name = field.name().unwrap_or("");
-
-        // Look for the NZB file field (usually named "name" or "nzbfile")
-        if field_name == "name" || field_name == "nzbfile" {
-            let data = field.bytes().await.map_err(|e| {
-                tracing::error!("Failed to read field bytes: {}", e);
-                StatusCode::INTERNAL_SERVER_ERROR
-            })?;
-
-            let content = String::from_utf8_lossy(&data);
-            tracing::debug!(
-                "NZB content preview: {}",
-                &content[..content.len().min(200)]
-            );
-
-            // Extract Fshare URL from <meta type="fshare_url"> tag
-            let fshare_url = extract_nzb_metadata(&content, "fshare_url").ok_or_else(|| {
-                tracing::error!("No Fshare URL found in NZB metadata");
-                StatusCode::BAD_REQUEST
-            })?;
-
-            // Extract TMDB metadata if present
-            let tmdb_id = extract_nzb_metadata(&content, "tmdb_id");
-            let media_type_from_nzb = extract_nzb_metadata(&content, "media_type");
-            let season =
-                extract_nzb_metadata(&content, "season").and_then(|s| s.parse::<u32>().ok());
-            let episode =
-                extract_nzb_metadata(&content, "episode").and_then(|e| e.parse::<u32>().ok());
-
-            // Extract category from NZB metadata (fallback to query param)
-            let nzb_category =
-                extract_nzb_metadata(&content, "category").unwrap_or(category.clone());
-
-            tracing::info!(
-                "SABnzbd: Extracted from NZB - URL: {}, category: {}, TMDB: {:?}, media_type: {:?}, S{:?}E{:?}",
-                fshare_url,
-                nzb_category,
-                tmdb_id,
-                media_type_from_nzb,
-                season,
-                episode
-            );
-
-            // Build TMDB metadata if available
-            let tmdb_meta = if let Some(ref id) = tmdb_id {
-                let tmdb_id_i64 = id.parse::<i64>().ok();
-
-                // Prefer explicit media_type from NZB; fall back to inferring from season/episode
-                let actual_media_type = media_type_from_nzb.as_deref().unwrap_or(
-                    if season.is_some() && episode.is_some() {
-                        "tv"
-                    } else {
-                        "movie"
-                    },
-                );
-
-                let (title, year) =
-                    crate::api::indexer::fetch_tmdb_title_and_year(id, actual_media_type).await;
-
-                tracing::info!(
-                    "SABnzbd: Fetched TMDB title: {:?}, year: {:?}, media_type: {}",
-                    title,
-                    year,
-                    actual_media_type
-                );
-
-                if actual_media_type == "movie" {
-                    Some(crate::downloader::TmdbDownloadMetadata {
-                        tmdb_id: tmdb_id_i64,
-                        media_type: Some("movie".to_string()),
-                        title,
-                        year,
-                        collection_name: None,
-                        season: None,
-                        episode: None,
-                    })
-                } else if let (Some(s), Some(e)) = (season, episode) {
-                    Some(crate::downloader::TmdbDownloadMetadata {
-                        tmdb_id: tmdb_id_i64,
-                        media_type: Some("tv".to_string()),
-                        title,
-                        year,
-                        collection_name: None,
-                        season: Some(s as i32),
-                        episode: Some(e as i32),
-                    })
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            // Auto-batch: TV episodes consolidate by TMDB ID then title — same logic as downloads API
-            let (batch_id, batch_name) = if let Some(ref meta) = tmdb_meta {
-                if meta.media_type.as_deref() == Some("tv") {
-                    let auto_batch_name =
-                        meta.title.as_deref().unwrap_or("Unknown Show").to_string();
-
-                    let existing_id = if let Some(tid) = meta.tmdb_id {
-                        state
-                            .db
-                            .get_batch_id_by_tmdb_id_async(tid)
-                            .await
-                            .ok()
-                            .flatten()
-                            .or(state
-                                .db
-                                .get_batch_id_by_name_async(&auto_batch_name)
-                                .await
-                                .ok()
-                                .flatten())
-                    } else {
-                        state
-                            .db
-                            .get_batch_id_by_name_async(&auto_batch_name)
-                            .await
-                            .ok()
-                            .flatten()
-                    };
-
-                    let auto_batch_id = if let Some(existing_id) = existing_id {
-                        tracing::info!(
-                            "SABnzbd: Reusing existing batch: {} ({})",
-                            auto_batch_name,
-                            existing_id
-                        );
-                        existing_id
-                    } else {
-                        let new_id = uuid::Uuid::new_v4().to_string();
-                        tracing::info!(
-                            "SABnzbd: Creating new batch: {} ({})",
-                            auto_batch_name,
-                            new_id
-                        );
-                        new_id
-                    };
-
-                    (Some(auto_batch_id), Some(auto_batch_name))
-                } else {
-                    (None, None)
-                }
-            } else {
-                (None, None)
-            };
-
-            // Add to download queue
-            // Pass None for filename to let orchestrator fetch real filename from Fshare API
-            let task = state
-                .download_orchestrator
-                .add_download_with_metadata(
-                    fshare_url,
-                    None, // Let orchestrator fetch real filename from Fshare API
-                    "sabnzbd-fshare".to_string(),
-                    nzb_category,
-                    tmdb_meta,
-                    batch_id,
-                    batch_name,
-                )
-                .await
-                .map_err(|e| {
-                    tracing::error!("Failed to add download: {}", e);
-                    StatusCode::INTERNAL_SERVER_ERROR
-                })?;
-
-            return Ok(Json(serde_json::json!({
-                "status": true,
-                "nzo_ids": [task.id.to_string()]
-            })));
+        if field_name != "name" && field_name != "nzbfile" {
+            continue;
         }
+
+        let data = field.bytes().await.map_err(|error| {
+            tracing::error!("Failed to read field bytes: {}", error);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+        let metadata = crate::providers::fshare::decode_fake_nzb(&String::from_utf8_lossy(&data))
+            .ok_or_else(|| {
+            tracing::error!("Rejected invalid NZB acquisition metadata");
+            StatusCode::BAD_REQUEST
+        })?;
+        let crate::providers::fshare::FakeNzbMetadata {
+            source,
+            tmdb_id,
+            tvdb_id,
+            title: title_from_nzb,
+            media_type,
+            season,
+            episode,
+            category: metadata_category,
+        } = metadata;
+        let actual_media_type = media_type
+            .as_deref()
+            .unwrap_or(if season.is_some() { "tv" } else { "movie" })
+            .to_string();
+        let tmdb_id_i64 = tmdb_id.as_deref().and_then(|id| id.parse::<i64>().ok());
+        let tvdb_id_i64 = tvdb_id.as_deref().and_then(|id| id.parse::<i64>().ok());
+        let (title, year) = lookup_title(DownloadTitleLookup {
+            tmdb_id: tmdb_id_i64,
+            raw_tmdb_id: tmdb_id,
+            media_type: actual_media_type.clone(),
+            title: title_from_nzb.clone(),
+        })
+        .await?;
+        let tmdb_metadata = if actual_media_type == "tv" {
+            let season = season.ok_or(StatusCode::BAD_REQUEST)?;
+            if tvdb_id_i64.is_none() && tmdb_id_i64.is_none() {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            Some(crate::downloader::TmdbDownloadMetadata {
+                tmdb_id: tmdb_id_i64,
+                tvdb_id: tvdb_id_i64,
+                media_type: Some("tv".to_string()),
+                title,
+                year,
+                collection_name: None,
+                season: Some(season as i32),
+                episode: episode.map(|value| value as i32),
+            })
+        } else {
+            Some(crate::downloader::TmdbDownloadMetadata {
+                tmdb_id: tmdb_id_i64,
+                tvdb_id: None,
+                media_type: Some("movie".to_string()),
+                title,
+                year,
+                collection_name: None,
+                season: None,
+                episode: None,
+            })
+        };
+        let source = queue_source(source, title_from_nzb).ok_or(StatusCode::BAD_REQUEST)?;
+        let task_id = queue_download(DownloadQueueRequest {
+            url: source.url,
+            filename: source.filename,
+            host: source.host,
+            category: metadata_category.unwrap_or(category),
+            tmdb_metadata,
+            download_source: Some(source.download_source),
+            info_hash: source.info_hash,
+            external_id: source.external_id,
+        })
+        .await?;
+
+        return Ok(Json(serde_json::json!({
+            "status": true,
+            "nzo_ids": [task_id]
+        })));
     }
 
     tracing::error!("No NZB file found in multipart data");
     Err(StatusCode::BAD_REQUEST)
 }
 
-/// Extract metadata value from NZB XML
-fn extract_nzb_metadata(content: &str, meta_type: &str) -> Option<String> {
-    let tag_start = format!(r#"<meta type="{}">"#, meta_type);
-    if let Some(start) = content.find(&tag_start) {
-        let after_tag = &content[start + tag_start.len()..];
-        if let Some(end) = after_tag.find("</meta>") {
-            return Some(after_tag[..end].to_string());
-        }
+#[derive(Debug, PartialEq, Eq)]
+struct AddUrlLogSummary {
+    url_present: bool,
+    filename_present: bool,
+    source_class: &'static str,
+}
+
+fn addurl_log_summary(url: &str, filename: &str) -> AddUrlLogSummary {
+    AddUrlLogSummary {
+        url_present: !url.trim().is_empty(),
+        filename_present: !filename.trim().is_empty(),
+        source_class: if crate::providers::fshare::is_fshare_url(url) {
+            "fshare"
+        } else {
+            "other"
+        },
     }
-    None
 }
 
 /// Add URL to download queue
@@ -369,11 +400,17 @@ async fn handle_add_url(
     let url = params.name.ok_or(StatusCode::BAD_REQUEST)?;
     let filename = params.nzbname.unwrap_or_else(|| "download".to_string());
     let category = params.cat.unwrap_or_else(|| "other".to_string());
+    if category.to_ascii_lowercase().starts_with("tv") {
+        tracing::warn!("SABnzbd addurl rejected: TV downloads require fake-NZB metadata");
+        return Err(StatusCode::BAD_REQUEST);
+    }
 
+    let summary = addurl_log_summary(&url, &filename);
     tracing::info!(
-        "SABnzbd: Adding download - URL: {}, filename: {}",
-        url,
-        filename
+        url_present = summary.url_present,
+        filename_present = summary.filename_present,
+        source_class = summary.source_class,
+        "SABnzbd addurl accepted"
     );
 
     let task = state
@@ -545,7 +582,11 @@ async fn handle_history(state: Arc<AppState>) -> Result<Json<serde_json::Value>,
     let batch_ids: std::collections::HashSet<String> =
         tasks.iter().filter_map(|t| t.batch_id.clone()).collect();
     for batch_id in batch_ids {
-        match state.db.get_tasks_by_batch_id_async(batch_id.clone()).await {
+        match state
+            .db
+            .get_tasks_by_batch_id_async(batch_id.clone(), None)
+            .await
+        {
             Ok(batch_tasks) => {
                 let all_complete = !batch_tasks.is_empty()
                     && batch_tasks.iter().all(|task| {
@@ -835,4 +876,90 @@ async fn handle_delete(
     }
 
     Ok(Json(serde_json::json!({ "status": true })))
+}
+
+#[cfg(test)]
+mod task33_tests {
+    use super::*;
+    use axum::{body::Body, extract::FromRequest, http::Request};
+    use std::sync::Mutex;
+
+    #[test]
+    fn addurl_log_summary_never_contains_user_url_or_filename() {
+        let sentinel = "https://fshare.vn/file/SECRET";
+        let summary = addurl_log_summary(sentinel, "SECRET-file.mkv");
+
+        assert_eq!(summary.source_class, "fshare");
+        assert!(summary.url_present);
+        assert!(summary.filename_present);
+        assert!(!format!("{summary:?}").contains("SECRET"));
+    }
+
+    #[tokio::test]
+    async fn multipart_torrent_nzb_reaches_add_download_with_metadata_unchanged() {
+        let mut metadata = crate::providers::fshare::FakeNzbMetadata::torrent(
+            "AABBCCDDEEFF00112233445566778899AABBCCDD".to_string(),
+        );
+        metadata.tvdb_id = Some("42".to_string());
+        metadata.title = Some("Show.S01.mkv".to_string());
+        metadata.media_type = Some("tv".to_string());
+        metadata.season = Some(1);
+        let nzb = crate::providers::fshare::encode_fake_nzb(&metadata).unwrap();
+        let boundary = "task33-boundary";
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"nzbfile\"; filename=\"Show.S01.nzb\"\r\nContent-Type: application/x-nzb\r\n\r\n{nzb}\r\n--{boundary}--\r\n"
+        );
+        let request = Request::builder()
+            .header(
+                axum::http::header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .unwrap();
+        let mut multipart = axum::extract::Multipart::from_request(request, &())
+            .await
+            .unwrap();
+        let captured = Arc::new(Mutex::new(None));
+        let queue_capture = Arc::clone(&captured);
+
+        let response = handle_add_file(
+            SabParams {
+                mode: Some("addfile".to_string()),
+                output: None,
+                apikey: None,
+                name: None,
+                nzbname: None,
+                cat: Some("tv".to_string()),
+                priority: None,
+                nzo_id: None,
+            },
+            &mut multipart,
+            |lookup| async move { Ok((lookup.title, None)) },
+            move |request| async move {
+                *queue_capture.lock().unwrap() = Some(request);
+                Ok("task-33-id".to_string())
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.0["nzo_ids"], serde_json::json!(["task-33-id"]));
+        let request = captured.lock().unwrap().take().expect("queue call");
+        assert_eq!(request.host, "qbittorrent");
+        assert_eq!(request.download_source.as_deref(), Some("torrent"));
+        assert_eq!(
+            request.info_hash.as_deref(),
+            Some("aabbccddeeff00112233445566778899aabbccdd")
+        );
+        assert_eq!(
+            request.external_id.as_deref(),
+            Some("aabbccddeeff00112233445566778899aabbccdd")
+        );
+        assert_eq!(request.tmdb_metadata.as_ref().unwrap().season, Some(1));
+        assert_eq!(request.tmdb_metadata.as_ref().unwrap().episode, None);
+        assert_eq!(
+            request.url,
+            "magnet:?xt=urn:btih:aabbccddeeff00112233445566778899aabbccdd&dn=Show.S01.mkv"
+        );
+    }
 }

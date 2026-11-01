@@ -220,59 +220,59 @@ static RELEASE_GROUP_RE: OnceLock<Regex> = OnceLock::new();
 fn get_classifiers() -> Vec<(TokenType, &'static Regex)> {
     vec![
         // High priority patterns
-        (TokenType::Extension, EXTENSION_RE.get_or_init(|| 
+        (TokenType::Extension, EXTENSION_RE.get_or_init(||
             Regex::new(r"(?i)^(mkv|mp4|avi|mov|wmv|flv|webm|ts|m2ts|m4v|iso|rar|zip|7z)$").unwrap())),
-        (TokenType::SeasonEpisode, SE_RE.get_or_init(|| 
+        (TokenType::SeasonEpisode, SE_RE.get_or_init(||
             Regex::new(r"(?i)^S(\d{1,2})E(\d{1,4})$").unwrap())),
-        (TokenType::Season, SEASON_RE.get_or_init(|| 
+        (TokenType::Season, SEASON_RE.get_or_init(||
             Regex::new(r"(?i)^(?:S(\d{1,2})|Season\s*(\d{1,2}))$").unwrap())),
-        (TokenType::Episode, EPISODE_RE.get_or_init(|| 
+        (TokenType::Episode, EPISODE_RE.get_or_init(||
             Regex::new(r"(?i)^(?:E\s*(\d{1,4})|EP\s*(\d{1,4})|Tap\s*(\d{1,4})|Chapter\s*(\d{1,4})|Ep\s*(\d{1,4}))$").unwrap())),
-        (TokenType::Year, YEAR_RE.get_or_init(|| 
+        (TokenType::Year, YEAR_RE.get_or_init(||
             Regex::new(r"^(19[2-9]\d|20[0-4]\d)$").unwrap())),
-        
+
         // Resolution
-        (TokenType::Resolution, RESOLUTION_RE.get_or_init(|| 
+        (TokenType::Resolution, RESOLUTION_RE.get_or_init(||
             Regex::new(r"(?i)^(2160p|4k|uhd|1080p|1080i|720p|576p|480p|360p|fhd|hd)$").unwrap())),
-        
+
         // Source
-        (TokenType::Source, SOURCE_RE.get_or_init(|| 
+        (TokenType::Source, SOURCE_RE.get_or_init(||
             Regex::new(r"(?i)^(bluray|blu-ray|bdrip|brrip|bd25|bd50|web-dl|webdl|webrip|web-rip|hdtv|pdtv|tvrip|dvdrip|dvd|remux|cam|ts|tc|hdcam|webscreener|screener|scr|webscr)$").unwrap())),
-        
+
         // Video Codec
-        (TokenType::VideoCodec, VIDEO_CODEC_RE.get_or_init(|| 
+        (TokenType::VideoCodec, VIDEO_CODEC_RE.get_or_init(||
             Regex::new(r"(?i)^(x265|x264|hevc|avc|h\.?265|h\.?264|mpeg-?2|mpeg-?4|xvid|divx|vp9|av1)$").unwrap())),
-        
+
         // Audio Codec
-        (TokenType::AudioCodec, AUDIO_CODEC_RE.get_or_init(|| 
+        (TokenType::AudioCodec, AUDIO_CODEC_RE.get_or_init(||
             Regex::new(r"(?i)^(aac.*|ac3|dts|dts-hd|dtshd|dts-x|truehd|atmos|eac3|dd\+?|ddp|flac|mp3|opus)$").unwrap())),
-        
+
         // Audio Channels
-        (TokenType::AudioChannels, AUDIO_CHANNELS_RE.get_or_init(|| 
+        (TokenType::AudioChannels, AUDIO_CHANNELS_RE.get_or_init(||
             Regex::new(r"^([257]\.[01])$").unwrap())),
-        
+
         // Bit Depth
-        (TokenType::BitDepth, BIT_DEPTH_RE.get_or_init(|| 
+        (TokenType::BitDepth, BIT_DEPTH_RE.get_or_init(||
             Regex::new(r"(?i)^(10bit|10-bit|12bit|12-bit|8bit)$").unwrap())),
-        
+
         // HDR
-        (TokenType::HDR, HDR_RE.get_or_init(|| 
+        (TokenType::HDR, HDR_RE.get_or_init(||
             Regex::new(r"(?i)^(hdr|hdr10|hdr10\+|dv|dolby\s*vision|sdr)$").unwrap())),
-        
+
         // Vietnamese Audio
-        (TokenType::VietDub, VIETDUB_RE.get_or_init(|| 
+        (TokenType::VietDub, VIETDUB_RE.get_or_init(||
             Regex::new(r"(?i)^(lồng\s*tiếng|long\s*tieng|thuyết\s*minh|thuyet\s*minh|vietdub|vie\.?dub|tmph|tvp|tmpd|tm|lt)$").unwrap())),
-        
+
         // Vietnamese Subtitles
-        (TokenType::VietSub, VIETSUB_RE.get_or_init(|| 
+        (TokenType::VietSub, VIETSUB_RE.get_or_init(||
             Regex::new(r"(?i)^(vietsub|sub\s*viet|phụ\s*đề|phu\s*de|vs)$").unwrap())),
-        
+
         // Language codes
-        (TokenType::Language, LANGUAGE_RE.get_or_init(|| 
+        (TokenType::Language, LANGUAGE_RE.get_or_init(||
             Regex::new(r"(?i)^(vie|eng|jpn|kor|chi|chn|tha|vn|dub|dual)$").unwrap())),
-        
+
         // Release group (must start with dash, e.g. -GROUP)
-        (TokenType::ReleaseGroup, RELEASE_GROUP_RE.get_or_init(|| 
+        (TokenType::ReleaseGroup, RELEASE_GROUP_RE.get_or_init(||
             Regex::new(r"^-[A-Za-z0-9]+$").unwrap())),
     ]
 }
@@ -355,8 +355,17 @@ fn split_by_separators(s: &str) -> Vec<String> {
                 }
             }
 
-            // Protect pattern matching H.264 or x.264 or 5.1
-            if (prev_is_digit || prev_is_codec_start) && digits_after > 0 && digits_after <= 3 {
+            let current_lower = current.to_lowercase();
+            let looks_like_episode_marker = current_lower.starts_with('e')
+                && current_lower[1..].chars().all(|ch| ch.is_ascii_digit());
+
+            // Protect pattern matching H.264 or x.264 or 5.1, but do not glue
+            // episode markers to quality tokens: E18.4K must split as E18 + 4K.
+            if !looks_like_episode_marker
+                && (prev_is_digit || prev_is_codec_start)
+                && digits_after > 0
+                && digits_after <= 3
+            {
                 current.push(c);
             } else {
                 if !current.is_empty() {
@@ -702,7 +711,22 @@ pub fn smart_parse(filename: &str) -> SmartParsedMedia {
             classified[i + 1].token_type = TokenType::VietDub;
         }
 
-        // 2. Keyword Context: "Movie 44", "Part 2", "Vol 1", "Cot moc 23"
+        // 2. Split season marker: "Season.5.E12" tokenizes as [Season, 5, E12].
+        // Treat the number after Season/S as the season, not as a title/episode token.
+        if (current_text == "season" || current_text == "s")
+            && next_text.chars().all(|c| c.is_ascii_digit())
+        {
+            if let Ok(season_num) = next_text.parse::<u32>() {
+                if (1..=99).contains(&season_num) {
+                    classified[i].token_type = TokenType::Season;
+                    classified[i].value = Some(season_num.to_string());
+                    classified[i + 1].token_type = TokenType::Season;
+                    classified[i + 1].value = Some(season_num.to_string());
+                }
+            }
+        }
+
+        // 3. Keyword Context: "Movie 44", "Part 2", "Vol 1", "Cot moc 23"
         // If an episode-looking number follows a title keyword, it's part of the title
         let title_keywords = [
             "movie",
@@ -999,6 +1023,13 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         result
+    }
+
+    #[test]
+    fn test_peppa_season_dot_episode_format() {
+        let r = test_parse("Peppa.Pig.Season.5.E12.1080p.WEB-DL.mkv");
+        assert_eq!(r.season, Some(5));
+        assert_eq!(r.episode, Some(12));
     }
 
     #[test]

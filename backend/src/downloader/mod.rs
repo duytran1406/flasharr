@@ -2,6 +2,7 @@
 //!
 //! Core download functionality with concurrent downloads and progress tracking.
 
+pub mod artifact_placement;
 pub mod config;
 pub mod duplicate_detector;
 pub mod engine_simple;

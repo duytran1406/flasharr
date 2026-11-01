@@ -135,16 +135,19 @@ pub struct DownloadTask {
     /// Unique task ID
     pub id: Uuid,
 
-    /// Download URL (may be direct or needs resolution)
+    /// Download URL (may be direct or needs resolution). Never expose publicly.
+    #[serde(default, skip_serializing)]
     pub url: String,
 
-    /// Original URL (e.g., Fshare page URL)
+    /// Original URL (e.g., Fshare page URL). May contain signed credentials.
+    #[serde(default, skip_serializing)]
     pub original_url: String,
 
     /// Target filename
     pub filename: String,
 
-    /// Destination path
+    /// Destination path. Internal filesystem detail.
+    #[serde(skip_serializing)]
     pub destination: String,
 
     /// Current state
@@ -205,8 +208,56 @@ pub struct DownloadTask {
     #[serde(default)]
     pub error_history: Vec<ErrorRecord>,
 
-    /// Fshare file code for duplicate detection (e.g., "8DW6WQOV5R551DL")
+    /// Legacy wire compatibility. Runtime identity uses provider_id/provider_item_id.
+    #[serde(default)]
     pub fshare_code: Option<String>,
+
+    /// Canonical provider identity used for cross-provider-safe duplicate detection.
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub provider_item_id: Option<String>,
+
+    /// Source/provider metadata for externally-managed downloads (e.g. torrents).
+    pub download_source: Option<String>,
+    pub external_provider: Option<String>,
+    pub external_id: Option<String>,
+    pub external_instance_id: Option<String>,
+    pub info_hash: Option<String>,
+    #[serde(default)]
+    pub file_idx: Option<usize>,
+    #[serde(default)]
+    pub source_filename: Option<String>,
+    #[serde(default)]
+    pub selected_episodes: Option<String>,
+    #[serde(default)]
+    pub execution_strategy: Option<String>,
+    #[serde(default)]
+    pub torbox_remote_state: Option<String>,
+    #[serde(default)]
+    pub torbox_remote_completed_at: Option<String>,
+    #[serde(default)]
+    pub selected_remote_file_ids: Option<String>,
+    #[serde(default)]
+    pub selected_artifacts: Option<String>,
+    pub origin_provider: Option<String>,
+    pub origin_indexer: Option<String>,
+    pub seeders: Option<i64>,
+    pub leechers: Option<i64>,
+
+    /// Additive qB mirror semantics; derived at response time, never persisted.
+    #[serde(default)]
+    pub task_state: Option<String>,
+    #[serde(default)]
+    pub qbit_state: Option<String>,
+    #[serde(default)]
+    pub sync_health: Option<String>,
+    #[serde(default)]
+    pub last_sync_at: Option<String>,
+    #[serde(default)]
+    pub transfer_state: Option<String>,
+    #[serde(default)]
+    pub transfer_active: bool,
 
     /// Batch ID for grouping related downloads (e.g., TV season episodes)
     /// Downloads with the same batch_id are displayed as a collapsible group
@@ -215,11 +266,17 @@ pub struct DownloadTask {
     /// Batch display name (e.g., "Breaking Bad S01")
     pub batch_name: Option<String>,
 
-    /// TMDB metadata for Sonarr/Radarr matching
-    pub tmdb_id: Option<i64>, // TMDB ID for series/movie
+    /// Metadata IDs for Sonarr/Radarr matching.
+    /// TV: tvdb_id is canonical; tmdb_id is bridge/backcompat only.
+    /// Movie: tmdb_id is canonical.
+    pub tvdb_id: Option<i64>, // TVDB ID for TV series/episodes
+    pub tmdb_id: Option<i64>,       // TMDB ID for movies; bridge ID for TV
+    pub media_type: Option<String>, // "tv" or "movie"
+    pub media_item_id: Option<i64>,
     pub tmdb_title: Option<String>, // Series/Movie title
     pub tmdb_season: Option<u32>,   // Season number (TV only)
     pub tmdb_episode: Option<u32>,  // Episode number (TV only)
+    pub info_path: Option<String>,
 
     /// Quality metadata (parsed from filename at creation time)
     pub quality: Option<String>, // e.g. "1080p WEB-DL"
@@ -269,6 +326,17 @@ fn default_state_obj() -> Arc<dyn TaskState> {
 }
 
 impl DownloadTask {
+    pub fn canonical_media_leaf_key(&self) -> Option<String> {
+        match self.media_type.as_deref() {
+            Some("movie") => self.tmdb_id.map(|id| format!("movie:{id}")),
+            Some("tv") => Some(format!(
+                "episode:{}:{}:{}",
+                self.tvdb_id?, self.tmdb_season?, self.tmdb_episode?
+            )),
+            _ => None,
+        }
+    }
+
     /// Create a new download task
     pub fn new(url: String, filename: String, host: String, category: String) -> Self {
         let state = DownloadState::Queued;
@@ -297,12 +365,41 @@ impl DownloadTask {
             url_metadata: None,
             error_history: Vec::new(),
             fshare_code: None,
+            provider_id: None,
+            provider_item_id: None,
+            download_source: None,
+            external_provider: None,
+            external_id: None,
+            external_instance_id: None,
+            info_hash: None,
+            file_idx: None,
+            source_filename: None,
+            selected_episodes: None,
+            execution_strategy: None,
+            torbox_remote_state: None,
+            torbox_remote_completed_at: None,
+            selected_remote_file_ids: None,
+            selected_artifacts: None,
+            origin_provider: None,
+            origin_indexer: None,
+            seeders: None,
+            leechers: None,
+            task_state: None,
+            qbit_state: None,
+            sync_health: None,
+            last_sync_at: None,
+            transfer_state: None,
+            transfer_active: false,
             batch_id: None,
             batch_name: None,
+            tvdb_id: None,
             tmdb_id: None,
+            media_type: None,
+            media_item_id: None,
             tmdb_title: None,
             tmdb_season: None,
             tmdb_episode: None,
+            info_path: None,
             quality: None,
             resolution: None,
             arr_series_id: None,
@@ -402,5 +499,65 @@ impl Default for DownloadTask {
             String::from("unknown"),
             String::from("other"),
         )
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::DownloadTask;
+
+    #[test]
+    fn fshare_code_preserves_legacy_wire_without_runtime_secrets() {
+        let mut task = DownloadTask::default();
+        task.fshare_code = Some("LEGACY".into());
+        let mut value = serde_json::to_value(&task).expect("serialize task");
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("destination".into(), "/tmp/legacy".into());
+        assert_eq!(value["fshare_code"], "LEGACY");
+        for secret in ["password", "token", "access_token", "cancel_token"] {
+            assert!(
+                value.get(secret).is_none(),
+                "serialized secret field {secret}"
+            );
+        }
+        let task: DownloadTask = serde_json::from_value(value).expect("deserialize legacy task");
+        assert_eq!(task.fshare_code.as_deref(), Some("LEGACY"));
+    }
+
+    #[test]
+    fn task_wire_has_additive_torrent_semantics_defaults() {
+        let value = serde_json::to_value(DownloadTask::default()).unwrap();
+        assert!(value["task_state"].is_null());
+        assert!(value["qbit_state"].is_null());
+        assert!(value["sync_health"].is_null());
+        assert!(value["last_sync_at"].is_null());
+        assert!(value["transfer_state"].is_null());
+        assert_eq!(value["transfer_active"], false);
+    }
+
+    #[test]
+    fn legacy_task_without_url_deserializes_to_explicit_safe_default() {
+        let mut value = serde_json::to_value(DownloadTask::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("url");
+        object.insert("original_url".into(), "legacy-ref".into());
+        object.insert("destination".into(), "/tmp/legacy".into());
+        let task: DownloadTask = serde_json::from_value(value).expect("legacy task without url");
+        assert_eq!(task.url, "");
+    }
+
+    #[test]
+    fn legacy_task_without_original_url_deserializes_to_explicit_safe_default() {
+        let mut value = serde_json::to_value(DownloadTask::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.insert("url".into(), "opaque-provider-id".into());
+        object.remove("original_url");
+        object.insert("destination".into(), "/tmp/legacy".into());
+        let task: DownloadTask =
+            serde_json::from_value(value).expect("legacy task without original_url");
+        assert_eq!(task.original_url, "");
+        assert_eq!(task.url, "opaque-provider-id");
     }
 }

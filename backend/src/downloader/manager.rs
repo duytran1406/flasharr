@@ -293,8 +293,8 @@ impl DownloadTaskManager {
         stats
     }
 
-    /// Pop next queued task (for worker processing)
-    /// This atomically claims the task by changing its state to Starting
+    /// Pop next queued task (for worker processing).
+    /// Claims through `processing_tasks`; the worker owns QUEUED -> STARTING.
     /// Also checks for Waiting tasks whose wait_until time has passed
     pub async fn pop_next_queued(&self) -> Option<DownloadTask> {
         let now = Utc::now();
@@ -376,7 +376,7 @@ impl DownloadTaskManager {
             let mut tasks = self.tasks.write().await;
             let mut processing = self.processing_tasks.write().await;
 
-            if let Some(task) = tasks.get_mut(task_id) {
+            if let Some(task) = tasks.get(task_id) {
                 // CRITICAL: Re-check state since another worker may have claimed it
                 // between our read and this write
                 if task.state != DownloadState::Queued {
@@ -394,11 +394,15 @@ impl DownloadTaskManager {
                 }
 
                 tracing::debug!(
-                    "Claiming task {} (current state: {:?}, changing to Starting)",
+                    "Claiming task {} (current state: {:?})",
                     task_id,
                     task.state
                 );
-                task.state = DownloadState::Starting;
+                tracing::info!(
+                    task_id = %task_id,
+                    state_before = ?task.state,
+                    "qB lifecycle: queue claim"
+                );
                 processing.insert(*task_id);
                 tracing::debug!("Added task {} to processing set (from Queued)", task_id);
                 return Some(task.clone());
@@ -406,6 +410,11 @@ impl DownloadTaskManager {
         }
 
         None
+    }
+
+    /// Release a worker claim when a task leaves active processing (for example WAITING retry).
+    pub async fn release_processing(&self, id: Uuid) {
+        self.processing_tasks.write().await.remove(&id);
     }
 
     /// Get tasks by state
@@ -461,6 +470,64 @@ impl DownloadTaskManager {
         if processing.remove(&id) {
             tracing::debug!("Removed task {} from processing set (completed)", id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn queued_claim_preserves_fresh_state_and_prevents_duplicate_claim() {
+        let manager = DownloadTaskManager::new();
+        let task = DownloadTask::new(
+            "magnet:?xt=urn:btih:test".into(),
+            "movie.mkv".into(),
+            "qbittorrent".into(),
+            "movies".into(),
+        );
+        let task_id = task.id;
+        manager.add_task(task).await;
+
+        let claimed = manager.pop_next_queued().await.expect("fresh task claimed");
+
+        assert_eq!(claimed.state, DownloadState::Queued);
+        assert_eq!(
+            manager
+                .get_task(task_id)
+                .await
+                .expect("task retained")
+                .state,
+            DownloadState::Queued
+        );
+        assert!(manager.pop_next_queued().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn expired_waiting_task_is_reclaimed_after_worker_releases_claim() {
+        let manager = DownloadTaskManager::new();
+        let task = DownloadTask::new(
+            "https://example.invalid/file".into(),
+            "episode.mkv".into(),
+            "fshare".into(),
+            "tv".into(),
+        );
+        let task_id = task.id;
+        manager.add_task(task).await;
+        manager.pop_next_queued().await.expect("initial claim");
+
+        let mut waiting = manager.get_task(task_id).await.expect("task retained");
+        waiting.state = DownloadState::Waiting;
+        waiting.wait_until = Some(Utc::now() - chrono::Duration::seconds(1));
+        manager.update_task(waiting).await;
+        manager.release_processing(task_id).await;
+
+        let reclaimed = manager
+            .pop_next_queued()
+            .await
+            .expect("expired retry reclaimed");
+        assert_eq!(reclaimed.id, task_id);
+        assert_eq!(reclaimed.state, DownloadState::Starting);
     }
 }
 

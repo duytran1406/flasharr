@@ -55,6 +55,8 @@ struct LibraryOverview {
     episodes_missing: i32,
     movies_with_files: usize,
     movies_missing: usize,
+    series_size_on_disk: i64,
+    movies_size_on_disk: i64,
     total_size_on_disk: i64,
 }
 
@@ -82,7 +84,10 @@ struct HistoryQuery {
 
 #[derive(Deserialize)]
 struct AddToLibraryRequest {
-    tmdb_id: i64,
+    #[serde(default)]
+    tmdb_id: Option<i64>,
+    #[serde(default)]
+    tvdb_id: Option<i32>,
 }
 
 #[derive(Serialize)]
@@ -121,6 +126,16 @@ struct QueueOverviewResponse {
     radarr_stuck: usize,
     sonarr_items: Vec<serde_json::Value>,
     radarr_items: Vec<serde_json::Value>,
+    sonarr_status: QueueServiceStatus,
+    radarr_status: QueueServiceStatus,
+}
+
+#[derive(Serialize)]
+struct QueueServiceStatus {
+    configured: bool,
+    ok: bool,
+    error: Option<String>,
+    items: usize,
 }
 
 #[derive(Serialize)]
@@ -201,6 +216,8 @@ async fn library_overview(
         episodes_missing: total_episodes - episodes_with_files,
         movies_with_files: movies_with_files_count,
         movies_missing: movies_missing_count,
+        series_size_on_disk: series_size,
+        movies_size_on_disk: movie_size,
         total_size_on_disk: series_size + movie_size,
     }))
 }
@@ -454,35 +471,10 @@ async fn queue_overview(
         .await
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
 
-    let (sonarr_items, sonarr_total) = if client.has_sonarr() {
-        match client.get_sonarr_queue().await {
-            Ok(items) => {
-                let total = items.len();
-                (items, total)
-            }
-            Err(e) => {
-                tracing::warn!("Failed to fetch Sonarr queue: {}", e);
-                (vec![], 0)
-            }
-        }
-    } else {
-        (vec![], 0)
-    };
-
-    let (radarr_items, radarr_total) = if client.has_radarr() {
-        match client.get_radarr_queue().await {
-            Ok(items) => {
-                let total = items.len();
-                (items, total)
-            }
-            Err(e) => {
-                tracing::warn!("Failed to fetch Radarr queue: {}", e);
-                (vec![], 0)
-            }
-        }
-    } else {
-        (vec![], 0)
-    };
+    let (sonarr_items, sonarr_status) = fetch_sonarr_queue_status(&client).await;
+    let (radarr_items, radarr_status) = fetch_radarr_queue_status(&client).await;
+    let sonarr_total = sonarr_items.len();
+    let radarr_total = radarr_items.len();
 
     let sonarr_stuck = sonarr_items
         .iter()
@@ -500,7 +492,97 @@ async fn queue_overview(
         radarr_stuck,
         sonarr_items,
         radarr_items,
+        sonarr_status,
+        radarr_status,
     }))
+}
+
+async fn fetch_sonarr_queue_status(
+    client: &crate::arr::ArrClient,
+) -> (Vec<serde_json::Value>, QueueServiceStatus) {
+    if !client.has_sonarr() {
+        return (
+            vec![],
+            QueueServiceStatus {
+                configured: false,
+                ok: false,
+                error: Some("Sonarr not configured".to_string()),
+                items: 0,
+            },
+        );
+    }
+
+    match client.get_sonarr_queue().await {
+        Ok(items) => {
+            let count = items.len();
+            (
+                items,
+                QueueServiceStatus {
+                    configured: true,
+                    ok: true,
+                    error: None,
+                    items: count,
+                },
+            )
+        }
+        Err(e) => {
+            let error = e.to_string();
+            tracing::warn!("Failed to fetch Sonarr queue: {}", error);
+            (
+                vec![],
+                QueueServiceStatus {
+                    configured: true,
+                    ok: false,
+                    error: Some(error),
+                    items: 0,
+                },
+            )
+        }
+    }
+}
+
+async fn fetch_radarr_queue_status(
+    client: &crate::arr::ArrClient,
+) -> (Vec<serde_json::Value>, QueueServiceStatus) {
+    if !client.has_radarr() {
+        return (
+            vec![],
+            QueueServiceStatus {
+                configured: false,
+                ok: false,
+                error: Some("Radarr not configured".to_string()),
+                items: 0,
+            },
+        );
+    }
+
+    match client.get_radarr_queue().await {
+        Ok(items) => {
+            let count = items.len();
+            (
+                items,
+                QueueServiceStatus {
+                    configured: true,
+                    ok: true,
+                    error: None,
+                    items: count,
+                },
+            )
+        }
+        Err(e) => {
+            let error = e.to_string();
+            tracing::warn!("Failed to fetch Radarr queue: {}", error);
+            (
+                vec![],
+                QueueServiceStatus {
+                    configured: true,
+                    ok: false,
+                    error: Some(error),
+                    items: 0,
+                },
+            )
+        }
+    }
 }
 
 /// Returns true for Sonarr queue items that are permanently stuck and safe to remove:
@@ -704,7 +786,7 @@ async fn queue_sweep(
     }))
 }
 
-/// POST /api/arr/series/add — Add TV show to Sonarr by TMDB ID.
+/// POST /api/arr/series/add — Add TV show to Sonarr by canonical TVDB ID.
 /// Auto-selects the first available root folder; quality profile defaults to 1 ("Any").
 async fn add_series(
     State(state): State<Arc<AppState>>,
@@ -735,8 +817,22 @@ async fn add_series(
         )
     })?;
 
+    let tvdb_id = body.tvdb_id.ok_or_else(|| {
+        (
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "tvdb_id is required for TV series".to_string(),
+        )
+    })?;
+
+    if tvdb_id <= 0 {
+        return Err((
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "tvdb_id must be a positive integer".to_string(),
+        ));
+    }
+
     match client
-        .add_series_by_tmdb(body.tmdb_id, 1, &root_folder.path)
+        .add_series_by_tvdb(tvdb_id, 1, &root_folder.path)
         .await
     {
         Ok(series_id) => Ok(Json(AddToLibraryResponse {
@@ -792,8 +888,15 @@ async fn add_movie(
         )
     })?;
 
+    let tmdb_id = body.tmdb_id.ok_or_else(|| {
+        (
+            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "tmdb_id is required for movies".to_string(),
+        )
+    })?;
+
     match client
-        .add_movie_by_tmdb(body.tmdb_id, 1, &root_folder.path)
+        .add_movie_by_tmdb(tmdb_id, 1, &root_folder.path)
         .await
     {
         Ok(movie_id) => Ok(Json(AddToLibraryResponse {

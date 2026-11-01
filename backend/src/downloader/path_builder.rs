@@ -8,9 +8,12 @@ use std::path::Path;
 /// TMDB metadata for organizing downloads into folder structures
 #[derive(Debug, Clone)]
 pub struct TmdbDownloadMetadata {
-    /// TMDB ID
+    /// TMDB ID. Movie: canonical. TV: bridge/backcompat only.
     #[allow(dead_code)]
     pub tmdb_id: Option<i64>,
+    /// TVDB ID. TV: canonical identity for Sonarr. Movie: unused.
+    #[allow(dead_code)]
+    pub tvdb_id: Option<i64>,
     /// Media type: "movie" or "tv"
     #[allow(dead_code)]
     pub media_type: Option<String>,

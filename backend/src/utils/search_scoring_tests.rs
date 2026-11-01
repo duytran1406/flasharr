@@ -175,10 +175,10 @@ mod search_scoring_tests {
 
     #[test]
     fn test_tv_series_year_tolerance() {
-        // TV show from 2011, searching for Season 5 from 2015
+        // TV show premiered years before the searched season
         let score = calculate_match_score(
-            "Game of Thrones",
-            "Game.of.Thrones.S05E01.2015.1080p.mkv",
+            "Long Running Series",
+            "Long.Running.Series.S05E01.2015.1080p.mkv",
             Some(2015),
             Some(2011), // Show premiered in 2011
             &[],
@@ -276,5 +276,51 @@ mod search_scoring_tests {
             "New approach should handle subtitles: got {}",
             new_score
         );
+    }
+
+    #[test]
+    fn test_hopper_movie_beats_tv_style_match_for_movie_queries() {
+        let movie_score = calculate_match_score(
+            "Hopper",
+            "Hopper.2024.1080p.WEB-DL.H264.mkv",
+            Some(2024),
+            Some(2024),
+            &[],
+            false,
+        );
+
+        let tvish_score = calculate_match_score(
+            "Hopper",
+            "Hopper.S01E01.2024.1080p.WEB-DL.H264.mkv",
+            Some(2024),
+            Some(2024),
+            &[],
+            false,
+        );
+
+        assert!(movie_score >= tvish_score);
+    }
+
+    #[test]
+    fn franchise_sequel_is_not_a_valid_match() {
+        let match_result =
+            calculate_unified_similarity("Alien", "Alien.Romulus.2024.1080p.WEB-DL.mkv", &[]);
+
+        assert!(!match_result.is_valid);
+        assert_eq!(match_result.match_type, "franchise_conflict");
+    }
+
+    #[test]
+    fn title_mismatch_is_not_salvaged_by_quality() {
+        let score = calculate_match_score(
+            "The Matrix",
+            "The.Matrix.Resurrections.2021.2160p.REMUX.mkv",
+            Some(2021),
+            Some(1999),
+            &[],
+            false,
+        );
+
+        assert!(score < 0.65);
     }
 }

@@ -1,22 +1,59 @@
-use axum::{routing::get, Json, Router};
+use axum::http::{HeaderValue, Method};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{any, get},
+    Json, Router,
+};
+use chrono::Timelike;
 use figment::providers::Format;
 use moka::future::Cache;
 use serde::Serialize;
 use std::net::SocketAddr;
 use std::time::Duration;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
+const TORRENT_DOWNLOAD_REF_CAPACITY: u64 = 50_000;
+
+#[cfg(test)]
+mod cache_tests {
+    use super::TORRENT_DOWNLOAD_REF_CAPACITY;
+    use moka::future::Cache;
+
+    #[tokio::test]
+    async fn cached_search_refs_survive_a_large_result_set() {
+        let refs = Cache::builder()
+            .max_capacity(TORRENT_DOWNLOAD_REF_CAPACITY)
+            .build();
+        refs.insert("first".into(), "locator".into()).await;
+        for index in 0..1_000 {
+            refs.insert(format!("ref-{index}"), format!("url-{index}"))
+                .await;
+        }
+        refs.run_pending_tasks().await;
+        assert_eq!(refs.get("first").await.as_deref(), Some("locator"));
+    }
+}
 
 mod api;
 mod arr;
 mod config;
 mod constants;
 mod db;
+mod debrid;
 mod downloader;
 mod error;
 mod hosts;
+mod metadata;
+mod providers;
 mod services;
+mod sources;
+mod stremio;
+mod torbox;
+mod torrent;
 mod utils;
 mod websocket;
 
@@ -40,6 +77,8 @@ pub struct TmdbEnrichmentCache {
     pub us_titles: Vec<String>,
     /// Poster path
     pub poster: Option<String>,
+    /// Release/first-air year from TMDB.
+    pub year: Option<u32>,
     /// Movie collection parts: (title, year, tmdb_id, poster)
     pub collections: Vec<(String, String, u64, Option<String>)>,
 }
@@ -50,16 +89,26 @@ pub struct AppState {
     pub download_orchestrator: Arc<downloader::DownloadOrchestrator>,
     pub download_service: Arc<services::DownloadService>,
     pub tmdb_service: Arc<services::TmdbService>,
+    pub tvdb_service: Arc<services::TvdbService>,
     pub folder_cache_service: Arc<services::FolderCacheService>,
     pub tx_broadcast: tokio::sync::broadcast::Sender<downloader::task::DownloadTask>,
+    pub integration_settings_tx: tokio::sync::broadcast::Sender<()>,
     pub config: config::Config,
+    pub arr_config_update_lock: Arc<tokio::sync::Mutex<()>>,
+    pub metadata_update_lock: Arc<tokio::sync::Mutex<()>>,
     pub db: Arc<db::Db>,
     pub search_cache: Cache<String, api::smart_search::SmartSearchResponse>,
     pub tmdb_cache: Cache<String, TmdbEnrichmentCache>,
     /// Shared HTTP client for search endpoints (connection pooling + TLS reuse)
     pub http_client: Arc<reqwest::Client>,
-    /// Cache for TimFshare search results (avoids duplicate API calls)
-    pub fshare_search_cache: Cache<String, Vec<api::search_pipeline::RawFshareResult>>,
+    /// Integration probes must never forward API keys across redirects.
+    pub integration_probe_client: Arc<reqwest::Client>,
+    /// Short-lived server-side provider download refs; keeps Prowlarr API keys out of UI.
+    pub torrent_download_refs: Cache<String, String>,
+    pub torrent_info_hashes: Cache<String, String>,
+    /// Full read-only TorBox cache manifests, shared across Smart Search stages.
+    pub torbox_cache_hits: Cache<String, Option<torbox::client::TorBoxCacheHit>>,
+    pub qbit_manager: Arc<torrent::instance_manager::QbitInstanceManager>,
     pub discovery_service: Arc<services::DiscoveryService>,
     pub library_sync_service: Arc<services::LibrarySyncService>,
 }
@@ -70,25 +119,77 @@ struct HealthResponse {
     version: &'static str,
 }
 
-async fn health() -> Json<HealthResponse> {
+#[derive(Serialize)]
+struct ApiErrorResponse {
+    error: &'static str,
+    message: &'static str,
+}
+
+async fn api_not_found() -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ApiErrorResponse {
+            error: "not_found",
+            message: "API endpoint not found",
+        }),
+    )
+}
+
+async fn health(State(state): State<Arc<AppState>>) -> Json<HealthResponse> {
+    let status = if state.db.get_folder_cache_count().is_ok() {
+        "ok"
+    } else {
+        "unhealthy"
+    };
+
     Json(HealthResponse {
-        status: "ok",
+        status,
         version: env!("CARGO_PKG_VERSION"),
     })
 }
 
+fn duration_until_next_daily_sync() -> Duration {
+    use chrono::{Days, Local, LocalResult, TimeZone};
+
+    let now = Local::now();
+    let today = now.date_naive();
+    let next_day = today.checked_add_days(Days::new(1)).unwrap_or(today);
+    let target_date = if now.hour() < 1 { today } else { next_day };
+    let target_naive = target_date.and_hms_opt(1, 0, 0).unwrap();
+    let next_run = match Local.from_local_datetime(&target_naive) {
+        LocalResult::Single(dt) => dt,
+        LocalResult::Ambiguous(dt, _) => dt,
+        LocalResult::None => now + chrono::Duration::hours(1),
+    };
+
+    (next_run - now)
+        .to_std()
+        .unwrap_or_else(|_| Duration::from_secs(60))
+}
+
 #[tokio::main]
 async fn main() {
+    // Create appData directory structure before configuring the file-backed log sink.
+    if let Err(e) = config::ensure_appdata_dirs() {
+        eprintln!("Failed to create appData directories: {e}. Continuing with legacy paths.");
+    }
+    let log_dir = config::get_appdata_dir().join("logs");
+    let file_appender = tracing_appender::rolling::daily(log_dir, "flasharr.log");
+    let (file_writer, _log_guard) = tracing_appender::non_blocking(file_appender);
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(
             std::env::var("RUST_LOG").unwrap_or_else(|_| "flasharr=debug,tower_http=debug".into()),
         ))
         .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_writer(file_writer),
+        )
         .init();
 
     tracing::info!("Starting Flasharr v{}", env!("CARGO_PKG_VERSION"));
 
-    // Create appData directory structure if needed
     if let Err(e) = config::ensure_appdata_dirs() {
         tracing::warn!(
             "Failed to create appData directories: {}. Continuing with legacy paths.",
@@ -116,18 +217,11 @@ async fn main() {
     // Initialize Database
     let db = Arc::new(db::Db::new(&db_path).expect("Failed to initialize database"));
 
-    // Ensure indexer API key exists (generate if needed)
-    if db.get_setting("indexer_api_key").ok().flatten().is_none() {
-        let api_key = format!("flasharr_{}", uuid::Uuid::new_v4().simple());
-        if let Err(e) = db.save_setting("indexer_api_key", &api_key) {
-            tracing::warn!("Failed to save generated API key: {}", e);
-        } else {
-            tracing::info!("Generated new indexer API key: {}", api_key);
-        }
-    }
+    // Security hardening: do not auto-generate or log indexer API keys.
 
     // Initialize components
     let (tx_broadcast, _) = tokio::sync::broadcast::channel(100);
+    let (integration_settings_tx, _) = tokio::sync::broadcast::channel(16);
     let shared_http_client = hosts::create_shared_client();
     let host_registry = Arc::new(hosts::create_registry(
         &config,
@@ -231,45 +325,48 @@ async fn main() {
         tracing::info!("Using download directory: {}", current_dir.display());
     }
 
-    // Load Arr configuration from database (setup wizard saves here)
-    // This ensures webhook handler initializes correctly even if settings were saved before
-    let sonarr_config = if let (Some(url), Some(api_key)) = (
-        db.get_setting("sonarr_url").ok().flatten(),
-        db.get_setting("sonarr_api_key").ok().flatten(),
-    ) {
-        if !url.is_empty() && !api_key.is_empty() {
-            tracing::info!("Loading Sonarr config from database: {}", url);
-            Some(config::ArrConfig {
-                enabled: true,
-                url,
-                api_key,
-                auto_import: true,
-            })
-        } else {
-            config.sonarr.clone()
-        }
-    } else {
-        config.sonarr.clone()
+    // Database settings override config.toml only when an integration is explicitly enabled.
+    let sonarr_config = api::settings::effective_arr_config(&db, "sonarr", config.sonarr.clone());
+    let radarr_config = api::settings::effective_arr_config(&db, "radarr", config.radarr.clone());
+
+    let qbittorrent_config = torrent::qbittorrent::QBittorrentConfig {
+        enabled: db
+            .get_setting("qbittorrent_enabled")
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(false),
+        url: db
+            .get_setting("qbittorrent_url")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "http://localhost:8080".to_string()),
+        username: db
+            .get_setting("qbittorrent_username")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "admin".to_string()),
+        password: db
+            .get_setting("qbittorrent_password")
+            .ok()
+            .flatten()
+            .unwrap_or_default(),
+        category: db.get_setting("qbittorrent_category").ok().flatten(),
+        save_path: db.get_setting("qbittorrent_save_path").ok().flatten(),
+        poll_interval_secs: db
+            .get_setting("qbittorrent_poll_interval_secs")
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(5)
+            .max(2),
+        instance_id: Some("default".to_string()),
+        instance_name: Some("qBittorrent".to_string()),
     };
 
-    let radarr_config = if let (Some(url), Some(api_key)) = (
-        db.get_setting("radarr_url").ok().flatten(),
-        db.get_setting("radarr_api_key").ok().flatten(),
-    ) {
-        if !url.is_empty() && !api_key.is_empty() {
-            tracing::info!("Loading Radarr config from database: {}", url);
-            Some(config::ArrConfig {
-                enabled: true,
-                url,
-                api_key,
-                auto_import: true,
-            })
-        } else {
-            config.radarr.clone()
-        }
-    } else {
-        config.radarr.clone()
-    };
+    let qbit_manager = Arc::new(torrent::instance_manager::QbitInstanceManager::new(
+        Arc::clone(&db),
+    ));
 
     // Create download orchestrator with new architecture
     let download_orchestrator = Arc::new(downloader::DownloadOrchestrator::new(
@@ -278,16 +375,18 @@ async fn main() {
         Some(Arc::clone(&db)),
         sonarr_config.clone(),
         radarr_config.clone(),
+        qbittorrent_config,
+        Some(Arc::clone(&qbit_manager)),
     ));
 
-    // Start orchestrator workers
-    download_orchestrator.start().await;
-    tracing::info!("Download orchestrator started with new architecture");
+    let _ = qbit_manager.initial_full_sync().await;
 
-    // Load pending tasks (QUEUED, PAUSED) from database into TaskManager
-    // This ensures resume/pause operations work correctly via WebSocket updates
+    // Restore persisted tasks only after the qB full-sync barrier; workers start last.
     let pending_count = download_orchestrator.load_pending_tasks().await;
     tracing::info!("Loaded {} pending tasks from database", pending_count);
+    qbit_manager.clone().start();
+    download_orchestrator.start().await;
+    tracing::info!("Download orchestrator started with new architecture");
 
     // Initialize Caches
     let search_cache = Cache::builder()
@@ -310,11 +409,28 @@ async fn main() {
             .build()
             .unwrap_or_default(),
     );
+    let integration_probe_client = Arc::new(
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("integration probe client must build"),
+    );
 
-    // TimFshare response cache (5 min TTL)
-    let fshare_search_cache = Cache::builder()
-        .max_capacity(200)
-        .time_to_live(Duration::from_secs(300)) // 5 minutes
+    // Keep opaque locators alive for every cached search response. A single
+    // multi-query search can register hundreds of refs; 500 allowed valid
+    // 10-minute search responses to outlive their download selections.
+    let torrent_download_refs = Cache::builder()
+        .max_capacity(TORRENT_DOWNLOAD_REF_CAPACITY)
+        .time_to_live(Duration::from_secs(1800)) // 30 minutes
+        .build();
+    let torrent_info_hashes = Cache::builder()
+        .max_capacity(2_000)
+        .time_to_live(Duration::from_secs(86_400))
+        .build();
+    let torbox_cache_hits = Cache::builder()
+        .max_capacity(10_000)
+        .time_to_live(Duration::from_secs(30))
         .build();
 
     // Create DownloadService for business logic abstraction
@@ -323,8 +439,23 @@ async fn main() {
         Arc::clone(&download_orchestrator),
     ));
 
-    // Create TmdbService for centralized TMDB API access
-    let tmdb_service = Arc::new(services::TmdbService::new_with_default_client());
+    // Encrypted database credentials override environment/config fallbacks at startup.
+    let tmdb_key =
+        api::metadata_settings::startup_key(&db, "tmdb", config.external.tmdb_api_key.clone())
+            .unwrap_or_else(|_| {
+                tracing::error!("Stored TMDB key unavailable; provider disabled");
+                String::new()
+            });
+    let tvdb_key =
+        api::metadata_settings::startup_key(&db, "tvdb", config.external.tvdb_api_key.clone())
+            .unwrap_or_else(|_| {
+                tracing::error!("Stored TVDB key unavailable; provider disabled");
+                String::new()
+            });
+    let tmdb_service = Arc::new(services::TmdbService::new_with_api_key(tmdb_key));
+    let tvdb_service = Arc::new(services::TvdbService::new_with_default_client(Some(
+        tvdb_key,
+    )));
 
     // Create FolderCacheService for folder source caching
     let folder_cache_service = Arc::new(services::FolderCacheService::new(
@@ -342,23 +473,12 @@ async fn main() {
         Arc::clone(&db),
         Arc::clone(&download_orchestrator),
         Arc::clone(&tmdb_service),
-        Arc::clone(&http_client),
+        Arc::clone(&folder_cache_service),
     ));
 
-    // Create LibrarySyncService (gets client from orchestrator when available)
-    let ar_client = download_orchestrator
-        .get_arr_client()
-        .await
-        .unwrap_or_else(|| {
-            // Fallback: create a temporary client if orchestrator's hasn't loaded (unlikely)
-            Arc::new(arr::ArrClient::new(
-                sonarr_config.clone(),
-                radarr_config.clone(),
-            ))
-        });
     let library_sync_service = Arc::new(services::LibrarySyncService::new(
         Arc::clone(&db),
-        ar_client,
+        Arc::clone(&download_orchestrator),
     ));
 
     let state = Arc::new(AppState {
@@ -366,91 +486,129 @@ async fn main() {
         download_orchestrator,
         download_service,
         tmdb_service,
+        tvdb_service,
         folder_cache_service: Arc::clone(&folder_cache_service),
         tx_broadcast,
+        integration_settings_tx,
         config: app_config,
+        arr_config_update_lock: Arc::new(tokio::sync::Mutex::new(())),
+        metadata_update_lock: Arc::new(tokio::sync::Mutex::new(())),
         db,
         search_cache,
         tmdb_cache,
         http_client,
-        fshare_search_cache,
+        integration_probe_client,
+        torrent_download_refs,
+        torrent_info_hashes,
+        torbox_cache_hits,
+        qbit_manager: Arc::clone(&qbit_manager),
         discovery_service,
         library_sync_service: Arc::clone(&library_sync_service),
     });
-
     // Build router
     // Web app routes — no key required (served to the browser UI)
-    let app_routes = Router::new()
-        .route("/health", get(health))
-        .route("/api/health", get(health))
-        .route("/api/health/status", get(api::health::health_status))
-        .nest("/api/setup", api::setup::router())
+    let protected_api_routes = Router::new()
         .route("/api/ws", get(websocket::handler))
-        .nest("/api/downloads", api::downloads::router())
+        .nest("/api/kpi", api::kpi::router())
         .nest("/api/stats", api::stats::router())
         .nest("/api/system", api::system::router())
-        .nest("/api/search", api::search::router())
         .nest("/api/accounts", api::accounts::router())
-        .nest("/api/settings", api::settings::router())
-        .nest("/api/tmdb", api::tmdb::router())
-        .nest("/api/discovery", api::discovery::router())
+        .nest("/api/providers", providers::router())
         .nest("/api/arr", api::arr::router())
         .nest("/api/media", api::media::router())
+        .nest("/api/downloads", api::downloads::router())
+        .nest("/api/instances", api::qbittorrent::router())
+        .nest("/api/settings", api::settings::router())
         .nest("/api/folder-source", api::folder_source::router())
-        .route(
-            "/sabnzbd",
-            get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post),
-        )
-        .route(
-            "/sabnzbd/",
-            get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post),
-        )
-        .route(
-            "/sabnzbd/api",
-            get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post),
-        )
-        .route(
-            "/sabnzbd/api/",
-            get(api::sabnzbd::handle_get).post(api::sabnzbd::handle_post),
-        );
-
-    // External integration routes — require API key (called by Jellyflix/other integrations)
-    let external_routes = Router::new()
-        .nest("/api/indexer", api::indexer::router())
-        .nest("/newznab/api", api::indexer::router()) // Standard Newznab path
-        .nest("/api/auth", api::auth::router()) // Key verification for Jellyflix
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             api::auth::auth_middleware,
         ));
 
+    let public_api_routes = Router::new()
+        .route("/health", get(health))
+        .route("/api/health", get(health))
+        .route("/api/health/status", get(api::health::health_status))
+        .nest("/api/auth", api::auth::router())
+        .nest(
+            "/api/setup",
+            api::setup::router().layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                api::auth::setup_auth_middleware,
+            )),
+        )
+        .nest("/api/search", api::search::router())
+        .nest("/api/tmdb", api::tmdb::router())
+        .nest("/api/discovery", api::discovery::router())
+        .nest("/api/discover", api::discovery::router())
+        .merge(protected_api_routes)
+        .nest(
+            "/sabnzbd",
+            api::sabnzbd::router().layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                api::auth::indexer_auth_middleware,
+            )),
+        );
+
+    let app_routes = public_api_routes
+        .route_service("/downloads", ServeFile::new("static/index.html"))
+        .route_service("/downloads/", ServeFile::new("static/index.html"));
+
+    // External integration routes — require API key (called by Jellyflix/other integrations)
+    let external_routes = Router::new()
+        .nest("/api/indexer", api::indexer::router())
+        .nest("/newznab/api", api::indexer::router()) // Standard Newznab path
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            api::auth::indexer_auth_middleware,
+        ));
+
     let app = Router::new()
         .merge(app_routes)
         .merge(external_routes)
+        .route("/api/does-not-exist", any(api_not_found))
+        .fallback_service(ServeDir::new("static").fallback(ServeFile::new("static/index.html")))
         .layer(
             CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
+                .allow_origin(AllowOrigin::list([
+                    HeaderValue::from_static("http://localhost:3000"),
+                    HeaderValue::from_static("http://127.0.0.1:3000"),
+                    HeaderValue::from_static("http://192.168.1.112:8484"),
+                    HeaderValue::from_static("http://192.168.1.110:8096"),
+                ]))
+                .allow_methods([
+                    Method::GET,
+                    Method::POST,
+                    Method::PUT,
+                    Method::DELETE,
+                    Method::OPTIONS,
+                ])
+                .allow_headers([
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::header::AUTHORIZATION,
+                    axum::http::header::HeaderName::from_static("x-api-key"),
+                ]),
         )
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .fallback_service(
-            ServeDir::new("static").not_found_service(ServeFile::new("static/index.html")),
-        )
         .with_state(state);
 
-    // Spawn folder cache background sync (daily)
+    // Spawn folder cache background sync (daily at local 01:00)
     tokio::spawn(async move {
-        // Initial sync on startup (if cache is stale or empty)
         folder_cache_service.sync_if_stale().await;
 
-        // Then sync every 24 hours
-        let mut interval = tokio::time::interval(Duration::from_secs(86400));
-        interval.tick().await; // Skip the first immediate tick (already synced above)
         loop {
-            interval.tick().await;
+            let sleep_for = duration_until_next_daily_sync();
+            tracing::info!(
+                "[FOLDER-CACHE] Next scheduled sync in {}s",
+                sleep_for.as_secs()
+            );
+            tokio::time::sleep(sleep_for).await;
+
             tracing::info!("[FOLDER-CACHE] Starting scheduled daily sync");
-            match folder_cache_service.sync_all_sources().await {
+            match folder_cache_service
+                .sync_all_sources_with_options(true)
+                .await
+            {
                 Ok(report) => {
                     tracing::info!(
                         "[FOLDER-CACHE] Daily sync complete: {} items from {} sources in {:.1}s",

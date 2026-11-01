@@ -133,11 +133,7 @@ impl SimpleDownloadEngine {
             dest_path.extension().and_then(|e| e.to_str()).unwrap_or("")
         ));
 
-        tracing::info!(
-            "Starting single-stream download: {} -> {:?}",
-            url,
-            temp_destination
-        );
+        tracing::info!("Starting single-stream download -> {:?}", temp_destination);
 
         let total_downloaded = self
             .download_single_stream(url, &temp_destination, cancel_token, progress_callback)
