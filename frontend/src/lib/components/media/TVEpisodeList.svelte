@@ -10,7 +10,7 @@
   interface Props {
     tv: TMDBTVShowDetails | null;
     seasonDetails: TMDBSeasonDetails | null;
-    selectedSeason?: number;
+    selectedSeason?: number | null;
     loading: boolean;
     loadingSeason: boolean;
     onSeasonChange: (season: number) => void;
