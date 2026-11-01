@@ -61,7 +61,7 @@
         autocomplete="username"
         minlength="3"
         maxlength="64"
-        required=""
+        required
       />
     </label>
     <label>
@@ -72,7 +72,7 @@
         autocomplete={needsSetup ? "new-password" : "current-password"}
         minlength="12"
         maxlength="256"
-        required=""
+        required
       />
     </label>
     {#if error}
