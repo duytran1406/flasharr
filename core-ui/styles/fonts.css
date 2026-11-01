@@ -1,0 +1,28 @@
+/*
+ * Display fonts used by the media-set apps.
+ * The font files are served from the app's public dir (SvelteKit: static/fonts/).
+ */
+
+@font-face {
+  font-family: "Neotriad";
+  src: url("/fonts/NeotriadFree-1jzAg.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Cyber City";
+  src: url("/fonts/Cyber%20City.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Hybrid B";
+  src: url("/fonts/Hybrid_b.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}

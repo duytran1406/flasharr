@@ -26,7 +26,7 @@
 	},
 	"dependencies": {
 		"@fontsource/inter": "^5.2.8",
-		"@media-set/core-ui": "*",
+		"@media-set/core-ui": "file:../core-ui",
 		"animejs": "^4.0.0",
 		"chart.js": "^4.5.1",
 		"lucide-svelte": "^0.562.0"

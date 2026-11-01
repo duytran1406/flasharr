@@ -1,0 +1,30 @@
+{
+  "name": "@media-set/core-ui",
+  "version": "0.0.0-recovered",
+  "private": true,
+  "description": "Shared Svelte 5 UI kit for the media-set apps (Flasharr). Recovered from compiled output.",
+  "type": "module",
+  "svelte": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "svelte": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./animations": {
+      "types": "./src/animations/index.ts",
+      "default": "./src/animations/index.ts"
+    },
+    "./styles/*": {
+      "style": "./styles/*",
+      "default": "./styles/*"
+    }
+  },
+  "dependencies": {
+    "animejs": "^4.0.0"
+  },
+  "peerDependencies": {
+    "svelte": "^5.0.0"
+  }
+}

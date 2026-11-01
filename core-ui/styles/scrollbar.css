@@ -1,0 +1,20 @@
+/* Thin translucent scrollbars (WebKit + Firefox). Recovered from compiled CSS. */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: 0 0;
+}
+::-webkit-scrollbar-thumb {
+  background: #ffffff1a;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #fff3;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #ffffff1a transparent;
+}
