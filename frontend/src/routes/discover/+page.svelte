@@ -1,23 +1,42 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { animeFly } from "$lib/animations";
+  import { page } from "$app/stores";
+  import DiscoverFilterBar, {
+    type DiscoverMediaType,
+    type UnifiedGenre,
+  } from "$lib/components/DiscoverFilterBar.svelte";
+  import DiscoverResultsGrid, {
+    type DiscoverBadge,
+    type DiscoverItem,
+    type DiscoverStatusType,
+    type PoolSlot,
+  } from "$lib/components/discover/DiscoverResultsGrid.svelte";
   import type { TMDBMovie, TMDBTVShow } from "$lib/types/tmdb";
-  import { MediaCard, ErrorState } from "$lib/components";
-  import DiscoverFilterBar, { type UnifiedGenre } from "$lib/components/DiscoverFilterBar.svelte";
+  import { fetchAllMovies, type RadarrMovie } from "$lib/stores/arr";
+  import { onDownloadEvent } from "$lib/stores/downloads.svelte";
 
   // ============= CONFIGURATION =============
   const ITEMS_PER_PAGE = 20; // TMDB returns 20 per page
   const POOL_SIZE = 1000;    // Pre-create 1000 slots for extensive scrolling
 
-  // ============= POOL SLOT TYPE =============
-  interface PoolSlot {
-    slotId: number;
-    visible: boolean;
-    data: TMDBMovie | TMDBTVShow | null;
+  // ============= LIBRARY STATE (status badges on cards) =============
+  let libraryMovies = $state<RadarrMovie[]>([]);
+  let downloadingTmdbIds = $state(new Set<number>());
+
+  function libraryByTmdbId(): Map<number, RadarrMovie> {
+    return new Map(libraryMovies.map((movie) => [Number(movie.tmdbId), movie]));
+  }
+
+  async function loadLibrary() {
+    try {
+      libraryMovies = await fetchAllMovies();
+    } catch {
+      // Status badges are optional; keep the previous library snapshot
+    }
   }
 
   // ============= FILTER STATE =============
-  let mediaType: "movie" | "tv" = $state("movie");
+  let mediaType = $state<DiscoverMediaType>("movie");
   let sortBy = $state("popularity.desc");
   let searchQuery = $state("");
   let fromYear = $state("");
@@ -29,6 +48,23 @@
   // Exposed from DiscoverFilterBar (resolved IDs for current mediaType)
   let resolvedGenreIds = $state<number[]>([]);
   let hasFilter = $state(false);
+
+  // Resolve genre IDs synchronously so a fetch right after a toggle sees the new selection
+  function resolveGenreIds(genres: UnifiedGenre[], type: DiscoverMediaType): number[] {
+    return genres
+      .map((g) => (type === "movie" ? g.movieId : g.tvId))
+      .filter((id): id is number => id !== null);
+  }
+
+  function hasActiveFilters(): boolean {
+    return (
+      selectedGenres.length > 0 ||
+      fromYear !== "" ||
+      toYear !== "" ||
+      minRating > 0 ||
+      maxRating < 10
+    );
+  }
 
   // ============= OBJECT POOL =============
   let pool = $state<PoolSlot[]>(
@@ -49,18 +85,15 @@
   let currentPage = $state(1);
   let hasMore = $state(true);
   let scrollContainer: HTMLElement;
+  let scrollTimeout: number | undefined;
 
   // ============= POOL MANAGEMENT =============
-  function addItemsToPool(items: (TMDBMovie | TMDBTVShow)[]) {
+  function addItemsToPool(items: DiscoverItem[]) {
     for (const item of items) {
-      if (nextPoolIndex < POOL_SIZE) {
-        pool[nextPoolIndex].data = item;
-        pool[nextPoolIndex].visible = true;
-        nextPoolIndex++;
-      } else {
-        console.warn("[Discover] Pool is full");
-        break;
-      }
+      if (nextPoolIndex >= POOL_SIZE) break;
+      pool[nextPoolIndex].data = item;
+      pool[nextPoolIndex].visible = true;
+      nextPoolIndex++;
     }
   }
 
@@ -79,16 +112,13 @@
     if (activeAbortController) activeAbortController.abort();
     activeAbortController = new AbortController();
     const requestId = ++lastRequestId;
-    const timeoutId = setTimeout(() => {
-      console.error("[Discover] Request timeout");
-      activeAbortController?.abort();
-    }, 10000);
+    const timeoutId = setTimeout(() => activeAbortController?.abort(), 10000);
 
     const requestType = mediaType;
     const requestQuery = searchQuery;
     const requestSort = sortBy;
     const requestPage = reset ? 1 : currentPage;
-    const requestGenres = [...resolvedGenreIds];
+    const requestGenres = resolveGenreIds(selectedGenres, requestType);
     const requestFromYear = fromYear;
     const requestToYear = toYear;
     const requestMinRating = minRating;
@@ -105,17 +135,20 @@
     try {
       let url = "";
 
-      if (requestSort === "popular_today") {
+      if (requestSort === "popular_today" && !hasActiveFilters()) {
         url = `/api/discovery/popular-today?type=${requestType}&page=${requestPage}&limit=${ITEMS_PER_PAGE}`;
       } else if (requestQuery.trim()) {
         const q = encodeURIComponent(requestQuery);
         url = `/api/tmdb/search?q=${q}&media_type=${requestType}&page=${requestPage}`;
       } else {
-        url = `/api/tmdb/discover/${requestType}?page=${requestPage}&sort_by=${requestSort}`;
-
+        // "Popular Today" has no discover equivalent once filters are set
+        const discoverSort =
+          requestSort === "popular_today" ? "popularity.desc" : requestSort;
         // Date param differs for movies vs TV
         const dateParam =
           requestType === "movie" ? "primary_release_date" : "first_air_date";
+
+        url = `/api/tmdb/discover/${requestType}?page=${requestPage}&sort_by=${discoverSort}`;
 
         if (requestFromYear) url += `&${dateParam}.gte=${requestFromYear}-01-01`;
         if (requestToYear)   url += `&${dateParam}.lte=${requestToYear}-12-31`;
@@ -133,44 +166,37 @@
       const data = await res.json();
       clearTimeout(timeoutId);
 
-      if (requestId !== lastRequestId) {
-        console.warn(`[Discover] Request #${requestId} stale`);
-        return;
-      }
-
+      // Drop stale responses (a newer request or a filter change happened meanwhile)
       if (
+        requestId !== lastRequestId ||
         requestType !== mediaType ||
         requestQuery !== searchQuery ||
         requestSort !== sortBy
       ) {
-        console.warn("[Discover] Discarding stale results");
         return;
       }
 
-      let newItems: (TMDBMovie | TMDBTVShow)[] = data.results || [];
-      if (!Array.isArray(newItems)) throw new Error("Invalid API response");
+      let newItems: DiscoverItem[] = Array.isArray(data.results) ? data.results : [];
 
-      // Client-side filter pass when querying (TMDB search ignores filter params)
-      if (requestQuery.trim()) {
-        if (requestMinRating > 0)
-          newItems = newItems.filter((i) => (i.vote_average || 0) >= requestMinRating);
-        if (requestMaxRating < 10)
-          newItems = newItems.filter((i) => (i.vote_average || 0) <= requestMaxRating);
-        if (requestGenres.length > 0)
-          newItems = newItems.filter((i) =>
-            (i as any).genre_ids?.some((id: number) => requestGenres.includes(id))
-          );
-        if (requestFromYear || requestToYear) {
-          newItems = newItems.filter((i) => {
-            const dateStr =
-              (i as TMDBMovie).release_date || (i as TMDBTVShow).first_air_date;
-            if (!dateStr) return !requestFromYear;
-            const year = new Date(dateStr).getFullYear();
-            if (requestFromYear && year < parseInt(requestFromYear)) return false;
-            if (requestToYear && year > parseInt(requestToYear)) return false;
-            return true;
-          });
-        }
+      // Client-side filter pass (search and popular-today ignore filter params)
+      if (requestMinRating > 0)
+        newItems = newItems.filter((i) => (i.vote_average || 0) >= requestMinRating);
+      if (requestMaxRating < 10)
+        newItems = newItems.filter((i) => (i.vote_average || 0) <= requestMaxRating);
+      if (requestGenres.length > 0)
+        newItems = newItems.filter((i) =>
+          (i as any).genre_ids?.some((id: number) => requestGenres.includes(id))
+        );
+      if (requestFromYear || requestToYear) {
+        newItems = newItems.filter((i) => {
+          const dateStr =
+            (i as TMDBMovie).release_date || (i as TMDBTVShow).first_air_date;
+          if (!dateStr) return !requestFromYear;
+          const year = new Date(dateStr).getFullYear();
+          if (requestFromYear && year < parseInt(requestFromYear)) return false;
+          if (requestToYear && year > parseInt(requestToYear)) return false;
+          return true;
+        });
       }
 
       addItemsToPool(newItems);
@@ -178,10 +204,7 @@
       hasMore = newItems.length === ITEMS_PER_PAGE;
       error = null;
     } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
-        console.warn(`[Discover] Request #${requestId} aborted`);
-      } else {
-        console.error(`[Discover] Request #${requestId} failed:`, err);
+      if (!(err instanceof Error && err.name === "AbortError")) {
         error = err instanceof Error ? err.message : "Failed to load content";
         hasMore = false;
       }
@@ -193,8 +216,6 @@
   }
 
   // ============= SCROLL HANDLING =============
-  let scrollTimeout: number | undefined;
-
   function handleScroll() {
     if (!scrollContainer) return;
     if (scrollTimeout) clearTimeout(scrollTimeout);
@@ -207,11 +228,10 @@
   }
 
   // ============= FILTER CALLBACKS (passed to DiscoverFilterBar) =============
-
-  function handleMediaTypeChange(type: "movie" | "tv") {
+  function handleMediaTypeChange(type: DiscoverMediaType) {
+    // The discover page has no collection tab
+    if (type === "collections") return;
     mediaType = type;
-    // Reset genres that don't apply to the new type — the bar will re-filter availableGenres
-    // but we keep the selection; resolvedGenreIds will produce correct IDs automatically
     fetchDiscoverData(true);
   }
 
@@ -220,7 +240,7 @@
     fetchDiscoverData(true);
   }
 
-  let searchDebounceId: number;
+  let searchDebounceId: number | undefined;
   function handleSearchInput() {
     clearTimeout(searchDebounceId);
     searchDebounceId = window.setTimeout(() => fetchDiscoverData(true), 450);
@@ -233,9 +253,7 @@
     } else {
       selectedGenres = [...selectedGenres, genre];
     }
-    // resolvedGenreIds derived in the component; wait a tick then fetch
-    // Use setTimeout 0 so Svelte 5 flushes binding before fetch reads it
-    setTimeout(() => fetchDiscoverData(true), 0);
+    fetchDiscoverData(true);
   }
 
   function handleYearChange() {
@@ -257,7 +275,7 @@
   }
 
   // ============= HELPERS =============
-  function getBadge(item: TMDBMovie | TMDBTVShow): { text: string; variant: string } | null {
+  function getBadge(item: DiscoverItem): DiscoverBadge | null {
     const rating = item.vote_average || 0;
     const year =
       "release_date" in item
@@ -270,16 +288,77 @@
     return null;
   }
 
-  function getTitle(item: TMDBMovie | TMDBTVShow): string {
+  function getTitle(item: DiscoverItem): string {
     return "title" in item ? item.title : item.name;
   }
 
+  function getStatusType(item: DiscoverItem): DiscoverStatusType {
+    const tmdbId = Number(item.id);
+    if (downloadingTmdbIds.has(tmdbId)) return "purple";
+
+    const libraryItem = libraryByTmdbId().get(tmdbId);
+    if (!libraryItem) return "gray";
+
+    const releaseDate = "release_date" in item ? item.release_date : item.first_air_date;
+    const unreleased = releaseDate ? new Date(releaseDate).getTime() > Date.now() : false;
+    const monitored = libraryItem.monitored === true;
+    const hasFile = libraryItem.hasFile === true;
+
+    if (monitored && unreleased) return "blue";
+    if (!hasFile && !monitored) return "yellow";
+    if (!hasFile && monitored) return "red";
+    if (hasFile && monitored) return "green";
+    return "yellow";
+  }
+
+  function getStatusLabel(item: DiscoverItem): string {
+    const status = getStatusType(item);
+    if (status === "blue") return "MONITORED · UNRELEASED";
+    if (status === "yellow") return "MISSING · UNMONITORED";
+    if (status === "red") return "MISSING · MONITORED";
+    if (status === "green") return "DOWNLOADED · MONITORED";
+    if (status === "purple") return "DOWNLOADING";
+    return "NOT IN LIBRARY";
+  }
+
+  // /discover?search focuses the title search field
+  $effect(() => {
+    if ($page.url.searchParams.has("search")) {
+      requestAnimationFrame(() => document.getElementById("filter-search")?.focus());
+    }
+  });
+
   // ============= LIFECYCLE =============
   onMount(() => {
+    loadLibrary();
+
+    const stopTaskUpdated = onDownloadEvent("TASK_UPDATED", (event) => {
+      const task = event.detail as any;
+      const tmdbId = Number(task?.tmdb_id ?? task?.tmdbId);
+      if (!tmdbId) return;
+      if (String(task?.state || "").toUpperCase() === "COMPLETED") {
+        downloadingTmdbIds = new Set([...downloadingTmdbIds].filter((id) => id !== tmdbId));
+        loadLibrary();
+      } else {
+        downloadingTmdbIds = new Set([...downloadingTmdbIds, tmdbId]);
+      }
+    });
+
+    const stopTaskCompleted = onDownloadEvent("TASK_COMPLETED", (event) => {
+      const task = event.detail as any;
+      const tmdbId = Number(task?.tmdb_id ?? task?.tmdbId);
+      if (!tmdbId) return;
+      downloadingTmdbIds = new Set([...downloadingTmdbIds].filter((id) => id !== tmdbId));
+      loadLibrary();
+    });
+
     fetchDiscoverData(true);
+
     return () => {
       if (scrollTimeout) clearTimeout(scrollTimeout);
       if (activeAbortController) activeAbortController.abort();
+      stopTaskUpdated();
+      stopTaskCompleted();
     };
   });
 </script>
@@ -292,6 +371,13 @@
 
   <!-- ── Inline Filter Bar (replaces drawer sidebar) ─────────────────── -->
   <DiscoverFilterBar
+    onMediaTypeChange={handleMediaTypeChange}
+    onSortChange={handleSortChange}
+    onSearchInput={handleSearchInput}
+    onGenreToggle={handleGenreToggle}
+    onYearChange={handleYearChange}
+    onRatingChange={handleRatingChange}
+    onClearAll={handleClearAll}
     bind:mediaType
     bind:sortBy
     bind:searchQuery
@@ -302,13 +388,6 @@
     bind:maxRating
     bind:resolvedGenreIds
     bind:hasFilter
-    onMediaTypeChange={handleMediaTypeChange}
-    onSortChange={handleSortChange}
-    onSearchInput={handleSearchInput}
-    onGenreToggle={handleGenreToggle}
-    onYearChange={handleYearChange}
-    onRatingChange={handleRatingChange}
-    onClearAll={handleClearAll}
   />
 
   <!-- ── Scrollable Grid ─────────────────────────────────────────────── -->
@@ -317,56 +396,19 @@
     bind:this={scrollContainer}
     onscroll={handleScroll}
   >
-    <div class="discover-grid">
-      {#if loading && pool.filter((s) => s.visible).length === 0}
-        <div class="initial-loading">
-          <div class="spinner"></div>
-          <p>Loading content...</p>
-        </div>
-      {:else if error && pool.filter((s) => s.visible).length === 0}
-        <div class="error-container">
-          <ErrorState
-            title="Failed to load content"
-            message={error}
-            showRetry={true}
-            onRetry={() => fetchDiscoverData(true)}
-          />
-        </div>
-      {:else}
-        {#each pool as slot (slot.slotId)}
-          {#if slot.visible && slot.data}
-            <MediaCard
-              id={slot.data.id}
-              title={getTitle(slot.data)}
-              posterPath={slot.data.poster_path}
-              voteAverage={slot.data.vote_average}
-              releaseDate={"release_date" in slot.data
-                ? slot.data.release_date
-                : slot.data.first_air_date}
-              overview={slot.data.overview}
-              {mediaType}
-              badge={getBadge(slot.data)
-                ? {
-                    text: getBadge(slot.data)!.text,
-                    variant: getBadge(slot.data)!.variant,
-                  }
-                : undefined}
-            />
-          {/if}
-        {/each}
-      {/if}
-    </div>
-
-    {#if loading && pool.filter((s) => s.visible).length > 0}
-      <div class="loading-indicator">
-        <div class="spinner"></div>
-        <p>Loading more...</p>
-      </div>
-    {/if}
-
-    {#if !hasMore && pool.filter((s) => s.visible).length > 0 && !loading}
-      <p class="end-label">— end of results —</p>
-    {/if}
+    <DiscoverResultsGrid
+      {pool}
+      {loading}
+      {error}
+      {hasMore}
+      {mediaType}
+      {getTitle}
+      {getBadge}
+      {getStatusType}
+      {getStatusLabel}
+      onRetry={() => fetchDiscoverData(true)}
+      onClear={handleClearAll}
+    />
   </div>
 </div>
 
@@ -376,99 +418,44 @@
     flex-direction: column;
     height: 100%;
     background: transparent;
-    color: #fff;
+    color: var(--cui-text-primary);
     overflow: hidden;
     position: relative;
   }
 
   /* Scrollable Container */
   .discover-scroll-container {
+    position: relative;
+    z-index: 1;
     flex: 1;
     overflow-y: auto;
-    padding: 2rem 2.5rem 4rem;
-  }
-
-  /* Grid — 5 items per row on wide screens */
-  .discover-grid {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 1.5rem;
-    padding-bottom: 2rem;
-  }
-
-  .error-container,
-  .initial-loading {
-    grid-column: 1 / -1;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    min-height: 400px;
-    gap: 1rem;
-  }
-
-  .initial-loading p {
-    color: var(--text-muted);
-    font-size: 1rem;
-    font-family: var(--font-mono, monospace);
-    letter-spacing: 0.1em;
-  }
-
-  /* Loading */
-  .loading-indicator {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 4rem;
-    gap: 1.25rem;
-    color: var(--text-muted);
-  }
-
-  .spinner {
-    width: 30px;
-    height: 30px;
-    border: 2px solid rgba(0, 243, 255, 0.1);
-    border-top-color: var(--color-primary, #00f3ff);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-  }
-
-  @keyframes spin {
-    to { transform: rotate(360deg); }
-  }
-
-  .end-label {
-    text-align: center;
-    padding: 1.5rem 0 3rem;
-    color: rgba(255, 255, 255, 0.18);
-    font-size: 0.7rem;
-    font-family: var(--font-mono, monospace);
-    letter-spacing: 0.12em;
-  }
-
-  /* Responsive */
-  @media (max-width: 1280px) {
-    .discover-grid {
-      grid-template-columns: repeat(4, 1fr);
-      gap: 1.25rem;
-    }
-  }
-
-  @media (max-width: 1024px) {
-    .discover-grid {
-      grid-template-columns: repeat(3, 1fr);
-      gap: 1rem;
-    }
+    padding: var(--cui-space-xl) calc(var(--cui-space-xl) + var(--cui-space-xs))
+      var(--cui-space-xxl);
   }
 
   @media (max-width: 768px) {
-    .discover-grid {
-      grid-template-columns: repeat(2, 1fr);
-      gap: 0.75rem;
-    }
     .discover-scroll-container {
-      padding: 1rem 0.75rem 2rem;
+      padding: var(--cui-space-md) var(--cui-space-xs)
+        calc(var(--cui-mobile-bottom-nav-height) + var(--cui-space-xl));
+    }
+  }
+
+  @media (max-width: 767px) {
+    .discover-page {
+      padding-bottom: calc(
+        var(--cui-mobile-bottom-nav-height) + var(--cui-mobile-safe-area-bottom)
+      );
+    }
+
+    .discover-scroll-container {
+      padding-bottom: calc(
+        var(--cui-mobile-bottom-nav-height) + var(--cui-space-xxl) +
+          var(--cui-mobile-safe-area-bottom)
+      );
+      scroll-padding-bottom: calc(
+        var(--cui-mobile-bottom-nav-height) + var(--cui-space-xxl) +
+          var(--cui-mobile-safe-area-bottom)
+      );
     }
   }
 </style>
