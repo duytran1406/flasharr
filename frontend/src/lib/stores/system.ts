@@ -36,7 +36,7 @@ export interface ProwlarrSettings {
   enabled: boolean;
   url: string;
   api_key: string;
-  categories: string | null;
+  categories?: string | null;
   limit: number | null;
 }
 

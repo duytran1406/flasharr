@@ -633,7 +633,7 @@
       url: prowlarrUrl,
       api_key: prowlarrApiKey,
       limit: 50,
-    } as ProwlarrSettings);
+    });
     savingProwlarr = false;
     if (result.success) resetProwlarrForm();
     const message = result.message || (result.success ? "Prowlarr settings saved." : "Failed to save Prowlarr.");
@@ -648,7 +648,7 @@
       url: prowlarrUrl,
       api_key: prowlarrApiKey,
       limit: 50,
-    } as ProwlarrSettings);
+    });
     const message = result.message || (result.success ? "Prowlarr connected." : "Prowlarr failed.");
     if (result.success) toasts.success(message);
     else toasts.error(message);

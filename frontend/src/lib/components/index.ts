@@ -7,7 +7,6 @@ export { default as SkeletonCard } from './cards/SkeletonCard.svelte';
 
 // UI Components — re-exported from @media-set/core-ui (local ui/ files removed)
 export { Badge, Button, UserAvatar, ErrorState, Modal } from '@media-set/core-ui';
-export { default as IdentityCard } from './ui/IdentityCard.svelte';
 export { default as IntroOverlay } from './ui/IntroOverlay.svelte';
 
 // App shell
