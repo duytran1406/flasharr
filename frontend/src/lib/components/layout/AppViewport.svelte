@@ -242,6 +242,56 @@
     align-items: center;
   }
 
+  /* Header stat pills / connection badge (global: also used by page headers) */
+  :global(.stat-pill) {
+    background: var(--cui-input-bg) !important;
+    border: 1px solid var(--cui-glass-border) !important;
+    border-radius: var(--cui-radius-md) !important;
+    padding: .45rem .8rem !important;
+    height: auto !important;
+    gap: .6rem !important;
+    clip-path: none;
+    transition: all var(--cui-duration-base) var(--cui-ease-standard);
+  }
+
+  :global(.stat-pill .stat-value) {
+    font-family: var(--cui-font-mono) !important;
+    font-size: .8rem !important;
+    font-weight: 700 !important;
+    color: var(--cui-primary) !important;
+    font-variant-numeric: tabular-nums;
+  }
+
+  :global(.stat-pill .material-icons) {
+    font-size: 1rem !important;
+    opacity: .6;
+  }
+
+  :global(.connection-status) {
+    background: var(--cui-surface-focus) !important;
+    border: 1px solid var(--cui-glass-border) !important;
+    padding: .45rem .8rem !important;
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    border-radius: var(--cui-radius-md);
+    clip-path: none;
+  }
+
+  :global(.connection-status .status-text) {
+    font-family: var(--cui-font-mono) !important;
+    color: var(--cui-success) !important;
+  }
+
+  :global(.connection-status.disconnected) {
+    background: rgba(255, 82, 82, .05) !important;
+    border-color: var(--cui-danger) !important;
+  }
+
+  :global(.connection-status.disconnected .status-text) {
+    color: var(--cui-danger) !important;
+  }
+
   @media (max-width:767px),(pointer:coarse) and (max-height:500px) {
     .mobile-header {
       display: flex;
