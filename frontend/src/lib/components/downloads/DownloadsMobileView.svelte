@@ -933,5 +933,12 @@
       white-space:nowrap;
       flex-shrink:0;
     }
+    :global(.context-menu) {
+      left:50% !important;
+      top:50% !important;
+      transform:translate(-50%,-50%) !important;
+      min-width:260px;
+      max-width:calc(100vw - 2rem);
+    }
   }
 </style>

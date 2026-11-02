@@ -311,6 +311,14 @@
     white-space:nowrap;
   }
   @media(max-width:767px),(pointer:coarse)and (max-height:500px) {
+    :global(.context-menu) {
+      left:50% !important;
+      top:calc(50% - 36px) !important;
+      transform:translate(-50%,-50%) !important;
+      min-width:260px;
+      max-width:calc(100vw - 2rem);
+      max-height:calc(100dvh - 92px);
+    }
     .context-item {
       min-height:44px;
     }

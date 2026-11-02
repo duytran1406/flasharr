@@ -307,6 +307,10 @@
       display: none;
     }
 
+    :global(.view-container) {
+      padding-bottom: calc(var(--cui-mobile-bottom-nav-height) + var(--cui-mobile-safe-area-bottom)) !important;
+    }
+
   }
 
   @media (max-width:360px) {

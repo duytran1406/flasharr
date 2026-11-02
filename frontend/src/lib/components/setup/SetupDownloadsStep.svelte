@@ -191,6 +191,7 @@
   }
 
   .range-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
     appearance: none;
     width: 20px;
     height: 20px;
