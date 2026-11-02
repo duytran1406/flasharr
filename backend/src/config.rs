@@ -1,8 +1,8 @@
 //! Configuration module with appData support
 
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::env;
+use std::path::PathBuf;
 
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,6 +22,8 @@ pub struct Config {
 pub struct ExternalConfig {
     /// TMDB API key for metadata enrichment (env: TMDB_API_KEY)
     pub tmdb_api_key: String,
+    /// TVDB API key for TV metadata enrichment (env: TVDB_API_KEY)
+    pub tvdb_api_key: String,
     /// Cache TTL for TMDB queries in seconds (default: 3600)
     pub tmdb_cache_ttl_secs: u64,
     /// Cache TTL for Fshare search results in seconds (default: 300)
@@ -31,9 +33,8 @@ pub struct ExternalConfig {
 impl Default for ExternalConfig {
     fn default() -> Self {
         Self {
-            // Use env var if set, otherwise fallback to the bundled key
-            tmdb_api_key: env::var("TMDB_API_KEY")
-                .unwrap_or_else(|_| "8d95150f3391194ca66fef44df497ad6".to_string()),
+            tmdb_api_key: env::var("TMDB_API_KEY").unwrap_or_default(),
+            tvdb_api_key: env::var("TVDB_API_KEY").unwrap_or_default(),
             tmdb_cache_ttl_secs: 3600,
             fshare_cache_ttl_secs: 300,
         }
@@ -70,6 +71,13 @@ pub struct DownloadsConfig {
     pub directory: PathBuf,
     pub max_concurrent: usize,
     pub segments_per_download: u32,
+    /// Real (host-visible) base path for symlinks created in the media library.
+    /// When set, replaces the `directory` prefix in symlink sources so that
+    /// Sonarr/Radarr (running on a sibling LXC with the same shared storage)
+    /// can resolve the symlink target.
+    /// E.g. FLASHARR_SYMLINK_REAL_BASE=/data/flasharr-download
+    #[serde(default)]
+    pub symlink_real_base: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +105,9 @@ impl Default for Config {
                 directory: PathBuf::from("/downloads"),
                 max_concurrent: 3,
                 segments_per_download: 4,
+                symlink_real_base: env::var("FLASHARR_SYMLINK_REAL_BASE")
+                    .ok()
+                    .map(PathBuf::from),
             },
             fshare: FshareConfig {
                 email: "".to_string(),
@@ -108,7 +119,7 @@ impl Default for Config {
             radarr: None,
             indexer: Some(IndexerConfig {
                 enabled: true,
-                api_key: "flasharr-default-key".to_string(),
+                api_key: String::new(),
             }),
             external: ExternalConfig::default(),
         }
@@ -139,42 +150,42 @@ pub fn get_config_path() -> PathBuf {
 pub fn get_db_path() -> PathBuf {
     let appdata_dir = get_appdata_dir();
     let data_dir = appdata_dir.join("data");
-    
+
     // Create data directory if it doesn't exist
     if !data_dir.exists() {
         std::fs::create_dir_all(&data_dir).ok();
     }
-    
+
     data_dir.join("flasharr.db")
 }
 
 /// Create appData directory structure if it doesn't exist
 pub fn ensure_appdata_dirs() -> std::io::Result<()> {
     let appdata_dir = get_appdata_dir();
-    
+
     std::fs::create_dir_all(appdata_dir.join("config"))?;
     std::fs::create_dir_all(appdata_dir.join("data"))?;
     std::fs::create_dir_all(appdata_dir.join("downloads"))?;
     std::fs::create_dir_all(appdata_dir.join("logs"))?;
-    
+
     Ok(())
 }
 
 /// Save configuration to config.toml
 pub fn save_config(config: &Config) -> anyhow::Result<()> {
     let config_path = get_config_path();
-    
+
     // Ensure parent directory exists
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    
+
     // Serialize to TOML
     let toml_string = toml::to_string_pretty(config)?;
-    
+
     // Write to file
     std::fs::write(&config_path, toml_string)?;
-    
+
     tracing::info!("Configuration saved to {:?}", config_path);
     Ok(())
 }

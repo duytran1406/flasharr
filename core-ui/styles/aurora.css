@@ -1,0 +1,68 @@
+/*
+ * Ambient aurora / dot-grid backdrop behind the app.
+ * Recovered from the compiled 2026-09-02 Flasharr CSS. ("app-shell:before"
+ * without the dot in the reduced-motion block is in the original too.)
+ */
+
+body:before {
+  content: "";
+  pointer-events: none;
+  z-index: -2;
+  background: radial-gradient(60% 50% at 20% 10%, #00f3ff0d, #0000 60%),
+    radial-gradient(50% 40% at 80% 20%, #7000ff0a, #0000 50%),
+    radial-gradient(40% 30% at 60% 90%, #00ffa308, #0000 50%);
+  position: fixed;
+  inset: 0;
+}
+body:after {
+  content: "";
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.5;
+  background-image: radial-gradient(circle, #ffffff04 1px, #0000 1px);
+  background-size: 24px 24px;
+  position: fixed;
+  inset: 0;
+}
+.app-shell:before {
+  content: "";
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(60% 50% at 20% 10%, #00f3ff0a, #0000 60%),
+    radial-gradient(50% 40% at 80% 20%, #7000ff09, #0000 50%),
+    radial-gradient(40% 30% at 60% 90%, #00ffa306, #0000 50%);
+  position: absolute;
+  inset: 0;
+}
+.app-shell:after {
+  content: "";
+  z-index: 0;
+  opacity: 0.4;
+  pointer-events: none;
+  background-image: radial-gradient(circle, #ffffff05 1px, #0000 1px);
+  background-size: 20px 20px;
+  position: absolute;
+  inset: 0;
+}
+@keyframes aurora-drift {
+  0%,
+  to {
+    opacity: 0.03;
+    transform: scale(1) translateZ(0);
+  }
+  50% {
+    opacity: 0.06;
+    transform: scale(1.05) translateZ(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  body:before,
+  body:after,
+  app-shell:before,
+  app-shell:after,
+  .app-shell:before,
+  .app-shell:after {
+    transition: none;
+    animation: none;
+  }
+}

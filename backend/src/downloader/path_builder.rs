@@ -8,9 +8,12 @@ use std::path::Path;
 /// TMDB metadata for organizing downloads into folder structures
 #[derive(Debug, Clone)]
 pub struct TmdbDownloadMetadata {
-    /// TMDB ID
+    /// TMDB ID. Movie: canonical. TV: bridge/backcompat only.
     #[allow(dead_code)]
     pub tmdb_id: Option<i64>,
+    /// TVDB ID. TV: canonical identity for Sonarr. Movie: unused.
+    #[allow(dead_code)]
+    pub tvdb_id: Option<i64>,
     /// Media type: "movie" or "tv"
     #[allow(dead_code)]
     pub media_type: Option<String>,
@@ -36,16 +39,16 @@ impl PathBuilder {
     /// Movies: collection_name/movie_name (year)/file OR movie_name (year)/file
     /// TV: series_name/season_xx/file
     pub fn build_destination_path(
-        filename: &str, 
-        category: &str, 
-        tmdb: &Option<TmdbDownloadMetadata>, 
-        root_dir: &Path
+        filename: &str,
+        category: &str,
+        tmdb: &Option<TmdbDownloadMetadata>,
+        root_dir: &Path,
     ) -> String {
         let base_dir = root_dir;
-        
+
         if let Some(meta) = tmdb {
             let media_type = meta.media_type.as_deref().unwrap_or(category);
-            
+
             match media_type {
                 "movie" => {
                     // Build: [Collection]/MovieName (Year)/filename
@@ -58,15 +61,17 @@ impl PathBuilder {
                     } else {
                         "Unknown Movie".to_string()
                     };
-                    
+
                     if let Some(ref collection) = meta.collection_name {
-                        base_dir.join(Self::sanitize_filename(collection))
+                        base_dir
+                            .join(Self::sanitize_filename(collection))
                             .join(&movie_folder)
                             .join(filename)
                             .to_string_lossy()
                             .to_string()
                     } else {
-                        base_dir.join(&movie_folder)
+                        base_dir
+                            .join(&movie_folder)
                             .join(filename)
                             .to_string_lossy()
                             .to_string()
@@ -83,14 +88,15 @@ impl PathBuilder {
                     } else {
                         "Unknown Series".to_string()
                     };
-                    
+
                     let season_folder = if let Some(season) = meta.season {
                         format!("Season {}", season)
                     } else {
                         "Season 1".to_string()
                     };
-                    
-                    base_dir.join(&series_folder)
+
+                    base_dir
+                        .join(&series_folder)
                         .join(&season_folder)
                         .join(filename)
                         .to_string_lossy()
@@ -106,14 +112,14 @@ impl PathBuilder {
             base_dir.join(filename).to_string_lossy().to_string()
         }
     }
-    
+
     /// Normalizes a file extension to a known video format.
     /// If `ext` is not a recognized video container, returns `"mkv"`.
     /// Comparison is case-insensitive so `.Flasharr`, `.FLASHARR`, etc. all map to `"mkv"`.
     pub fn normalize_video_extension(ext: &str) -> String {
         const VIDEO_EXTS: &[&str] = &[
-            "mkv", "mp4", "avi", "ts", "m2ts", "mov", "wmv", "m4v",
-            "flv", "webm", "rmvb", "rm", "divx", "xvid", "mpg", "mpeg", "vob",
+            "mkv", "mp4", "avi", "ts", "m2ts", "mov", "wmv", "m4v", "flv", "webm", "rmvb", "rm",
+            "divx", "xvid", "mpg", "mpeg", "vob",
         ];
         let lower = ext.to_lowercase();
         if VIDEO_EXTS.iter().any(|&v| v == lower) {

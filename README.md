@@ -126,6 +126,12 @@ docker run -d \
   --name flasharr \
   -p 8484:8484 \
   -v ./appData:/appData \
+  -v /path/to/flasharr-download:/downloads \
+  -v /path/to/flasharr-download:/data/flasharr-download \
+  -e FLASHARR_SYMLINK_REAL_BASE=/data/flasharr-download \
+  -e PUID=911 \
+  -e PGID=911 \
+  -e UMASK=002 \
   --restart unless-stopped \
   ghcr.io/duytran1406/flasharr:latest
 ```
@@ -153,18 +159,29 @@ Open `http://localhost:8484` and complete the setup wizard.
 
 ### Environment Variables
 
-| Variable               | Default         | Description    |
-| ---------------------- | --------------- | -------------- |
-| `FLASHARR_APPDATA_DIR` | `/appData`      | Data directory |
-| `RUST_LOG`             | `flasharr=info` | Log level      |
-| `TZ`                   | `UTC`           | Timezone       |
+| Variable                      | Default                         | Description                                         |
+| ----------------------------- | ------------------------------- | --------------------------------------------------- |
+| `FLASHARR_APPDATA_DIR`        | `/appData`                      | Data directory                                      |
+| `FLASHARR_SYMLINK_REAL_BASE`  | unset                           | Shared download path visible to Sonarr/Radarr       |
+| `PUID`                        | `911`                           | Runtime user id                                     |
+| `PGID`                        | `911`                           | Runtime group id                                    |
+| `UMASK`                       | `002`                           | File creation mask for group-writable media stacks  |
+| `FLASHARR_RUN_AS_ROOT`        | `false`                         | Emergency compatibility mode for locked-down hosts  |
+| `RUST_LOG`                    | `flasharr=info,tower_http=info` | Log level                                           |
+| `TZ`                          | `UTC`                           | Timezone                                            |
 
 ### Volume Mounts
 
-| Host Path            | Container Path       | Purpose           |
-| -------------------- | -------------------- | ----------------- |
-| `./appData`          | `/appData`           | Database & config |
-| `/path/to/downloads` | `/appData/downloads` | Downloaded files  |
+| Host Path                    | Container Path            | Purpose                            |
+| ---------------------------- | ------------------------- | ---------------------------------- |
+| `./appData`                  | `/appData`                | Database & config                  |
+| `/path/to/flasharr-download` | `/downloads`              | Download-client compatibility path |
+| `/path/to/flasharr-download` | `/data/flasharr-download` | Sonarr/Radarr-visible import path  |
+
+For Sonarr/Radarr automation, mount the same host download folder into Flasharr
+and the Arr containers at the same visible path. Flasharr asks Sonarr/Radarr to
+import completed downloads from `/data/flasharr-download`, then waits for Arr
+history before marking the item imported.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

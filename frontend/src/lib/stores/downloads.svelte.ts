@@ -1,9 +1,14 @@
 import { wsClient } from './websocket';
 import { toasts } from './toasts';
 import { fetchLibraryOverview } from './arr';
+import {
+  removeFromBatchItemCache,
+  upsertBatchItemCache,
+} from '$lib/components/downloads/mediaQueue';
+import type { UnifiedTorrentRow } from './qbitReducer';
 
 /**
- * Download State (from contract-fe-bridge.md)
+ * Download State (backend DownloadState)
  */
 export type DownloadState =
   | 'QUEUED'
@@ -15,34 +20,41 @@ export type DownloadState =
   | 'FAILED'
   | 'CANCELLED'
   | 'EXTRACTING'
-  | 'SKIPPED';
+  | 'SKIPPED'
+  | 'IMPORTING';
 
 /**
- * Status priority for urgency-based sorting (lower = higher priority)
- * Based on user attention funnel: errors need immediate action, completed needs least
+ * Status priority for urgency-based sorting (lower = higher priority).
+ *
+ * NOTE: in the 2026-09-02 build an identical table is compiled into the
+ * downloads page node, not into this module's chunk — it was most likely
+ * moved to a downloads-page helper. Kept here for compatibility.
  */
 export const STATUS_PRIORITY: Record<DownloadState, number> = {
-  FAILED: 1,      // Requires immediate intervention
-  CANCELLED: 2,   // User-cancelled, may want to re-add
-  DOWNLOADING: 3, // Active, consuming bandwidth
-  EXTRACTING: 4,  // Post-download, still working
-  STARTING: 5,    // Transitional to DOWNLOADING
-  WAITING: 6,     // Rate-limited, auto-retry soon
-  PAUSED: 7,      // User-initiated freeze
-  QUEUED: 8,      // Waiting in queue
-  SKIPPED: 9,     // Intentionally skipped
-  COMPLETED: 10,  // Done, archive-ready
+  FAILED: 1,
+  CANCELLED: 2,
+  DOWNLOADING: 3,
+  EXTRACTING: 4,
+  IMPORTING: 4.5,
+  STARTING: 5,
+  WAITING: 6,
+  PAUSED: 7,
+  QUEUED: 8,
+  SKIPPED: 9,
+  COMPLETED: 10,
 };
 
 /**
- * Download Task Interface (from contract-fe-bridge.md)
+ * Download task as serialized by the backend (downloader/task.rs DownloadTask).
+ * url/original_url/destination are no longer serialized (skip_serializing)
+ * and are kept optional for older callers.
  */
 export interface DownloadTask {
   id: string;
-  url: string;
-  original_url: string;
+  url?: string;
+  original_url?: string;
+  destination?: string;
   filename: string;
-  destination: string;
   state: DownloadState;
   progress: number;
   size: number;
@@ -59,14 +71,60 @@ export interface DownloadTask {
   completed_at: string | null;
   wait_until: string | null;
   error_message: string | null;
+
+  // Source / provider
+  fshare_code?: string | null;
+  provider_id?: string | null;
+  provider_item_id?: string | null;
+  /** fshare | torrent | debrid | qbittorrent | flasharr-http ... */
+  download_source?: string | null;
+  external_provider?: string | null;
+  external_id?: string | null;
+  external_instance_id?: string | null;
+  info_hash?: string | null;
+  file_idx?: number | null;
+  source_filename?: string | null;
+  selected_episodes?: string | null;
+  execution_strategy?: string | null;
+  torbox_remote_state?: string | null;
+  origin_provider?: string | null;
+  origin_indexer?: string | null;
+  seeders?: number | null;
+  leechers?: number | null;
+
+  // Torrent transfer details (managed torrents)
+  task_state?: string | null;
+  qbit_state?: string | null;
+  sync_health?: string | null;
+  last_sync_at?: string | null;
+  transfer_state?: string | null;
+  transfer_active?: boolean;
+
   /** Batch ID for grouping related downloads (e.g., TV season episodes) */
-  batch_id?: string;
+  batch_id?: string | null;
   /** Batch display name (e.g., "Breaking Bad S01") */
-  batch_name?: string;
+  batch_name?: string | null;
+
+  // Media identity (TV: tvdb_id canonical; movie: tmdb_id)
+  tvdb_id?: number | null;
+  tmdb_id?: number | null;
+  media_type?: string | null;
+  media_item_id?: number | null;
+  tmdb_title?: string | null;
+  tmdb_season?: number | null;
+  tmdb_episode?: number | null;
+  /** Detail route resolved by the backend (`/tv/:id` or `/movie/:id`) */
+  info_path?: string | null;
+
   /** Quality description (e.g., "WEB-DL-1080p") */
-  quality?: string;
+  quality?: string | null;
   /** Resolution shorthand (e.g., "1080p", "2160p") */
-  resolution?: string;
+  resolution?: string | null;
+
+  arr_series_id?: number | null;
+  arr_movie_id?: number | null;
+  arr_announced?: boolean;
+  arr_announce_error?: string | null;
 }
 
 /**
@@ -87,12 +145,25 @@ export interface BatchSummary {
   progress: number;
   speed: number;
   created_at: string;
+  /** Aggregate source of the batch (backend summary) */
+  source: string;
   state: DownloadState;
 }
 
 /**
+ * Authoritative row order from /api/downloads/batches.
+ * kind `download` → task id, `batch` → batch_id, `torrent` → `instance:hash`.
+ */
+export interface DisplayRowRef {
+  kind: 'download' | 'batch' | 'torrent' | (string & {});
+  id: string;
+}
+
+/** Unmanaged qBittorrent torrent row shown in the downloads queue. */
+export type DownloadTorrentRow = UnifiedTorrentRow;
+
+/**
  * Database-sourced status counts (for filter dropdown)
- * These are total counts from the database, not just in-memory tasks
  */
 export interface DbStatusCounts {
   all: number;
@@ -105,7 +176,7 @@ export interface DbStatusCounts {
 }
 
 /**
- * Engine Statistics (from contract-fe-bridge.md)
+ * Engine Statistics
  */
 export interface EngineStats {
   active_downloads: number;
@@ -120,38 +191,67 @@ export interface EngineStats {
 }
 
 /**
- * TMDB Metadata for organized folder structure
+ * TMDB metadata for organized folder structure (backend TmdbMetadata).
  */
 export interface TmdbMetadata {
-  tmdb_id?: number;
+  /** Movie: canonical. TV: legacy bridge only. */
+  tmdb_id?: number | null;
+  /** TV: canonical identity for Sonarr. */
+  tvdb_id?: number | null;
   media_type?: 'movie' | 'tv';
-  title?: string;
-  year?: string;
+  title?: string | null;
+  year?: string | number | null;
   collection_name?: string;
-  season?: number;
-  episode?: number;
+  season?: number | null;
+  episode?: number | null;
 }
 
 /**
- * Add Download Request
+ * Add Download Request (backend AddDownloadRequest).
+ * Either `url` or `download_ref` must be present.
  */
 export interface AddDownloadRequest {
-  url: string;
+  url?: string;
+  download_ref?: string;
   filename?: string;
   category?: string;
-  priority?: 'NORMAL' | 'HIGH' | 'LOW';
+  priority?: string;
   /** TMDB metadata for folder organization */
   tmdb?: TmdbMetadata;
   /** Batch ID for grouping downloads from the same request */
   batch_id?: string;
   /** Batch name for display purposes */
   batch_name?: string;
+  /** fshare | torrent | debrid */
+  source?: string;
+  provider?: string;
+  size?: number;
+  seeders?: number;
+  leechers?: number;
+  info_hash?: string;
+  file_idx?: number;
+  source_filename?: string;
+  external_id?: string;
+  origin_provider?: string;
+  origin_indexer?: string;
+  qbit_instance_id?: string;
+  /** Re-download an existing completed task with the same Fshare code. */
+  force_redownload?: boolean;
+  /** torbox_http | local_qb (debrid) */
+  strategy?: string;
+  selected_episodes?: string;
+}
+
+/** Options for downloadStore.addDownload(). */
+export interface AddDownloadOptions {
+  /** Show success/error toasts (default true). */
+  notify?: boolean;
 }
 
 /**
- * API Response Types
+ * Result wrapper returned by every store action.
  */
-interface ApiResponse<T> {
+export interface ApiResponse<T> {
   success: boolean;
   data?: T;
   error?: string;
@@ -160,32 +260,37 @@ interface ApiResponse<T> {
 interface DownloadsResponse {
   downloads: DownloadTask[];
   stats: EngineStats;
-  /** Per-status counts from database (for filter dropdown) */
   status_counts: StatusCounts;
-  /** Pagination info */
   total: number;
   page: number;
   limit: number;
   total_pages: number;
 }
 
-/** Response from /api/downloads/batches endpoint */
+/** Response from /api/downloads/batches */
 interface BatchSummariesResponse {
   batches: BatchSummary[];
   standalone: DownloadTask[];
+  rows: DisplayRowRef[];
+  /** qB torrents not tracked as Flasharr download tasks */
+  torrents?: UnifiedTorrentRow[];
   stats: EngineStats;
   status_counts: StatusCounts;
-  total: number; // Total display units (batches + standalone)
+  total: number; // Total display units
   page: number;
   limit: number;
   total_pages: number;
 }
 
-interface AddDownloadResponse {
+export interface AddDownloadResponse {
   success: boolean;
   task_id: string;
   filename: string;
   state: string;
+}
+
+export interface AffectedResponse {
+  affected: number;
 }
 
 /**
@@ -200,6 +305,8 @@ export interface PaginationState {
   sortDir: 'asc' | 'desc';
   /** Optional status filter for server-side filtering */
   statusFilter?: DownloadState | null;
+  /** Server-side source filter (`direct`, `fshare`, `torrent`, `torbox`); null = all. Default `direct`. */
+  sourceFilter?: string | null;
 }
 
 /**
@@ -215,24 +322,97 @@ export interface StatusCounts {
   all: number;
 }
 
-/**
- * API Base URL
- */
+/** Download store events re-broadcast for UI (onDownloadEvent). */
+export type DownloadEventType = 'TASK_UPDATED' | 'TASK_STARTED' | 'TASK_COMPLETED';
+
 const API_BASE = '/api';
 
 /**
  * DownloadStoreState — snapshot shape exposed by the Svelte 4 subscribe compat method.
- * Consumers that use `$downloadStore.downloads` etc. receive this type.
  */
 export interface DownloadStoreState {
   downloads: Map<string, DownloadTask>;
   batches: Map<string, BatchSummary>;
+  /** Expanded batch items keyed `"<batch_id>|<sourceFilter>"` */
   batchItems: Map<string, DownloadTask[]>;
+  /** Unmanaged torrents keyed `"<instance_id>:<hash>"` */
+  torrentRows: Map<string, UnifiedTorrentRow>;
+  displayRows: DisplayRowRef[];
   stats: EngineStats;
   statusCounts: StatusCounts;
   pagination: PaginationState;
   loading: boolean;
   error: string | null;
+}
+
+/** Map a raw qBittorrent state + progress (0..1) to a Flasharr state. */
+function qbitStateToDownloadState(state: string | undefined | null, progress: number): DownloadState {
+  const s = (state ?? '').toLowerCase();
+  if (progress >= 1 && (s.includes('up') || s.includes('paused'))) return 'COMPLETED';
+  if (s.includes('pause')) return 'PAUSED';
+  if (s.includes('error') || s.includes('missing')) return 'FAILED';
+  if (s.includes('check') || s.includes('meta')) return 'STARTING';
+  if (s.includes('queue')) return 'QUEUED';
+  return 'DOWNLOADING';
+}
+
+/** Build a torrent row from a raw QBIT_* websocket torrent. */
+function toTorrentRow(instanceId: string, t: any): UnifiedTorrentRow {
+  return {
+    instance_id: instanceId,
+    hash: t.hash ?? '',
+    name: t.name ?? '',
+    state: t.state ?? '',
+    flasharr_state: qbitStateToDownloadState(t.state, t.progress),
+    progress: t.progress ?? 0,
+    size: t.size ?? 0,
+    downloaded: t.downloaded ?? 0,
+    uploaded: t.uploaded ?? 0,
+    dlspeed: t.dlspeed ?? 0,
+    upspeed: t.upspeed ?? 0,
+    eta: t.eta ?? 0,
+    ratio: t.ratio ?? 0,
+    category: t.category ?? '',
+    tags: t.tags ?? '',
+    tracker: t.tracker ?? '',
+    added_on: t.added_on ?? 0,
+    completion_on: t.completion_on ?? 0,
+    amount_left: t.amount_left ?? 0,
+    num_seeds: t.num_seeds ?? 0,
+    num_leechs: t.num_leechs ?? 0,
+    updated_at: t.updated_at ?? new Date().toISOString(),
+  };
+}
+
+function apiHeaders(withJsonBody = false): HeadersInit {
+  return withJsonBody ? { 'Content-Type': 'application/json' } : {};
+}
+
+/** Error text from a failed response: JSON `error`/`message`, raw text, or `HTTP <status>`. */
+async function responseErrorMessage(response: Response): Promise<string> {
+  const text = await response.text();
+  if (!text) return `HTTP ${response.status}`;
+  try {
+    const data = JSON.parse(text);
+    return data.error || data.message || `HTTP ${response.status}`;
+  } catch {
+    return text || `HTTP ${response.status}`;
+  }
+}
+
+/** True when a Flasharr task already tracks this torrent hash. */
+function isTrackedTorrent(downloads: Map<string, DownloadTask>, hash: string | undefined): boolean {
+  const needle = hash?.toLowerCase();
+  return Array.from(downloads.values()).some(
+    (d) =>
+      (d.info_hash && d.info_hash.toLowerCase() === needle) ||
+      (d.external_id && d.external_id.toLowerCase() === needle),
+  );
+}
+
+/** All cached items of one batch across source-filter cache keys. */
+function cachedBatchItems(batchItems: Map<string, DownloadTask[]>, batchId: string): DownloadTask[] {
+  return [...batchItems].filter(([key]) => key.split('|', 1)[0] === batchId).flatMap(([, items]) => items);
 }
 
 /**
@@ -245,8 +425,12 @@ class DownloadStore {
   downloads = $state<Map<string, DownloadTask>>(new Map());
   /** Batch summaries for batch-first pagination */
   batches = $state<Map<string, BatchSummary>>(new Map());
-  /** Cache of expanded batch items (batch_id -> items) */
+  /** Cache of expanded batch items, keyed `"<batch_id>|<sourceFilter>"` */
   batchItems = $state<Map<string, DownloadTask[]>>(new Map());
+  /** Unmanaged qBittorrent torrents, keyed `"<instance_id>:<hash>"` */
+  torrentRows = $state<Map<string, UnifiedTorrentRow>>(new Map());
+  /** Backend row order of the current page */
+  displayRows = $state<DisplayRowRef[]>([]);
   stats = $state<EngineStats>({
     active_downloads: 0,
     queued: 0,
@@ -273,6 +457,7 @@ class DownloadStore {
     sortBy: 'added',
     sortDir: 'desc',
     statusFilter: null,
+    sourceFilter: 'direct',
   });
   loading = $state<boolean>(false);
   error = $state<string | null>(null);
@@ -280,19 +465,25 @@ class DownloadStore {
   // Private notification system for legacy store subscribers
   private _subscribers = new Set<(v: DownloadStoreState) => void>();
 
-  private _notify() {
-    if (this._subscribers.size === 0) return;
-    const snapshot = {
+  private snapshot(): DownloadStoreState {
+    return {
       downloads: this.downloads,
       batches: this.batches,
       batchItems: this.batchItems,
+      torrentRows: this.torrentRows,
+      displayRows: this.displayRows,
       stats: this.stats,
       statusCounts: this.statusCounts,
       pagination: this.pagination,
       loading: this.loading,
       error: this.error,
     };
-    this._subscribers.forEach(fn => fn(snapshot));
+  }
+
+  private _notify() {
+    if (this._subscribers.size === 0) return;
+    const snapshot = this.snapshot();
+    this._subscribers.forEach((fn) => fn(snapshot));
   }
 
   // ---------------------------------------------------------------------------
@@ -300,44 +491,42 @@ class DownloadStore {
   // ---------------------------------------------------------------------------
 
   /** Downloads as array (sorted by created_at desc) */
-  downloadList: DownloadTask[] = $derived.by(() => {
-    const list = Array.from(this.downloads.values()).sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    );
-    return list;
-  });
+  downloadList: DownloadTask[] = $derived.by(() =>
+    Array.from(this.downloads.values()).sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    ),
+  );
 
   /** Batches as array (sorted by created_at desc) */
   batchList: BatchSummary[] = $derived.by(() =>
     Array.from(this.batches.values()).sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    )
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    ),
+  );
+
+  /** Unmanaged torrents (newest first) */
+  torrentList: UnifiedTorrentRow[] = $derived.by(() =>
+    Array.from(this.torrentRows.values()).sort((a, b) => b.added_on - a.added_on),
   );
 
   /** Active downloads */
   activeDownloadsList: DownloadTask[] = $derived.by(() =>
-    this.downloadList.filter(d => d.state === 'DOWNLOADING' || d.state === 'STARTING')
+    this.downloadList.filter((d) => d.state === 'DOWNLOADING' || d.state === 'STARTING' || d.state === 'IMPORTING'),
   );
 
   /** Queued downloads */
-  queuedDownloadsList: DownloadTask[] = $derived.by(() =>
-    this.downloadList.filter(d => d.state === 'QUEUED')
-  );
+  queuedDownloadsList: DownloadTask[] = $derived.by(() => this.downloadList.filter((d) => d.state === 'QUEUED'));
 
   /** Completed downloads */
   completedDownloadsList: DownloadTask[] = $derived.by(() =>
-    this.downloadList.filter(d => d.state === 'COMPLETED')
+    this.downloadList.filter((d) => d.state === 'COMPLETED'),
   );
 
   /** Failed downloads */
-  failedDownloadsList: DownloadTask[] = $derived.by(() =>
-    this.downloadList.filter(d => d.state === 'FAILED')
-  );
+  failedDownloadsList: DownloadTask[] = $derived.by(() => this.downloadList.filter((d) => d.state === 'FAILED'));
 
   /** Paused downloads */
-  pausedDownloadsList: DownloadTask[] = $derived.by(() =>
-    this.downloadList.filter(d => d.state === 'PAUSED')
-  );
+  pausedDownloadsList: DownloadTask[] = $derived.by(() => this.downloadList.filter((d) => d.state === 'PAUSED'));
 
   // ---------------------------------------------------------------------------
   // Private helpers
@@ -347,20 +536,49 @@ class DownloadStore {
    * Clear error_message when a task enters a working/active state.
    */
   private clearErrorIfActive(task: DownloadTask): DownloadTask {
-    const activeStates: DownloadState[] = ['QUEUED', 'STARTING', 'DOWNLOADING', 'EXTRACTING', 'WAITING'];
-    if (activeStates.includes(task.state)) {
-      return { ...task, error_message: null };
+    const activeStates: DownloadState[] = ['QUEUED', 'STARTING', 'DOWNLOADING', 'EXTRACTING', 'WAITING', 'IMPORTING'];
+    return activeStates.includes(task.state) ? { ...task, error_message: null } : task;
+  }
+
+  private dedupeTasks(tasks: DownloadTask[]): DownloadTask[] {
+    return Array.from(new Map(tasks.map((t) => [t.id, t])).values());
+  }
+
+  private dedupeRows(rows: DisplayRowRef[] = []): DisplayRowRef[] {
+    const seen = new Set<string>();
+    return rows.filter((row) => (seen.has(row.id) ? false : (seen.add(row.id), true)));
+  }
+
+  /**
+   * Route an incoming task into the caches: batch members go to batchItems
+   * (and are removed from standalone downloads), others are merged into
+   * downloads. Returns new Maps.
+   */
+  private applyTaskToCaches(
+    task: DownloadTask,
+    downloads: Map<string, DownloadTask>,
+    batchItems: Map<string, DownloadTask[]>,
+  ): { downloads: Map<string, DownloadTask>; batchItems: Map<string, DownloadTask[]> } {
+    const incoming = this.clearErrorIfActive(task);
+    const nextDownloads = new Map(downloads);
+    const nextBatchItems = new Map(batchItems);
+    if (incoming.batch_id) {
+      nextDownloads.delete(incoming.id);
+      return { downloads: nextDownloads, batchItems: upsertBatchItemCache(nextBatchItems, incoming) };
     }
-    return task;
+    const existing = nextDownloads.get(incoming.id);
+    nextDownloads.set(incoming.id, existing ? { ...existing, ...incoming } : incoming);
+    return { downloads: nextDownloads, batchItems: nextBatchItems };
   }
 
   /**
    * Map a DownloadState to the corresponding BatchSummary counter field.
    */
   private getStateBucket(
-    state: DownloadState
+    state: DownloadState,
   ): 'downloading_items' | 'paused_items' | 'queued_items' | 'completed_items' | 'failed_items' | null {
-    if (state === 'DOWNLOADING' || state === 'STARTING' || state === 'EXTRACTING') return 'downloading_items';
+    if (state === 'DOWNLOADING' || state === 'STARTING' || state === 'EXTRACTING' || state === 'IMPORTING')
+      return 'downloading_items';
     if (state === 'PAUSED') return 'paused_items';
     if (state === 'QUEUED' || state === 'WAITING') return 'queued_items';
     if (state === 'COMPLETED') return 'completed_items';
@@ -375,7 +593,7 @@ class DownloadStore {
     batches: Map<string, BatchSummary>,
     batchId: string,
     fromState: DownloadState | undefined,
-    toState: DownloadState
+    toState: DownloadState,
   ): Map<string, BatchSummary> {
     const batch = batches.get(batchId);
     if (!batch || fromState === toState) return batches;
@@ -384,22 +602,22 @@ class DownloadStore {
     const toBucket = this.getStateBucket(toState);
     if (fromBucket === toBucket) return batches;
 
-    const newBatches = new Map(batches);
+    const next = new Map(batches);
     const updated = { ...batch };
     if (fromBucket) updated[fromBucket] = Math.max(0, updated[fromBucket] - 1);
     if (toBucket) updated[toBucket] = updated[toBucket] + 1;
-    newBatches.set(batchId, updated);
-    return newBatches;
+    next.set(batchId, updated);
+    return next;
   }
 
   /**
    * Recalculate live batch metrics (progress, speed, downloaded_size, total_size)
-   * from all cached items in batchItems.
+   * from all cached items of the batch.
    */
   private patchBatchMetrics(
     batches: Map<string, BatchSummary>,
     batchId: string,
-    cachedItems: DownloadTask[]
+    cachedItems: DownloadTask[],
   ): Map<string, BatchSummary> {
     if (cachedItems.length === 0) return batches;
     const batch = batches.get(batchId);
@@ -408,11 +626,15 @@ class DownloadStore {
     let totalDownloaded = 0;
     let totalSize = 0;
     let totalSpeed = 0;
-
     for (const item of cachedItems) {
       totalSize += item.size || 0;
       totalDownloaded += item.downloaded ?? 0;
-      if (item.state === 'DOWNLOADING' || item.state === 'STARTING' || item.state === 'EXTRACTING') {
+      if (
+        item.state === 'DOWNLOADING' ||
+        item.state === 'STARTING' ||
+        item.state === 'EXTRACTING' ||
+        item.state === 'IMPORTING'
+      ) {
         totalSpeed += item.speed ?? 0;
       }
     }
@@ -420,15 +642,15 @@ class DownloadStore {
     const newTotalSize = totalSize > 0 ? totalSize : batch.total_size;
     const newProgress = newTotalSize > 0 ? (totalDownloaded / newTotalSize) * 100 : batch.progress;
 
-    const newBatches = new Map(batches);
-    newBatches.set(batchId, {
+    const next = new Map(batches);
+    next.set(batchId, {
       ...batch,
       progress: Math.min(100, newProgress),
       speed: totalSpeed,
       downloaded_size: totalDownloaded,
       total_size: newTotalSize,
     });
-    return newBatches;
+    return next;
   }
 
   // ---------------------------------------------------------------------------
@@ -436,45 +658,31 @@ class DownloadStore {
   // ---------------------------------------------------------------------------
 
   /**
-   * Fetch a page of downloads from the API (with pagination, sorting, and optional status filter)
+   * Fetch a flat page of downloads (/api/downloads) with pagination, sorting
+   * and the status/source filters.
    */
   async fetchPage(page?: number): Promise<void> {
     this.loading = true;
     this.error = null;
-
     try {
       const p = page ?? this.pagination.page;
-      const { limit, sortBy, sortDir, statusFilter } = this.pagination;
-
+      const { limit, sortBy, sortDir, statusFilter, sourceFilter } = this.pagination;
       let url = `${API_BASE}/downloads?page=${p}&limit=${limit}&sort_by=${sortBy}&sort_dir=${sortDir}`;
-      if (statusFilter) {
-        url += `&status=${statusFilter}`;
-      }
+      if (statusFilter) url += `&status=${statusFilter}`;
+      if (sourceFilter) url += `&source=${sourceFilter}`;
 
-      const response = await fetch(url);
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
+      const response = await fetch(url, { headers: apiHeaders() });
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       const data: DownloadsResponse = await response.json();
 
       const downloadsMap = new Map<string, DownloadTask>();
-      data.downloads.forEach((download: DownloadTask) => {
-        downloadsMap.set(download.id, download);
-      });
+      data.downloads.forEach((download) => downloadsMap.set(download.id, download));
 
       this.downloads = downloadsMap;
       this.stats = data.stats;
       this.statusCounts = data.status_counts || this.statusCounts;
-      this.pagination = {
-        ...this.pagination,
-        page: data.page,
-        total: data.total,
-        totalPages: data.total_pages,
-      };
+      this.pagination = { ...this.pagination, page: data.page, total: data.total, totalPages: data.total_pages };
       this.loading = false;
-
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to fetch downloads';
       console.error('[DownloadStore] Fetch error:', errorMsg);
@@ -484,60 +692,45 @@ class DownloadStore {
   }
 
   /**
-   * Fetch batch summaries and standalone downloads (batch-first pagination)
+   * Fetch a page of display units (/api/downloads/batches): batch summaries,
+   * standalone tasks, unmanaged torrents and the authoritative row order.
    */
   async fetchBatches(page?: number): Promise<void> {
-    const pageToFetch = page ?? this.pagination.page;
-    const { limit, sortBy, sortDir, statusFilter } = this.pagination;
-
+    const p = page ?? this.pagination.page;
+    const { limit, sortBy, sortDir, statusFilter, sourceFilter } = this.pagination;
     this.loading = true;
     this.error = null;
-
     try {
       const params = new URLSearchParams({
-        page: pageToFetch.toString(),
+        page: p.toString(),
         limit: limit.toString(),
         sort_by: sortBy,
         sort_dir: sortDir,
       });
+      if (statusFilter) params.append('status', statusFilter);
+      if (sourceFilter) params.append('source', sourceFilter);
 
-      if (statusFilter) {
-        params.append('status', statusFilter);
-      }
-
-      const response = await fetch(`/api/downloads/batches?${params}`);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
+      const response = await fetch(`/api/downloads/batches?${params}`, { headers: apiHeaders() });
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       const data: BatchSummariesResponse = await response.json();
 
       const batchesMap = new Map<string, BatchSummary>();
-      data.batches.forEach((batch: BatchSummary) => {
-        batchesMap.set(batch.batch_id, batch);
-      });
-
-      // Replace standalone downloads with exactly what the API returned for
-      // this page to avoid items from other pages persisting when paginating.
-      const newDownloads = new Map<string, DownloadTask>();
-      data.standalone.forEach((download: DownloadTask) => {
-        newDownloads.set(download.id, download);
-      });
+      data.batches.forEach((batch) => batchesMap.set(batch.batch_id, batch));
+      const standaloneMap = new Map<string, DownloadTask>();
+      data.standalone.forEach((task) => standaloneMap.set(task.id, task));
+      const torrentsMap = new Map<string, UnifiedTorrentRow>();
+      (data.torrents || []).forEach((torrent) => torrentsMap.set(`${torrent.instance_id}:${torrent.hash}`, torrent));
 
       this.batches = batchesMap;
-      this.downloads = newDownloads;
+      this.downloads = standaloneMap;
+      this.torrentRows = torrentsMap;
+      this.displayRows = this.dedupeRows(data.rows);
       this.stats = data.stats;
       this.statusCounts = data.status_counts || this.statusCounts;
-      this.pagination = {
-        ...this.pagination,
-        page: data.page,
-        total: data.total,
-        totalPages: data.total_pages,
-      };
+      this.pagination = { ...this.pagination, page: data.page, total: data.total, totalPages: data.total_pages };
       this.loading = false;
       this._notify();
       console.log('[Store] fetchAll complete, items:', this.downloads.size);
-
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to fetch batches';
       console.error('[DownloadStore] Fetch batches error:', errorMsg);
@@ -547,32 +740,37 @@ class DownloadStore {
   }
 
   /**
-   * Fetch items for a specific batch (lazy loading)
+   * Fetch (and cache) the items of a batch for the current source filter.
+   * Cache key: `"<batch_id>|<sourceFilter>"`. Throws on failure.
    */
   async fetchBatchItems(batchId: string): Promise<DownloadTask[]> {
-    const cached = this.batchItems.get(batchId);
-    if (cached) {
-      return cached;
-    }
+    const { sourceFilter } = this.pagination;
+    const cacheKey = `${batchId}|${sourceFilter ?? ''}`;
+    const cached = this.batchItems.get(cacheKey);
+    if (cached) return cached;
 
     try {
-      const response = await fetch(`/api/downloads/batch/${batchId}/items`);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
+      const params = new URLSearchParams();
+      if (sourceFilter) params.append('source', sourceFilter);
+      const query = params.size > 0 ? `?${params}` : '';
+      const response = await fetch(`/api/downloads/batch/${batchId}/items${query}`, { headers: apiHeaders() });
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 
-      const items: DownloadTask[] = await response.json();
-
-      const newBatchItems = new Map(this.batchItems);
-      newBatchItems.set(batchId, items);
-      this.batchItems = newBatchItems;
-
+      const items = this.dedupeTasks(await response.json());
+      const next = new Map(this.batchItems);
+      next.set(cacheKey, items);
+      this.batchItems = next;
       return items;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to fetch batch items';
       console.error('[DownloadStore] Fetch batch items error:', errorMsg);
       throw err;
     }
+  }
+
+  /** Drop all cached batch items. */
+  invalidateBatchItemCache() {
+    this.batchItems = new Map();
   }
 
   /**
@@ -586,36 +784,31 @@ class DownloadStore {
   // Pagination
   // ---------------------------------------------------------------------------
 
-  /**
-   * Set pagination parameters and refetch
-   */
   async setPage(page: number): Promise<void> {
     this.pagination = { ...this.pagination, page };
     return this.fetchBatches(page);
   }
 
-  /**
-   * Set sort parameters and refetch from page 1
-   */
   async setSort(sortBy: PaginationState['sortBy'], sortDir: PaginationState['sortDir']): Promise<void> {
     this.pagination = { ...this.pagination, sortBy, sortDir, page: 1 };
     return this.fetchBatches(1);
   }
 
-  /**
-   * Set items per page and refetch from page 1
-   */
   async setLimit(limit: number): Promise<void> {
     this.pagination = { ...this.pagination, limit, page: 1 };
     return this.fetchBatches(1);
   }
 
-  /**
-   * Set status filter and refetch from page 1
-   * @param status - Status to filter by, or null/undefined for all
-   */
+  /** @param status - Status to filter by, or null for all */
   async setStatusFilter(status: DownloadState | null): Promise<void> {
     this.pagination = { ...this.pagination, statusFilter: status, page: 1 };
+    return this.fetchBatches(1);
+  }
+
+  /** Change the server-side source filter; clears the batch item cache. */
+  async setSourceFilter(source: string | null): Promise<void> {
+    this.pagination = { ...this.pagination, sourceFilter: source, page: 1 };
+    this.invalidateBatchItemCache();
     return this.fetchBatches(1);
   }
 
@@ -624,47 +817,34 @@ class DownloadStore {
   // ---------------------------------------------------------------------------
 
   /**
-   * Add a new download
+   * Add a new download. Toasts unless `options.notify === false`.
    */
-  async addDownload(request: AddDownloadRequest): Promise<ApiResponse<AddDownloadResponse>> {
+  async addDownload(
+    request: AddDownloadRequest,
+    options: AddDownloadOptions = {},
+  ): Promise<ApiResponse<AddDownloadResponse>> {
     try {
       const response = await fetch(`${API_BASE}/downloads`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apiHeaders(true),
         body: JSON.stringify(request),
       });
-
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || data.message || `HTTP ${response.status}`);
-      }
-
-      toasts.success(`Download added: ${data.filename}`);
-
+      if (!response.ok) throw new Error(data.error || data.message || `HTTP ${response.status}`);
+      if (options.notify !== false) toasts.success(`Download added: ${data.filename}`);
       return { success: true, data };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to add download';
       console.error('[DownloadStore] Add error:', errorMsg);
-      toasts.error(`Failed to add download: ${errorMsg}`);
+      if (options.notify !== false) toasts.error(`Failed to add download: ${errorMsg}`);
       return { success: false, error: errorMsg };
     }
   }
 
-  /**
-   * Pause a download
-   */
   async pauseDownload(id: string): Promise<ApiResponse<void>> {
     try {
-      const response = await fetch(`${API_BASE}/downloads/${id}/pause`, {
-        method: 'POST',
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
+      const response = await fetch(`${API_BASE}/downloads/${id}/pause`, { method: 'POST', headers: apiHeaders() });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       toasts.info('Download paused');
       return { success: true };
     } catch (err) {
@@ -675,20 +855,10 @@ class DownloadStore {
     }
   }
 
-  /**
-   * Resume a download
-   */
   async resumeDownload(id: string): Promise<ApiResponse<void>> {
     try {
-      const response = await fetch(`${API_BASE}/downloads/${id}/resume`, {
-        method: 'POST',
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
+      const response = await fetch(`${API_BASE}/downloads/${id}/resume`, { method: 'POST', headers: apiHeaders() });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       toasts.success('Download resumed');
       return { success: true };
     } catch (err) {
@@ -700,60 +870,37 @@ class DownloadStore {
   }
 
   /**
-   * Delete a download
+   * Delete a download. Removes it from downloads and every batch item cache;
+   * batch members trigger a batch refetch. Refreshes the library overview.
    */
   async deleteDownload(id: string): Promise<ApiResponse<void>> {
     try {
-      // Capture batch_id BEFORE deleting from the map
-      let batchId: string | undefined;
+      let batchKey: string | undefined;
       const task = this.downloads.get(id);
       if (task?.batch_id) {
-        batchId = task.batch_id;
+        batchKey = task.batch_id;
       } else {
-        // Search in batchItems cache (batch children aren't always in downloads map)
-        for (const [bid, items] of this.batchItems) {
-          if (items.some(item => item.id === id)) {
-            batchId = bid;
+        for (const [key, items] of this.batchItems) {
+          if (items.some((item) => item.id === id)) {
+            batchKey = key;
             break;
           }
         }
       }
 
-      const response = await fetch(`${API_BASE}/downloads/${id}`, {
-        method: 'DELETE',
-      });
+      const response = await fetch(`${API_BASE}/downloads/${id}`, { method: 'DELETE', headers: apiHeaders() });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
 
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
-      // Remove from local store immediately for instant UI feedback
-      const newDownloads = new Map(this.downloads);
-      newDownloads.delete(id);
-      this.downloads = newDownloads;
-
-      // Also remove from batch items cache if it was a batch item
-      if (batchId) {
-        const newBatchItems = new Map(this.batchItems);
-        const items = newBatchItems.get(batchId);
-        if (items) {
-          newBatchItems.set(batchId, items.filter(item => item.id !== id));
-        }
-        this.batchItems = newBatchItems;
-      }
+      const next = new Map(this.downloads);
+      next.delete(id);
+      this.downloads = next;
+      if (batchKey) this.batchItems = removeFromBatchItemCache(this.batchItems, id);
 
       toasts.info('Download deleted');
-
-      // If it was a batch item, refetch batch summaries to update counts/progress
-      if (batchId) {
-        this.fetchBatches().catch(err => console.error('Failed to refetch batches after delete:', err));
+      if (batchKey) {
+        this.fetchBatches().catch((err) => console.error('Failed to refetch batches after delete:', err));
       }
-
-      // Always refresh library overview after any delete since the cost is one
-      // lightweight /api/arr/library call and the user explicitly requested sync.
-      fetchLibraryOverview().catch(() => { /* silently ignore if Arr is offline */ });
-
+      fetchLibraryOverview().catch(() => {});
       return { success: true };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to delete download';
@@ -763,20 +910,10 @@ class DownloadStore {
     }
   }
 
-  /**
-   * Retry a failed download
-   */
   async retryDownload(id: string): Promise<ApiResponse<void>> {
     try {
-      const response = await fetch(`${API_BASE}/downloads/${id}/retry`, {
-        method: 'POST',
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
+      const response = await fetch(`${API_BASE}/downloads/${id}/retry`, { method: 'POST', headers: apiHeaders() });
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       toasts.success('Download retry initiated');
       return { success: true };
     } catch (err) {
@@ -787,20 +924,13 @@ class DownloadStore {
     }
   }
 
-  /**
-   * Re-download a completed download
-   */
   async redownload(id: string): Promise<ApiResponse<void>> {
     try {
       const response = await fetch(`${API_BASE}/downloads/${id}/redownload`, {
         method: 'POST',
+        headers: apiHeaders(),
       });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
       toasts.success('Re-download initiated');
       return { success: true };
     } catch (err) {
@@ -811,21 +941,14 @@ class DownloadStore {
     }
   }
 
-  /**
-   * Re-download all tasks in a batch
-   */
-  async redownloadBatch(id: string): Promise<ApiResponse<{ affected: number }>> {
+  async redownloadBatch(id: string): Promise<ApiResponse<AffectedResponse>> {
     try {
       const response = await fetch(`${API_BASE}/downloads/batch/${id}/redownload`, {
         method: 'POST',
+        headers: apiHeaders(),
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(await responseErrorMessage(response));
+      const data: AffectedResponse = await response.json();
       toasts.success(`Re-download initiated for ${data.affected} task${data.affected !== 1 ? 's' : ''}`);
       this.fetchBatches().catch(() => {});
       return { success: true, data };
@@ -837,21 +960,11 @@ class DownloadStore {
     }
   }
 
-  /**
-   * Pause all active downloads
-   */
-  async pauseAll(): Promise<ApiResponse<{ affected: number }>> {
+  async pauseAll(): Promise<ApiResponse<AffectedResponse>> {
     try {
-      const response = await fetch(`${API_BASE}/downloads/pause-all`, {
-        method: 'POST',
-      });
-
+      const response = await fetch(`${API_BASE}/downloads/pause-all`, { method: 'POST', headers: apiHeaders() });
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(data.error || data.message || `HTTP ${response.status}`);
       toasts.info(`Paused ${data.affected} download${data.affected !== 1 ? 's' : ''}`);
       return { success: true, data };
     } catch (err) {
@@ -862,21 +975,11 @@ class DownloadStore {
     }
   }
 
-  /**
-   * Resume all paused downloads
-   */
-  async resumeAll(): Promise<ApiResponse<{ affected: number }>> {
+  async resumeAll(): Promise<ApiResponse<AffectedResponse>> {
     try {
-      const response = await fetch(`${API_BASE}/downloads/resume-all`, {
-        method: 'POST',
-      });
-
+      const response = await fetch(`${API_BASE}/downloads/resume-all`, { method: 'POST', headers: apiHeaders() });
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(data.error || data.message || `HTTP ${response.status}`);
       toasts.success(`Resumed ${data.affected} download${data.affected !== 1 ? 's' : ''}`);
       return { success: true, data };
     } catch (err) {
@@ -887,30 +990,16 @@ class DownloadStore {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Batch Actions
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Pause all downloads in a batch
-   */
-  async pauseBatch(batchId: string): Promise<ApiResponse<{ affected: number }>> {
+  async pauseBatch(batchId: string): Promise<ApiResponse<AffectedResponse>> {
     try {
       const response = await fetch(`${API_BASE}/downloads/batch/${batchId}/pause`, {
         method: 'POST',
+        headers: apiHeaders(),
       });
-
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       toasts.info(`Paused ${data.affected} download${data.affected !== 1 ? 's' : ''} in batch`);
-
-      // Refetch batches to update batch row status
-      this.fetchBatches().catch(err => console.error('Failed to refetch batches after pause:', err));
-
+      this.fetchBatches().catch((err) => console.error('Failed to refetch batches after pause:', err));
       return { success: true, data };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to pause batch';
@@ -919,26 +1008,16 @@ class DownloadStore {
     }
   }
 
-  /**
-   * Resume all downloads in a batch
-   */
-  async resumeBatch(batchId: string): Promise<ApiResponse<{ affected: number }>> {
+  async resumeBatch(batchId: string): Promise<ApiResponse<AffectedResponse>> {
     try {
       const response = await fetch(`${API_BASE}/downloads/batch/${batchId}/resume`, {
         method: 'POST',
+        headers: apiHeaders(),
       });
-
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       toasts.success(`Resumed ${data.affected} download${data.affected !== 1 ? 's' : ''} in batch`);
-
-      // Refetch batches to update batch row status
-      this.fetchBatches().catch(err => console.error('Failed to refetch batches after resume:', err));
-
+      this.fetchBatches().catch((err) => console.error('Failed to refetch batches after resume:', err));
       return { success: true, data };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to resume batch';
@@ -947,29 +1026,17 @@ class DownloadStore {
     }
   }
 
-  /**
-   * Delete all downloads in a batch
-   */
-  async deleteBatch(batchId: string): Promise<ApiResponse<{ affected: number }>> {
+  async deleteBatch(batchId: string): Promise<ApiResponse<AffectedResponse>> {
     try {
       const response = await fetch(`${API_BASE}/downloads/batch/${batchId}`, {
         method: 'DELETE',
+        headers: apiHeaders(),
       });
-
       const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       toasts.info(`Deleted ${data.affected} download${data.affected !== 1 ? 's' : ''} in batch`);
-
-      // Refetch batches to get fresh data from server and update UI
       await this.fetchBatches();
-
-      // Batch may contain completed items that were imported — sync library counts.
       fetchLibraryOverview().catch(() => {});
-
       return { success: true, data };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to delete batch';
@@ -979,246 +1046,232 @@ class DownloadStore {
   }
 
   // ---------------------------------------------------------------------------
-  // WebSocket initialisation
+  // WebSocket
   // ---------------------------------------------------------------------------
 
   /**
-   * Initialize WebSocket handlers
+   * Register websocket handlers (call once). Re-fetches a snapshot on every
+   * reconnect after the first connection.
    */
   initWebSocket(): void {
-    // Handle SYNC_ALL - server sends only ACTIVE tasks on WS connect.
-    // Merge (upsert) into the existing Map rather than replace it, otherwise
-    // REST-loaded tasks vanish the moment the WebSocket fires.
+    let connectedBefore = false;
+    wsClient.status.subscribe((status) => {
+      if (status !== 'connected') return;
+      if (connectedBefore) {
+        this.fetchBatches().catch((err) => console.error('[DownloadStore] Reconnect snapshot failed:', err));
+      }
+      connectedBefore = true;
+    });
+
+    // SYNC_ALL — full task list on connect
     wsClient.on('SYNC_ALL', (message) => {
-      if (message.tasks && Array.isArray(message.tasks)) {
-        const newDownloads = new Map(this.downloads);
-        (message.tasks as DownloadTask[]).forEach((task: DownloadTask) => {
-          newDownloads.set(task.id, task);
-        });
-        this.downloads = newDownloads;
-        this._notify();
+      if (!message.tasks || !Array.isArray(message.tasks)) return;
+      let downloads = new Map(this.downloads);
+      let batchItems = new Map(this.batchItems);
+      for (const task of message.tasks as DownloadTask[]) {
+        ({ downloads, batchItems } = this.applyTaskToCaches(task, downloads, batchItems));
       }
+      this.downloads = downloads;
+      this.batchItems = batchItems;
+      this._notify();
     });
 
-    // Handle TASK_ADDED - new task added
     wsClient.on('TASK_ADDED', (message) => {
-      if (message.task) {
-        const newDownloads = new Map(this.downloads);
-        newDownloads.set(message.task.id, message.task);
-        this.downloads = newDownloads;
-        this._notify();
+      const task: DownloadTask | undefined = message.task;
+      if (!task) return;
+      emitDownloadEvent('TASK_UPDATED', task);
+      const state = String(task.state || '').toUpperCase();
+      if (state && state !== 'COMPLETED') emitDownloadEvent('TASK_STARTED', task);
 
-        // If task has batch_id, refetch batches to update grouping
-        if (message.task.batch_id) {
-          this.fetchBatches().catch(err => console.error('Failed to refetch batches:', err));
-        }
+      const { downloads, batchItems } = this.applyTaskToCaches(task, this.downloads, this.batchItems);
+      this.downloads = downloads;
+      this.batchItems = batchItems;
+      if (task.batch_id) {
+        this.fetchBatches().catch((err) => console.error('Failed to refetch batches:', err));
       }
+      this._notify();
     });
 
-    // Handle TASK_UPDATED - task state/progress changed
     wsClient.on('TASK_UPDATED', (message) => {
-      if (!message.task || !message.task.id) return;
+      const task: DownloadTask | undefined = message.task;
+      if (!task || !task.id) return;
+      emitDownloadEvent('TASK_UPDATED', task);
+      if (String(task.state || '').toUpperCase() === 'COMPLETED') emitDownloadEvent('TASK_COMPLETED', task);
 
-      const taskId: string = message.task.id;
-      const batchId: string | undefined = message.task.batch_id;
-      const newState: DownloadState = message.task.state;
+      const taskId = task.id;
+      const batchId = task.batch_id;
+      const newState = task.state;
+      const previous =
+        this.downloads.get(taskId) ??
+        (batchId ? cachedBatchItems(this.batchItems, batchId).find((item) => item.id === taskId) : undefined);
+      const previousState = previous?.state;
 
-      // --- 1. Resolve previous state ---
-      const existingInDownloads = this.downloads.get(taskId);
-      const existingInBatch = batchId
-        ? this.batchItems.get(batchId)?.find(i => i.id === taskId)
-        : undefined;
-      const previousState: DownloadState | undefined =
-        existingInDownloads?.state ?? existingInBatch?.state;
-
-      // --- 2. Update downloads Map (standalone items) ---
-      const newDownloads = new Map(this.downloads);
-      const incomingTask = this.clearErrorIfActive(message.task);
-      if (existingInDownloads) {
-        newDownloads.set(taskId, { ...existingInDownloads, ...incomingTask });
-      } else if (!batchId) {
-        newDownloads.set(taskId, incomingTask);
-      }
-      this.downloads = newDownloads;
-
-      let newBatchItems = this.batchItems;
-      let newBatches = this.batches;
+      const applied = this.applyTaskToCaches(this.clearErrorIfActive(task), this.downloads, this.batchItems);
+      this.downloads = applied.downloads;
+      const batchItems = applied.batchItems;
+      let batches = this.batches;
 
       if (batchId) {
-        // --- 3. Patch individual item in batchItems cache ---
-        const cachedItems = this.batchItems.get(batchId);
-        if (cachedItems) {
-          const updated = cachedItems.map(item =>
-            item.id === taskId ? { ...item, ...incomingTask } : item
-          );
-          newBatchItems = new Map(this.batchItems);
-          newBatchItems.set(batchId, updated);
-
-          // --- 5. Recalculate live metrics (progress, speed, downloaded_size) ---
-          newBatches = this.patchBatchMetrics(newBatches, batchId, updated);
-        }
-
-        // --- 4. Delta-patch the BatchSummary so the batch header row syncs immediately ---
+        // Live batch header metrics + counters
+        batches = this.patchBatchMetrics(batches, batchId, cachedBatchItems(batchItems, batchId));
         if (previousState !== newState) {
-          newBatches = this.patchBatchCounts(newBatches, batchId, previousState, newState);
+          batches = this.patchBatchCounts(batches, batchId, previousState, newState);
         }
       }
 
-      this.batchItems = newBatchItems;
-      this.batches = newBatches;
+      this.batchItems = batchItems;
+      this.batches = batches;
       this._notify();
 
       // Full server resync only for terminal state changes
       if (batchId && (newState === 'COMPLETED' || newState === 'FAILED')) {
-        this.fetchBatches().catch(err => console.error('Failed to refetch batches:', err));
+        this.fetchBatches().catch((err) => console.error('Failed to refetch batches:', err));
       }
     });
 
-    // Handle TASK_BATCH_UPDATE - batch of task updates (sent every 500ms)
+    // TASK_BATCH_UPDATE — coalesced task updates (every ~500ms)
     wsClient.on('TASK_BATCH_UPDATE', (message) => {
       if (!message.tasks || !Array.isArray(message.tasks) || message.tasks.length === 0) return;
 
-      const newDownloads = new Map(this.downloads);
-      const newBatchItems = new Map(this.batchItems);
-      let newBatches = this.batches;
+      let downloads = new Map(this.downloads);
+      let batchItems = new Map(this.batchItems);
+      let batches = this.batches;
 
-      for (const task of message.tasks) {
+      for (const task of message.tasks as DownloadTask[]) {
         if (!task || !task.id) continue;
-
-        const existingInDownloads = newDownloads.get(task.id);
-        const existingInBatch = task.batch_id
-          ? newBatchItems.get(task.batch_id)?.find((i: DownloadTask) => i.id === task.id)
-          : undefined;
-        const previousState: DownloadState | undefined =
-          existingInDownloads?.state ?? existingInBatch?.state;
-
-        const incomingTask = this.clearErrorIfActive(task);
-
-        if (existingInDownloads) {
-          newDownloads.set(task.id, { ...existingInDownloads, ...incomingTask });
-        } else if (!task.batch_id) {
-          newDownloads.set(task.id, incomingTask);
-        }
-
-        if (task.batch_id) {
-          const cachedItems = newBatchItems.get(task.batch_id);
-          if (cachedItems) {
-            newBatchItems.set(
-              task.batch_id,
-              cachedItems.map((item: DownloadTask) => (item.id === task.id ? { ...item, ...incomingTask } : item)),
-            );
-          }
-
-          if (previousState !== task.state) {
-            newBatches = this.patchBatchCounts(newBatches, task.batch_id, previousState, task.state);
-          }
+        const previous =
+          downloads.get(task.id) ??
+          (task.batch_id ? cachedBatchItems(batchItems, task.batch_id).find((item) => item.id === task.id) : undefined);
+        const previousState = previous?.state;
+        ({ downloads, batchItems } = this.applyTaskToCaches(this.clearErrorIfActive(task), downloads, batchItems));
+        if (task.batch_id && previousState !== task.state) {
+          batches = this.patchBatchCounts(batches, task.batch_id, previousState, task.state);
         }
       }
 
-      // Recalculate live metrics for every affected batch that has items in cache
-      const affectedBatchIds: Set<string> = new Set(
-        (message.tasks as DownloadTask[])
-          .filter(t => t?.batch_id)
-          .map(t => t.batch_id as string)
+      const touchedBatches = new Set(
+        (message.tasks as DownloadTask[]).filter((task) => task?.batch_id).map((task) => task.batch_id as string),
       );
-      for (const bid of affectedBatchIds) {
-        const items = newBatchItems.get(bid);
-        if (items) {
-          newBatches = this.patchBatchMetrics(newBatches, bid, items);
-        }
+      for (const batchId of touchedBatches) {
+        batches = this.patchBatchMetrics(batches, batchId, cachedBatchItems(batchItems, batchId));
       }
 
-      this.downloads = newDownloads;
-      this.batchItems = newBatchItems;
-      this.batches = newBatches;
+      this.downloads = downloads;
+      this.batchItems = batchItems;
+      this.batches = batches;
       this._notify();
     });
 
-    // Handle TASK_REMOVED - task deleted
     wsClient.on('TASK_REMOVED', (message) => {
-      if (message.task_id) {
-        let wasBatchItem = false;
-        let batchId: string | undefined;
+      const taskId: string | undefined = message.task_id;
+      if (!taskId) return;
+      const wasBatchMember = !!this.downloads.get(taskId)?.batch_id;
 
-        const task = this.downloads.get(message.task_id);
-        if (task?.batch_id) {
-          wasBatchItem = true;
-          batchId = task.batch_id;
-        }
+      const next = new Map(this.downloads);
+      next.delete(taskId);
+      this.downloads = next;
+      this._notify();
+      this.batchItems = removeFromBatchItemCache(this.batchItems, taskId);
 
-        const newDownloads = new Map(this.downloads);
-        newDownloads.delete(message.task_id);
-        this.downloads = newDownloads;
-        this._notify();
-
-        if (batchId) {
-          const newBatchItems = new Map(this.batchItems);
-          const items = newBatchItems.get(batchId);
-          if (items) {
-            newBatchItems.set(batchId, items.filter(item => item.id !== message.task_id));
-          }
-          this.batchItems = newBatchItems;
-        }
-
-        if (wasBatchItem) {
-          this.fetchBatches().catch(err => console.error('Failed to refetch batches:', err));
-        }
-
-        // Sync library overview whenever a task is removed
-        fetchLibraryOverview().catch(() => {});
+      if (wasBatchMember) {
+        this.fetchBatches().catch((err) => console.error('Failed to refetch batches:', err));
       }
+      fetchLibraryOverview().catch(() => {});
     });
 
-    // Handle ENGINE_STATS - engine statistics update
     wsClient.on('ENGINE_STATS', (message) => {
-      if (message.stats) {
-        this.stats = message.stats;
-        this._notify();
+      if (!message.stats) return;
+      this.stats = message.stats;
+      this._notify();
+    });
+
+    // Unmanaged qBittorrent torrents (torrents already tracked by a task are ignored)
+    wsClient.on('QBIT_TORRENT_UPSERT', (message) => {
+      const torrent = message.torrent;
+      if (!torrent || !message.instance_id) return;
+      if (isTrackedTorrent(this.downloads, torrent.hash)) return;
+      const next = new Map(this.torrentRows);
+      next.set(`${message.instance_id}:${torrent.hash}`, toTorrentRow(message.instance_id, torrent));
+      this.torrentRows = next;
+      this._notify();
+    });
+
+    wsClient.on('QBIT_TORRENT_REMOVED', (message) => {
+      if (!message.instance_id || !message.hash) return;
+      const key = `${message.instance_id}:${message.hash}`;
+      if (!this.torrentRows.has(key)) return;
+      const next = new Map(this.torrentRows);
+      next.delete(key);
+      this.torrentRows = next;
+      this._notify();
+    });
+
+    wsClient.on('QBIT_SYNC_INIT', (message) => {
+      if (!message.instance_id || !Array.isArray(message.torrents)) return;
+      const next = new Map(this.torrentRows);
+      for (const torrent of message.torrents) {
+        if (isTrackedTorrent(this.downloads, torrent.hash)) continue;
+        next.set(`${message.instance_id}:${torrent.hash}`, toTorrentRow(message.instance_id, torrent));
       }
+      this.torrentRows = next;
+      this._notify();
     });
   }
 
   // ---------------------------------------------------------------------------
-  // Svelte 4 store compat: subscribe method
-  // Allows $downloadStore auto-subscription in legacy .svelte templates.
+  // Svelte 4 store contract (backward compat)
   // ---------------------------------------------------------------------------
+
+  /**
+   * Subscribe to state snapshots (called immediately, then after each
+   * fetch/websocket update). Returns the unsubscribe function.
+   */
   subscribe(fn: (v: DownloadStoreState) => void): () => void {
     this._subscribers.add(fn);
-    
-    // Initial sync
-    fn({
-      downloads: this.downloads,
-      batches: this.batches,
-      batchItems: this.batchItems,
-      stats: this.stats,
-      statusCounts: this.statusCounts,
-      pagination: this.pagination,
-      loading: this.loading,
-      error: this.error,
-    });
-
+    fn(this.snapshot());
     return () => {
       this._subscribers.delete(fn);
     };
   }
 }
 
+// ============================================================================
+// Download events (UI side-channel, e.g. completion toasts / sounds)
+// ============================================================================
+
+const downloadEvents = typeof window !== 'undefined' ? new EventTarget() : null;
+
+function emitDownloadEvent(type: DownloadEventType, task: DownloadTask) {
+  downloadEvents?.dispatchEvent(new CustomEvent(type, { detail: task }));
+}
+
 /**
- * Global download store singleton
+ * Listen for TASK_UPDATED / TASK_STARTED / TASK_COMPLETED re-broadcast by the
+ * store (`event.detail` is the DownloadTask). Returns an unsubscribe function
+ * (no-op during SSR).
+ */
+export function onDownloadEvent(
+  type: DownloadEventType,
+  listener: (event: CustomEvent<DownloadTask>) => void,
+): () => void {
+  if (!downloadEvents) return () => {};
+  const handler = listener as EventListener;
+  downloadEvents.addEventListener(type, handler);
+  return () => downloadEvents.removeEventListener(type, handler);
+}
+
+/**
+ * Global store instance
  */
 export const downloadStore = new DownloadStore();
 
-// ---------------------------------------------------------------------------
-// Backward-compat store wrappers
-// These wrap singleton state so existing Svelte 4 $store auto-subscriptions
-// in .svelte files continue to work without modification.
-// In new Svelte 5 components, access downloadStore properties directly.
-// ---------------------------------------------------------------------------
+// ============================================================================
+// Svelte 4 compat readable stores (re-emit on every store notification)
+// ============================================================================
 
 function makeReadable<T>(getter: () => T) {
   return {
-    subscribe(fn: (v: T) => void): () => void {
-      // Subscribe to the main store to get updates
+    subscribe(fn: (value: T) => void): () => void {
       return downloadStore.subscribe(() => {
         fn(getter());
       });
@@ -1226,67 +1279,52 @@ function makeReadable<T>(getter: () => T) {
   };
 }
 
-/** Downloads as sorted array — use downloadStore.downloadList in new code */
+/** The only compat readable referenced by the 2026-09-02 build. */
+export const engineStats = makeReadable<EngineStats>(() => downloadStore.stats);
+
+// The following were exported by the 2026-05-14 baseline; none is referenced by
+// the 2026-09-02 build (removed or tree-shaken — cannot tell).
 export const downloads = makeReadable<DownloadTask[]>(() => downloadStore.downloadList);
-
-/** Batches as sorted array — use downloadStore.batchList in new code */
 export const batches = makeReadable<BatchSummary[]>(() => downloadStore.batchList);
-
 export const activeDownloads = makeReadable<DownloadTask[]>(() => downloadStore.activeDownloadsList);
 export const queuedDownloads = makeReadable<DownloadTask[]>(() => downloadStore.queuedDownloadsList);
 export const completedDownloads = makeReadable<DownloadTask[]>(() => downloadStore.completedDownloadsList);
 export const failedDownloads = makeReadable<DownloadTask[]>(() => downloadStore.failedDownloadsList);
 export const pausedDownloads = makeReadable<DownloadTask[]>(() => downloadStore.pausedDownloadsList);
-export const engineStats = makeReadable<EngineStats>(() => downloadStore.stats);
 export const statusCounts = makeReadable<StatusCounts>(() => downloadStore.statusCounts);
 export const paginationState = makeReadable<PaginationState>(() => downloadStore.pagination);
 export const isLoading = makeReadable<boolean>(() => downloadStore.loading);
 export const storeError = makeReadable<string | null>(() => downloadStore.error);
 
-// ---------------------------------------------------------------------------
-// Helper functions (unchanged)
-// ---------------------------------------------------------------------------
+// ============================================================================
+// Formatting helpers
+// ============================================================================
 
-/**
- * Helper: Format bytes to human readable
- */
+/** 1024-based, 2 decimals. Non-finite/negative/zero → "0 B". */
 export function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
+  if (!Number.isFinite(bytes) || bytes < 0 || bytes === 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
 }
 
-/**
- * Helper: Format speed (bytes/sec to human readable)
- */
-export function formatSpeed(bytesPerSec: number): string {
-  return `${formatBytes(bytesPerSec)}/s`;
+export function formatSpeed(bytesPerSec: number | string): string {
+  return `${formatBytes(Number(bytesPerSec))}/s`;
 }
 
-/**
- * Helper: Format ETA (seconds to human readable)
- */
-export function formatETA(seconds: number | undefined): string {
+/** "1h 5m" / "3m 20s" / "45s"; "--" when unknown. */
+export function formatETA(seconds: number | undefined | null): string {
   if (!seconds || seconds <= 0) return '--';
-
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
-
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  } else if (minutes > 0) {
-    return `${minutes}m ${secs}s`;
-  } else {
-    return `${secs}s`;
-  }
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
 }
 
-/**
- * Helper: Get state color
- */
+/** Baseline helper; not referenced by the 2026-09-02 build. */
 export function getStateColor(state: DownloadState): string {
   switch (state) {
     case 'DOWNLOADING':
@@ -1298,9 +1336,6 @@ export function getStateColor(state: DownloadState): string {
       return 'red';
     case 'PAUSED':
       return 'orange';
-    case 'QUEUED':
-    case 'WAITING':
-      return 'gray';
     default:
       return 'gray';
   }

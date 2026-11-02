@@ -11,13 +11,13 @@ pub fn calculate_match_score(
     is_tv_series: bool,
 ) -> f32 {
     let mut score = 0.0;
-    
+
     // Phase 1: Title Similarity (70% weight for movies, 85% for TV)
     // Increased from 60%/80% because title match is more reliable than year
     let sim_result = calculate_unified_similarity(search_title, filename, aliases);
     let title_weight = if is_tv_series { 0.85 } else { 0.70 };
     score += sim_result.score * title_weight;
-    
+
     // Phase 2: Year Match (20% weight for movies, 5% for TV)
     // Reduced from 30%/10% to be less strict on year mismatches
     // TV series use the show's first air date, so year matching is less reliable
@@ -25,10 +25,10 @@ pub fn calculate_match_score(
         if let (Some(fy), Some(ty)) = (file_year, target_year) {
             let year_diff = (fy as i32 - ty as i32).abs();
             score += match year_diff {
-                0 => 0.20,      // Perfect match
-                1 => 0.15,      // Off by one (common for late releases)
-                2 => 0.08,      // Tolerable
-                _ => 0.0,       // Too far off
+                0 => 0.20, // Perfect match
+                1 => 0.15, // Off by one (common for late releases)
+                2 => 0.08, // Tolerable
+                _ => 0.0,  // Too far off
             };
         }
     } else {
@@ -39,18 +39,18 @@ pub fn calculate_match_score(
             }
         }
     }
-    
+
     // Phase 3: Alias Boost (10% weight)
     let filename_lower = filename.to_lowercase();
     let has_alias_match = aliases.iter().any(|alias| {
         let alias_norm = normalize_vietnamese(alias);
         filename_lower.contains(&alias_norm) || filename_lower.contains(&alias.to_lowercase())
     });
-    
+
     if has_alias_match {
         score += 0.10;
     }
-    
+
     score.min(1.0) // Cap at 1.0
 }
 
@@ -92,8 +92,14 @@ mod tests {
         );
         // With 6-year mismatch, year score is 0, but title similarity is ~0.70
         // Total: 0.70 * 0.70 (title weight) = ~0.49
-        assert!(score < 0.90, "Large year mismatch should not score as high as perfect match");
-        assert!(score > 0.40, "But title similarity should still contribute significantly");
+        assert!(
+            score < 0.90,
+            "Large year mismatch should not score as high as perfect match"
+        );
+        assert!(
+            score > 0.40,
+            "But title similarity should still contribute significantly"
+        );
     }
 
     #[test]
@@ -107,7 +113,10 @@ mod tests {
             &[],
             true,
         );
-        assert!(score > 0.65, "TV series should not be penalized for year mismatch");
+        assert!(
+            score > 0.65,
+            "TV series should not be penalized for year mismatch"
+        );
     }
 
     #[test]

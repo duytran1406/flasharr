@@ -1,21 +1,25 @@
+// Barrel for components imported by several routes. Files whose presence in the
+// 2026-09-02 build could not be confirmed (unused, path not found) are not listed.
+
 // Card Components — local wrappers (TMDB-specific, NOT the core-ui MediaCard)
 export { default as MediaCard } from './cards/MediaCard.svelte';
-export { default as SearchResultCard } from './cards/SearchResultCard.svelte';
 export { default as SkeletonCard } from './cards/SkeletonCard.svelte';
 
 // UI Components — re-exported from @media-set/core-ui (local ui/ files removed)
 export { Badge, Button, UserAvatar, ErrorState, Modal } from '@media-set/core-ui';
-export { default as IdentityCard } from './ui/IdentityCard.svelte';
 export { default as IntroOverlay } from './ui/IntroOverlay.svelte';
 
+// App shell
+export { default as AuthGate } from './AuthGate.svelte';
+export { default as AppSidebar } from './layout/AppSidebar.svelte';
+export { default as AppViewport } from './layout/AppViewport.svelte';
+export { default as MobileNav } from './MobileNav.svelte';
+
 // Dashboard Components
-export { default as ActiveDownloadsList } from './dashboard/ActiveDownloadsList.svelte';
 export { default as NetflowStats } from './dashboard/NetflowStats.svelte';
 export { default as CalendarWidget } from './dashboard/CalendarWidget.svelte';
-export { default as LibraryWidget } from './dashboard/LibraryWidget.svelte';
 
 // Media Detail Components
-export { default as MediaDetailHero } from './media/MediaDetailHero.svelte';
 export { default as RelatedMediaSection } from './media/RelatedMediaSection.svelte';
 
 // Modal Components — Modal re-exported from core-ui above
@@ -27,6 +31,10 @@ export { default as AccountWarningModal } from './AccountWarningModal.svelte';
 
 // Notification Components — Flasharr-specific Toasts (uses $lib/stores/toasts)
 export { default as Toasts } from './Toasts.svelte';
+
+// Discover Components
+export { default as DiscoverFilterBar } from './DiscoverFilterBar.svelte';
+export type { UnifiedGenre } from './DiscoverFilterBar.svelte';
 
 // Shared / Visual Components
 export { default as SpeedGraph } from './SpeedGraph.svelte';

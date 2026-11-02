@@ -17,30 +17,40 @@ pub enum FlasharrError {
     // Download errors
     DownloadNotFound(uuid::Uuid),
     DownloadAlreadyExists(String),
-    DownloadInvalidState { id: uuid::Uuid, expected: String, actual: String },
-    
+    DownloadInvalidState {
+        id: uuid::Uuid,
+        expected: String,
+        actual: String,
+    },
+
     // Batch errors
     BatchNotFound(String),
     BatchEmpty(String),
-    
+
     // Database errors
     Database(String),
     DatabaseConnection(String),
-    
+
     // Host/Provider errors
     HostNotFound(String),
     HostAuthFailed(String),
-    HostRateLimited { host: String, retry_after: Option<u64> },
-    
+    HostRateLimited {
+        host: String,
+        retry_after: Option<u64>,
+    },
+
     // Validation errors
     InvalidUuid(String),
     InvalidRequest(String),
-    
+
     // External service errors
     TmdbError(String),
     FshareError(String),
-    ArrServiceError { service: String, message: String },
-    
+    ArrServiceError {
+        service: String,
+        message: String,
+    },
+
     // Generic
     Internal(String),
 }
@@ -50,8 +60,16 @@ impl fmt::Display for FlasharrError {
         match self {
             Self::DownloadNotFound(id) => write!(f, "Download not found: {}", id),
             Self::DownloadAlreadyExists(code) => write!(f, "Download already exists: {}", code),
-            Self::DownloadInvalidState { id, expected, actual } => {
-                write!(f, "Download {} in invalid state: expected {}, got {}", id, expected, actual)
+            Self::DownloadInvalidState {
+                id,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "Download {} in invalid state: expected {}, got {}",
+                    id, expected, actual
+                )
             }
             Self::BatchNotFound(id) => write!(f, "Batch not found: {}", id),
             Self::BatchEmpty(id) => write!(f, "Batch is empty: {}", id),
@@ -93,46 +111,121 @@ impl IntoResponse for FlasharrError {
     fn into_response(self) -> Response {
         let (status, code, message, details) = match &self {
             // 404 Not Found
-            FlasharrError::DownloadNotFound(_) => (StatusCode::NOT_FOUND, "DOWNLOAD_NOT_FOUND", self.to_string(), None),
-            FlasharrError::BatchNotFound(_) => (StatusCode::NOT_FOUND, "BATCH_NOT_FOUND", self.to_string(), None),
-            FlasharrError::HostNotFound(_) => (StatusCode::NOT_FOUND, "HOST_NOT_FOUND", self.to_string(), None),
-            
+            FlasharrError::DownloadNotFound(_) => (
+                StatusCode::NOT_FOUND,
+                "DOWNLOAD_NOT_FOUND",
+                self.to_string(),
+                None,
+            ),
+            FlasharrError::BatchNotFound(_) => (
+                StatusCode::NOT_FOUND,
+                "BATCH_NOT_FOUND",
+                self.to_string(),
+                None,
+            ),
+            FlasharrError::HostNotFound(_) => (
+                StatusCode::NOT_FOUND,
+                "HOST_NOT_FOUND",
+                self.to_string(),
+                None,
+            ),
+
             // 400 Bad Request
-            FlasharrError::InvalidUuid(_) => (StatusCode::BAD_REQUEST, "INVALID_UUID", self.to_string(), None),
-            FlasharrError::InvalidRequest(_) => (StatusCode::BAD_REQUEST, "INVALID_REQUEST", self.to_string(), None),
-            FlasharrError::BatchEmpty(_) => (StatusCode::BAD_REQUEST, "BATCH_EMPTY", self.to_string(), None),
-            
+            FlasharrError::InvalidUuid(_) => (
+                StatusCode::BAD_REQUEST,
+                "INVALID_UUID",
+                self.to_string(),
+                None,
+            ),
+            FlasharrError::InvalidRequest(_) => (
+                StatusCode::BAD_REQUEST,
+                "INVALID_REQUEST",
+                self.to_string(),
+                None,
+            ),
+            FlasharrError::BatchEmpty(_) => (
+                StatusCode::BAD_REQUEST,
+                "BATCH_EMPTY",
+                self.to_string(),
+                None,
+            ),
+
             // 409 Conflict
-            FlasharrError::DownloadAlreadyExists(_) => (StatusCode::CONFLICT, "DOWNLOAD_EXISTS", self.to_string(), None),
-            FlasharrError::DownloadInvalidState { .. } => (StatusCode::CONFLICT, "INVALID_STATE", self.to_string(), None),
-            
+            FlasharrError::DownloadAlreadyExists(_) => (
+                StatusCode::CONFLICT,
+                "DOWNLOAD_EXISTS",
+                self.to_string(),
+                None,
+            ),
+            FlasharrError::DownloadInvalidState { .. } => (
+                StatusCode::CONFLICT,
+                "INVALID_STATE",
+                self.to_string(),
+                None,
+            ),
+
             // 401 Unauthorized
-            FlasharrError::HostAuthFailed(_) => (StatusCode::UNAUTHORIZED, "AUTH_FAILED", self.to_string(), None),
-            
+            FlasharrError::HostAuthFailed(_) => (
+                StatusCode::UNAUTHORIZED,
+                "AUTH_FAILED",
+                self.to_string(),
+                None,
+            ),
+
             // 429 Too Many Requests
             FlasharrError::HostRateLimited { retry_after, .. } => {
                 let msg = self.to_string();
                 let details = retry_after.map(|s| format!("retry_after: {}", s));
                 (StatusCode::TOO_MANY_REQUESTS, "RATE_LIMITED", msg, details)
             }
-            
+
             // 503 Service Unavailable
-            FlasharrError::TmdbError(_) => (StatusCode::SERVICE_UNAVAILABLE, "TMDB_ERROR", self.to_string(), None),
-            FlasharrError::FshareError(_) => (StatusCode::SERVICE_UNAVAILABLE, "FSHARE_ERROR", self.to_string(), None),
-            FlasharrError::ArrServiceError { .. } => (StatusCode::SERVICE_UNAVAILABLE, "ARR_ERROR", self.to_string(), None),
-            FlasharrError::DatabaseConnection(_) => (StatusCode::SERVICE_UNAVAILABLE, "DB_UNAVAILABLE", self.to_string(), None),
-            
+            FlasharrError::TmdbError(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "TMDB_ERROR",
+                self.to_string(),
+                None,
+            ),
+            FlasharrError::FshareError(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "FSHARE_ERROR",
+                self.to_string(),
+                None,
+            ),
+            FlasharrError::ArrServiceError { .. } => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ARR_ERROR",
+                self.to_string(),
+                None,
+            ),
+            FlasharrError::DatabaseConnection(_) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "DB_UNAVAILABLE",
+                self.to_string(),
+                None,
+            ),
+
             // 500 Internal Server Error
-            FlasharrError::Database(_) => (StatusCode::INTERNAL_SERVER_ERROR, "DB_ERROR", self.to_string(), None),
-            FlasharrError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", self.to_string(), None),
+            FlasharrError::Database(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "DB_ERROR",
+                self.to_string(),
+                None,
+            ),
+            FlasharrError::Internal(_) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "INTERNAL_ERROR",
+                self.to_string(),
+                None,
+            ),
         };
-        
+
         let body = ErrorResponse {
             error: message,
             code: code.to_string(),
             details,
         };
-        
+
         (status, Json(body)).into_response()
     }
 }

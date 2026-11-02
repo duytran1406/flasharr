@@ -9,19 +9,19 @@ use serde::{Deserialize, Serialize};
 pub struct DownloadProgress {
     /// Bytes downloaded so far
     pub downloaded_bytes: u64,
-    
+
     /// Total file size in bytes
     pub total_bytes: u64,
-    
+
     /// Current download speed in bytes/sec
     pub speed_bytes_per_sec: f64,
-    
+
     /// Estimated time remaining in seconds
     pub eta_seconds: f64,
-    
+
     /// Download completion percentage (0-100)
     pub percentage: f64,
-    
+
     /// Bytes already present when session started (for resume)
     #[serde(skip)]
     #[allow(dead_code)]
@@ -34,7 +34,7 @@ impl DownloadProgress {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     /// Create progress with known total size
     pub fn with_total(total_bytes: u64) -> Self {
         Self {
@@ -42,7 +42,7 @@ impl DownloadProgress {
             ..Default::default()
         }
     }
-    
+
     /// Update progress calculations
     ///
     /// # Arguments
@@ -50,19 +50,23 @@ impl DownloadProgress {
     /// * `total` - Total file size
     /// * `elapsed_seconds` - Time elapsed since download start
     pub fn update(&mut self, downloaded: u64, total: u64, elapsed_seconds: f64) {
-        self.downloaded_bytes = if total > 0 { downloaded.min(total) } else { downloaded };
+        self.downloaded_bytes = if total > 0 {
+            downloaded.min(total)
+        } else {
+            downloaded
+        };
         self.total_bytes = total;
-        
+
         // Calculate percentage
         if total > 0 {
             self.percentage = ((self.downloaded_bytes as f64 / total as f64) * 100.0).min(100.0);
         }
-        
+
         // Calculate speed based on session bytes (excluding resumed bytes)
         if elapsed_seconds > 0.0 {
             let session_downloaded = self.downloaded_bytes.saturating_sub(self.initial_bytes);
             self.speed_bytes_per_sec = (session_downloaded as f64 / elapsed_seconds).max(0.0);
-            
+
             // Calculate ETA
             if self.speed_bytes_per_sec > 0.0 && total > 0 {
                 let remaining = total.saturating_sub(self.downloaded_bytes);
@@ -72,7 +76,7 @@ impl DownloadProgress {
             }
         }
     }
-    
+
     /// Mark download as complete
     pub fn complete(&mut self) {
         self.downloaded_bytes = self.total_bytes;
@@ -80,7 +84,7 @@ impl DownloadProgress {
         self.speed_bytes_per_sec = 0.0;
         self.eta_seconds = 0.0;
     }
-    
+
     /// Reset progress (for retries)
     pub fn reset(&mut self) {
         self.downloaded_bytes = 0;
@@ -89,12 +93,12 @@ impl DownloadProgress {
         self.percentage = 0.0;
         self.initial_bytes = 0;
     }
-    
+
     /// Get human-readable speed string
     pub fn speed_string(&self) -> String {
         format_bytes_per_sec(self.speed_bytes_per_sec)
     }
-    
+
     /// Get human-readable ETA string
     pub fn eta_string(&self) -> String {
         format_duration(self.eta_seconds)
@@ -162,7 +166,7 @@ mod tests {
     fn test_progress_update() {
         let mut progress = DownloadProgress::new();
         progress.update(500, 1000, 1.0);
-        
+
         assert_eq!(progress.downloaded_bytes, 500);
         assert_eq!(progress.total_bytes, 1000);
         assert!((progress.percentage - 50.0).abs() < 0.01);
@@ -174,7 +178,7 @@ mod tests {
         let mut progress = DownloadProgress::new();
         progress.initial_bytes = 200; // Started with 200 bytes
         progress.update(500, 1000, 1.0);
-        
+
         // Speed should be based on session bytes (500 - 200 = 300)
         assert!((progress.speed_bytes_per_sec - 300.0).abs() < 0.01);
     }

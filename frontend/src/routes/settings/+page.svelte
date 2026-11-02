@@ -1,349 +1,803 @@
 <script lang="ts">
-  import { onDestroy, onMount } from "svelte";
-  import SwitchAccountModal from "$lib/components/SwitchAccountModal.svelte";
-  import { Badge } from "@media-set/core-ui";
+  import { onMount } from "svelte";
   import { get } from "svelte/store";
+  import { page } from "$app/stores";
   import { goto } from "$app/navigation";
-  import { accountStore } from "$lib/stores/account.svelte";
+  import { Badge, Button, Modal } from "@media-set/core-ui";
   import {
     systemStore,
     systemLogs,
+    systemActivity,
     downloadSettings,
     indexerSettings,
     sonarrSettings,
     radarrSettings,
+    prowlarrSettings,
+    integrationStatus,
+    metadataProviders,
+    storageStatus,
+    systemHealth,
+    torboxSettings,
+    torboxProfile,
     folderSourceUrl,
+    importedFolderSources as folderImportedSourceCount,
+    integrationStatusKind,
+    integrationStatusLabel,
+    type ActivityEvent,
+    type LogEntry,
+    type MetadataProvider,
+    type RadarrSettings,
+    type SonarrSettings,
+    type ProwlarrSettings,
+    type TorBoxProfile,
+    type TorBoxSettings,
   } from "$lib/stores/system";
   import { toasts } from "$lib/stores/toasts";
-  import { IdentityCard, Button } from "$lib/components";
+  import { accountStore } from "$lib/stores/account.svelte";
+  import { authStore } from "$lib/stores/auth.svelte";
+  import { fetchLibraryOverview, formatDiskSize, type LibraryOverview } from "$lib/stores/arr";
+  import { copyToClipboard } from "$lib/utils/clipboard";
+  import SwitchAccountModal from "$lib/components/SwitchAccountModal.svelte";
+  import IntegrationCards from "$lib/components/settings/IntegrationCards.svelte";
+  import SettingsLogPanel from "$lib/components/settings/SettingsLogPanel.svelte";
+  import SettingsMobileTabs from "$lib/components/settings/SettingsMobileTabs.svelte";
+  import StremioAddonsSettings from "$lib/components/settings/StremioAddonsSettings.svelte";
+  import FolderCacheSyncModal, { type FolderCacheStatus } from "$lib/components/settings/FolderCacheSyncModal.svelte";
+  import FolderCacheRefreshModal from "$lib/components/settings/FolderCacheRefreshModal.svelte";
+  import { SETTINGS_TABS, nextSettingsTab, type SettingsTabId } from "$lib/components/settings/settingsTabs";
 
-  // UI State
-  let activeCategory: "services" | "system" = $state("services");
-  let endpointTab: "newznab" | "sabnzbd" = $state("newznab");
+  type AccountProvider = "fshare" | "torbox";
+
+  interface AccountRow {
+    id: string;
+    provider: AccountProvider;
+    email: string;
+    plan: string;
+    expiry: string;
+    active: boolean;
+    subtitle?: string;
+    profile?: TorBoxProfile | null;
+  }
+
+  const METADATA_PROVIDERS = [
+    { id: "tmdb", name: "TMDB", logo: "/images/integrations/tmdb.svg", url: "https://www.themoviedb.org" },
+    { id: "tvdb", name: "TheTVDB", logo: "/images/integrations/tvdb.png", url: "https://thetvdb.com" },
+  ];
+
+  // ── Tabs (?tab= query parameter, General is the default) ──
+  let logCategory = $state<"services" | "system">("services");
+  let activeTab = $state<SettingsTabId>(
+    SETTINGS_TABS.some((tab) => tab.id === $page.url.searchParams.get("tab"))
+      ? ($page.url.searchParams.get("tab") as SettingsTabId)
+      : "general",
+  );
+
+  function selectTab(tab: SettingsTabId) {
+    activeTab = tab;
+    const url = new URL($page.url);
+    if (tab === "general") url.searchParams.delete("tab");
+    else url.searchParams.set("tab", tab);
+    goto(`${url.pathname}${url.search}`, { replaceState: true, noScroll: true });
+  }
+
+  // ── UI state ──
+  let showIndexerApiKey = $state(false);
   let showSonarrApiKey = $state(false);
   let showRadarrApiKey = $state(false);
-  let showApiKey = $state(false);
-  let sonarrTesting = $state(false);
-  let radarrTesting = $state(false);
-  let sonarrConnected = $state(false);
-  let radarrConnected = $state(false);
-  let logInterval: any;
+  let testingSonarr = $state(false);
+  let testingRadarr = $state(false);
+  let testingProwlarr = $state(false);
+  let savingSonarr = $state(false);
+  let savingRadarr = $state(false);
+  let savingProwlarr = $state(false);
+  let folderSourceMessage = $state("");
+  let savingFolderSources = $state(false);
+  let folderSourceInput = $state("");
+  let savedFolderSourceUrl = $state("");
+  let stagedSourceText = $state("");
+  let stagedSourceName = $state("");
+  let sourceFileInput = $state<HTMLInputElement | undefined>(undefined);
+  let downloadMessage = $state("");
+  let savingDownload = $state(false);
+  let downloadError = $state("");
+  let startingCacheSync = $state(false);
+  let folderCacheStatus = $state<FolderCacheStatus | null>(null);
+  let cacheModalOpen = $state(false);
+  let refreshModalOpen = $state(false);
+  let libraryOverview = $state<LibraryOverview | null>(null);
+  let logs = $state<LogEntry[]>([]);
+  let activities = $state<ActivityEvent[]>([]);
+  let addAccountOpen = $state(false);
+  let pendingRemoval = $state<AccountRow | null>(null);
+  let removingAccount = $state(false);
+  let refreshingAccountId = $state<string | null>(null);
+  let accountActionResult = $state<{ id: string; message: string } | null>(null);
+  let torboxConfig = $state<TorBoxSettings | null>(null);
+  let torboxAccountProfile = $state<TorBoxProfile | null>(null);
+  let editingProvider = $state<string | null>(null);
+  let providerKeyInput = $state("");
+  let showProviderKey = $state(false);
+  let providerFeedback = $state("");
+  let providerError = $state("");
+  let testingProvider = $state(false);
+  let savingProvider = $state(false);
+  let passwordModalOpen = $state(false);
+  let currentPassword = $state("");
+  let newPassword = $state("");
+  let confirmPassword = $state("");
+  let changingPassword = $state(false);
+  let passwordError = $state("");
 
-  // Switch account form state
-  let showSwitchForm = $state(false);
-  let switchEmail = $state("");
-  let switchPassword = $state("");
-  let switchLoading = $state(false);
-  let showSwitchModal = $state(false);
-  let showSwitchPassword = $state(false);
-
-  // Radial HUD state
-  let activeSector: string | null = $state(null);
-
-  function selectSector(name: string) {
-    activeSector = activeSector === name ? null : name;
+  // ── Administrator password ──
+  function closePasswordModal() {
+    if (changingPassword) return;
+    passwordModalOpen = false;
+    currentPassword = newPassword = confirmPassword = passwordError = "";
   }
 
-  // Derived VIP status
-  let isVip = $derived(accountStore.isVip);
-
-  // Local state for editing (bound to inputs)
-  let concurrency = $state(3);
-  let threads = $state(4);
-  let downloadPath = $state("");
-  let folderSourceGistUrl = $state("");
-  let folderCacheRefreshing = $state(false);
-
-  /** Custom drag handler for the concurrency hex slider */
-  function onSliderPointerDown(e: PointerEvent) {
-    const el = e.currentTarget as HTMLElement;
-    el.setPointerCapture(e.pointerId);
-    updateConcurrencyFromPointer(e, el);
-  }
-  function onSliderPointerMove(e: PointerEvent) {
-    if (!(e.currentTarget as HTMLElement).hasPointerCapture(e.pointerId))
+  async function changePassword() {
+    passwordError = "";
+    if (newPassword !== confirmPassword) {
+      passwordError = "New passwords do not match.";
       return;
-    updateConcurrencyFromPointer(e, e.currentTarget as HTMLElement);
-  }
-  function updateConcurrencyFromPointer(e: PointerEvent, el: HTMLElement) {
-    const rect = el.getBoundingClientRect();
-    const pct = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-    concurrency = Math.round(pct * 9) + 1;
+    }
+    changingPassword = true;
+    try {
+      await authStore.changePassword(currentPassword, newPassword);
+      changingPassword = false;
+      toasts.success("Password changed. Sign in again.");
+      closePasswordModal();
+      goto("/");
+    } catch (error) {
+      passwordError = error instanceof Error ? error.message : "Unable to change password.";
+    } finally {
+      changingPassword = false;
+    }
   }
 
-  let sonarrEnabled = $state(false);
+  // ── Metadata providers ──
+  function providerRow(provider: string): MetadataProvider {
+    return (
+      $metadataProviders.find((row) => row.provider === provider) ?? {
+        provider,
+        configured: false,
+        source: "none",
+        maskedKey: "",
+        reachable: null,
+        message: "",
+      }
+    );
+  }
+
+  function openProviderEditor(provider: string) {
+    editingProvider = provider;
+    providerKeyInput = "";
+    showProviderKey = false;
+    providerFeedback = "";
+    providerError = "";
+  }
+
+  function closeProviderEditor() {
+    if (savingProvider || testingProvider) return;
+    editingProvider = null;
+    providerKeyInput = "";
+    showProviderKey = false;
+    providerFeedback = "";
+    providerError = "";
+  }
+
+  async function testProviderKey() {
+    if (!editingProvider) return;
+    testingProvider = true;
+    providerFeedback = providerError = "";
+    const result = await systemStore.testMetadataProvider(editingProvider, providerKeyInput);
+    testingProvider = false;
+    if (result.success) providerFeedback = result.message ?? "";
+    else providerError = result.message ?? "";
+  }
+
+  async function saveProviderKey() {
+    if (!editingProvider) return;
+    if (!providerKeyInput.trim()) {
+      providerError = "Enter an API key to save.";
+      return;
+    }
+    savingProvider = true;
+    providerFeedback = providerError = "";
+    const result = await systemStore.saveMetadataProvider(editingProvider, providerKeyInput);
+    savingProvider = false;
+    if (!result.success) {
+      providerError = result.message ?? "";
+      return;
+    }
+    toasts.success(result.message ?? "");
+    closeProviderEditor();
+  }
+
+  // ── Accounts (Fshare via accountStore, TorBox via system settings) ──
+  function formatProfileDate(value: string | null | undefined): string {
+    if (!value) return "Profile unavailable";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime())
+      ? "Profile unavailable"
+      : date.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+  }
+
+  function accountRows(): AccountRow[] {
+    const fshareRows: AccountRow[] = accountStore.listFormatted.map((account) => ({
+      id: `fshare:${account.email}`,
+      provider: "fshare",
+      email: account.email,
+      plan: account.rank,
+      expiry: account.expiry,
+      active: account.is_active,
+    }));
+    const torboxRows: AccountRow[] =
+      torboxConfig?.enabled && torboxConfig.api_key
+        ? [
+            {
+              id: "torbox",
+              provider: "torbox",
+              email: torboxAccountProfile?.email || "Profile unavailable",
+              plan: torboxAccountProfile?.plan || "Profile unavailable",
+              expiry: formatProfileDate(torboxAccountProfile?.premium_expires_at),
+              active: ["active", "premium", "ok", "subscribed"].includes((torboxAccountProfile?.status || "").toLowerCase()),
+              subtitle: torboxAccountProfile?.status || "TorBox",
+              profile: torboxAccountProfile,
+            },
+          ]
+        : [];
+    return [...fshareRows, ...torboxRows];
+  }
+
+  async function removeAccount() {
+    if (!pendingRemoval) return;
+    removingAccount = true;
+    try {
+      const result =
+        pendingRemoval.provider === "fshare"
+          ? await accountStore.logout(pendingRemoval.email)
+          : await systemStore.clearTorBoxSettings();
+      if (result.success) {
+        toasts.success(result.message || "Account removed");
+        pendingRemoval = null;
+        if (torboxConfig?.enabled) torboxConfig = { ...torboxConfig, enabled: false, api_key: "" };
+        torboxAccountProfile = null;
+      } else {
+        toasts.error(result.message || "Failed to remove account");
+      }
+    } catch {
+      toasts.error("Network error — account could not be removed");
+    } finally {
+      removingAccount = false;
+    }
+  }
+
+  async function refreshAccount(account: AccountRow) {
+    refreshingAccountId = account.id;
+    accountActionResult = null;
+    try {
+      const result =
+        account.provider === "fshare"
+          ? await accountStore.refresh(account.email)
+          : await systemStore.testTorBoxConnection({ ...get(torboxSettings), enabled: true });
+      const message =
+        result.message ||
+        (result.success
+          ? `${account.provider === "fshare" ? "Fshare refreshed" : "TorBox connected"}`
+          : `Failed to ${account.provider === "fshare" ? "refresh Fshare" : "test TorBox connection"}`);
+      accountActionResult = { id: account.id, message };
+      if (result.success) toasts.success(message);
+      else toasts.error(message);
+    } catch {
+      const message = `Network error — ${account.provider} could not be refreshed`;
+      accountActionResult = { id: account.id, message };
+      toasts.error(message);
+    } finally {
+      refreshingAccountId = null;
+      await reloadAccounts();
+    }
+  }
+
+  async function loadTorBoxAccount() {
+    await systemStore.fetchTorBoxSettings();
+    const settings = get(torboxSettings);
+    if (settings.enabled && settings.api_key) await systemStore.fetchTorBoxProfile();
+    torboxConfig = settings;
+    torboxAccountProfile = get(torboxProfile);
+  }
+
+  async function reloadAccounts() {
+    await Promise.all([accountStore.fetch(), loadTorBoxAccount()]);
+  }
+
+  // ── Form state mirrored from the stores ──
+  let concurrency = $state(3);
+  let segmentsPerDownload = $state(4);
+  let downloadPath = $state("");
+  let indexerApiKey = $state("");
   let sonarrUrl = $state("http://localhost:8989");
   let sonarrApiKey = $state("");
   let sonarrAutoImport = $state(true);
-
-  let radarrEnabled = $state(false);
   let radarrUrl = $state("http://localhost:7878");
   let radarrApiKey = $state("");
   let radarrAutoImport = $state(true);
+  let prowlarrUrl = $state("http://localhost:9696");
+  let prowlarrApiKey = $state("");
+  let savedDownloadPath = $state("");
+  let savedConcurrency = $state(3);
+  let savedSonarrUrl = $state("");
+  let savedSonarrApiKey = $state("");
+  let savedRadarrUrl = $state("");
+  let savedRadarrApiKey = $state("");
+  let savedProwlarrUrl = $state("");
+  let savedProwlarrApiKey = $state("");
+  let sonarrChangedElsewhere = $state(false);
+  let radarrChangedElsewhere = $state(false);
+  let prowlarrChangedElsewhere = $state(false);
+  let loaded = $state(false);
+  let loadError = $state("");
+  let cacheStatusTimer: ReturnType<typeof setInterval> | undefined;
+  let integrationStatusTimer: ReturnType<typeof setInterval> | undefined;
 
-  let indexerApiKey = $state("");
-  let indexerUrl = $state("");
-
-  // Logs - use manual subscription to avoid reactive re-renders
-  let logs = $state<LogEntry[]>([]);
-
-  // Import LogEntry type
-  import type { LogEntry } from "$lib/stores/system";
-
-  onMount(() => {
-    // Fetch account info
-    accountStore.fetch();
-
-    // Fetch all settings once on mount and initialize form state
-    (async () => {
-      await Promise.all([
-        systemStore.fetchDownloadSettings(),
-        systemStore.fetchIndexerSettings(),
-        systemStore.fetchSonarrSettings(),
-        systemStore.fetchRadarrSettings(),
-        systemStore.fetchLogs(),
-        systemStore.fetchFolderSourceConfig(),
-      ]);
-
-      // Initialize local form state from stores (one-time, non-reactive read)
-      const dlSettings = get(downloadSettings);
-      concurrency = dlSettings.max_concurrent;
-      threads = dlSettings.segments_per_download;
-      downloadPath = dlSettings.directory;
-
-      const fsUrl = get(folderSourceUrl);
-      folderSourceGistUrl = fsUrl;
-
-      const idxSettings = get(indexerSettings);
-      indexerApiKey = idxSettings.api_key;
-      indexerUrl =
-        idxSettings.indexer_url || "http://flasharr:8484/api/indexer";
-
-      const snrSettings = get(sonarrSettings);
-      sonarrEnabled = snrSettings.enabled;
-      sonarrUrl = snrSettings.url;
-      sonarrApiKey = snrSettings.api_key;
-      sonarrAutoImport = snrSettings.auto_import;
-
-      const rdrSettings = get(radarrSettings);
-      radarrEnabled = rdrSettings.enabled;
-      radarrUrl = rdrSettings.url;
-      radarrApiKey = rdrSettings.api_key;
-      radarrAutoImport = rdrSettings.auto_import;
-    })();
-
-    // Subscribe to logs manually (doesn't cause component re-render)
-    const unsubscribeLogs = systemLogs.subscribe((value) => {
-      logs = value;
-    });
-
-    // Re-enable log polling - now it won't cause form resets!
-    logInterval = setInterval(() => systemStore.fetchLogs(), 3000);
-
-    // Set Page Header
-    const headerContainer = document.getElementById("header-dynamic-content");
-    if (headerContainer) {
-      headerContainer.innerHTML = `
-        <div style="display: flex; align-items: center; gap: 0.75rem;">
-          <span class="material-icons" style="color: var(--color-primary); font-size: 1.5rem;">settings_suggest</span>
-          <h1 style="font-size: 0.9rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; margin: 0; color: #fff;">System Configuration</h1>
-        </div>
-      `;
-    }
-
-    return () => {
-      if (logInterval) clearInterval(logInterval);
-    };
-  });
-
-  async function saveEngineConfig() {
-    const result = await systemStore.saveDownloadSettings({
-      directory: downloadPath,
-      max_concurrent: parseInt(concurrency.toString()),
-      segments_per_download: parseInt(threads.toString()),
-    });
-
-    // Also save folder source URL
-    if (folderSourceGistUrl.trim()) {
-      await systemStore.saveFolderSourceConfig(folderSourceGistUrl.trim());
-    } else {
-      // Clear the saved URL if input is empty
-      await systemStore.saveFolderSourceConfig("");
-    }
-
-    if (result.success) {
-      toasts.success(result.message || "Engine configuration saved");
-    } else {
-      toasts.error(result.message || "Failed to save configuration");
+  // ── Fshare folder cache ──
+  async function fetchFolderCacheStatus() {
+    try {
+      const response = await fetch("/api/folder-source/status");
+      if (response.ok) folderCacheStatus = await response.json();
+    } catch {
+      // keep the last known status
     }
   }
 
-  async function refreshFolderCache() {
-    if (folderCacheRefreshing) return;
+  function cacheIsStale(): boolean {
+    const lastSync = Number(folderCacheStatus?.last_sync);
+    return !Number.isFinite(lastSync) || Date.now() / 1000 - lastSync > 86400;
+  }
 
-    // Validate the URL before triggering sync
-    const url = folderSourceGistUrl.trim();
-    if (!url) {
-      toasts.error("Folder source URL is empty — enter a URL first");
+  function cacheHealth(): "syncing" | "attention" | "ready" | "empty" {
+    if (folderCacheStatus?.is_syncing) return "syncing";
+    if (
+      folderCacheStatus?.last_error ||
+      folderCacheStatus?.progress.outcome === "failed" ||
+      ((folderCacheStatus?.total_items ?? 0) > 0 && cacheIsStale())
+    )
+      return "attention";
+    return folderCacheStatus?.total_items ? "ready" : "empty";
+  }
+
+  function nextScheduledSync(): string {
+    const now = new Date();
+    const next = new Date(now);
+    next.setHours(1, 0, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    return next.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function cacheSummary(): string {
+    const folders = folderCacheStatus?.folder_count ?? 0;
+    const health = cacheHealth();
+    const label =
+      health === "syncing" ? "Syncing" : health === "ready" ? "Healthy" : health === "attention" ? "Needs attention" : "Not indexed";
+    return `${folders} folders cached · ${label} · Next sync ${nextScheduledSync()}`;
+  }
+
+  // ── Concurrency dot slider ──
+  function handleSliderPointerDown(event: PointerEvent) {
+    const slider = event.currentTarget as HTMLElement;
+    slider.setPointerCapture(event.pointerId);
+    setConcurrencyFromPointer(event, slider);
+  }
+
+  function handleSliderPointerMove(event: PointerEvent) {
+    const slider = event.currentTarget as HTMLElement;
+    if (slider.hasPointerCapture(event.pointerId)) setConcurrencyFromPointer(event, slider);
+  }
+
+  function handleSliderPointerUp(event: PointerEvent) {
+    const slider = event.currentTarget as HTMLElement;
+    if (slider.hasPointerCapture(event.pointerId)) slider.releasePointerCapture(event.pointerId);
+  }
+
+  function handleSliderKeydown(event: KeyboardEvent) {
+    const steps: Record<string, number> = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 };
+    if (event.key === "Home") concurrency = 1;
+    else if (event.key === "End") concurrency = 10;
+    else if (steps[event.key]) concurrency = Math.min(10, Math.max(1, concurrency + steps[event.key]));
+    else return;
+    event.preventDefault();
+  }
+
+  function setConcurrencyFromPointer(event: PointerEvent, slider: HTMLElement) {
+    const rect = slider.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    concurrency = Math.round(ratio * 9) + 1;
+  }
+
+  // ── Download configuration ──
+  function validateDownloadSettings(): string {
+    if (!downloadPath.trim().startsWith("/")) return "Download path must be absolute.";
+    if (!Number.isInteger(Number(concurrency)) || concurrency < 1 || concurrency > 10) return "Concurrency must be between 1 and 10.";
+    return "";
+  }
+
+  async function saveDownloadConfig() {
+    downloadError = validateDownloadSettings();
+    if (downloadError) return;
+    savingDownload = true;
+    downloadMessage = "";
+    const result = await systemStore.saveDownloadSettings({
+      directory: downloadPath.trim(),
+      max_concurrent: Number(concurrency),
+      segments_per_download: segmentsPerDownload,
+    });
+    savingDownload = false;
+    if (!result.success) {
+      downloadError = result.message || "Failed to save download configuration";
       return;
     }
+    downloadPath = downloadPath.trim();
+    savedDownloadPath = downloadPath;
+    savedConcurrency = concurrency;
+    downloadMessage = result.message || "Download configuration saved.";
+  }
 
-    // Validate URL format
+  // ── Folder sources ──
+  async function stageSourceFile(files: FileList | null | undefined) {
+    const file = files?.[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".txt")) {
+      folderSourceMessage = "Choose a .txt source list.";
+      return;
+    }
+    if (file.size === 0 || file.size > 1024 * 1024) {
+      folderSourceMessage = "Source list must be between 1 byte and 1 MiB.";
+      return;
+    }
+    stagedSourceText = await file.text();
+    stagedSourceName = file.name;
+    folderSourceMessage = "";
+  }
+
+  async function updateFolderSources() {
+    savingFolderSources = true;
+    folderSourceMessage = "";
+    const text = stagedSourceText.trim();
+    const url = folderSourceInput.trim();
+    const result = text
+      ? await systemStore.importFolderSources(text)
+      : url !== savedFolderSourceUrl
+        ? await systemStore.saveFolderSourceConfig(url)
+        : { success: false, message: "Enter a remote text-file URL or upload a local .txt list." };
+    savingFolderSources = false;
+    folderSourceMessage =
+      result.message || (result.success ? "Folder sources updated" : "Folder sources could not be updated");
+    if (result.success) {
+      if (text) {
+        stagedSourceText = "";
+        stagedSourceName = "";
+      } else {
+        folderSourceInput = savedFolderSourceUrl = url;
+      }
+      await fetchFolderCacheStatus();
+    }
+  }
+
+  async function startCacheSync() {
+    cacheModalOpen = true;
+    if (startingCacheSync || folderCacheStatus?.is_syncing) {
+      await fetchFolderCacheStatus();
+      return;
+    }
+    startingCacheSync = true;
     try {
-      const parsed = new URL(url);
-      if (!parsed.protocol.startsWith("http")) {
-        toasts.error("Folder source must be an HTTP/HTTPS URL");
+      const response = await fetch("/api/folder-source/sync", { method: "POST" });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        toasts.error(body?.message || "Failed to trigger folder cache sync");
         return;
       }
+      await fetchFolderCacheStatus();
+      toasts.success(body?.already_running ? "Folder cache sync already running" : "Folder cache sync started");
     } catch {
-      toasts.error("Invalid URL format — please check the folder source link");
-      return;
-    }
-
-    folderCacheRefreshing = true;
-    try {
-      // Save the URL first
-      await systemStore.saveFolderSourceConfig(url);
-      // Trigger backend sync
-      const resp = await fetch("/api/folder-source/sync", { method: "POST" });
-      if (resp.ok) {
-        toasts.success("Folder cache sync started — refreshing in background");
-      } else {
-        toasts.error("Failed to trigger folder cache sync");
-      }
-    } catch (err) {
       toasts.error("Network error — could not reach server");
     } finally {
-      folderCacheRefreshing = false;
+      startingCacheSync = false;
     }
   }
 
-  async function clearLogs() {
-    systemStore.clearLogs();
-    toasts.success("Terminal logs cleared");
+  async function refreshSingleFolder(folderUrl: string): Promise<string | null> {
+    try {
+      const response = await fetch("/api/folder-source/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder_url: folderUrl }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok || body?.success !== true) return body?.message || "Folder refresh could not be started";
+      refreshModalOpen = false;
+      cacheModalOpen = true;
+      await fetchFolderCacheStatus();
+      toasts.success(body.message || "Folder refresh started");
+      return null;
+    } catch {
+      return "Network error — could not reach server";
+    }
   }
 
-  async function generateApiKey() {
-    const newKey = await systemStore.generateIndexerApiKey();
-    if (newKey) {
-      indexerApiKey = newKey; // Update local state
+  // ── Indexer + *arr integrations ──
+  async function regenerateIndexerKey() {
+    const key = await systemStore.generateIndexerApiKey();
+    if (key) {
+      indexerApiKey = key;
       toasts.success("New API key generated");
     } else {
       toasts.error("Failed to generate API key");
     }
   }
 
-  async function saveSonarrSettings() {
+  function sonarrFormDirty() {
+    return sonarrUrl !== savedSonarrUrl || sonarrApiKey !== savedSonarrApiKey;
+  }
+
+  function radarrFormDirty() {
+    return radarrUrl !== savedRadarrUrl || radarrApiKey !== savedRadarrApiKey;
+  }
+
+  function prowlarrFormDirty() {
+    return prowlarrUrl !== savedProwlarrUrl || prowlarrApiKey !== savedProwlarrApiKey;
+  }
+
+  function resetSonarrForm(settings: SonarrSettings = get(sonarrSettings)) {
+    sonarrUrl = savedSonarrUrl = settings.url;
+    sonarrApiKey = savedSonarrApiKey = settings.api_key;
+    sonarrAutoImport = settings.auto_import;
+    sonarrChangedElsewhere = false;
+  }
+
+  function resetRadarrForm(settings: RadarrSettings = get(radarrSettings)) {
+    radarrUrl = savedRadarrUrl = settings.url;
+    radarrApiKey = savedRadarrApiKey = settings.api_key;
+    radarrAutoImport = settings.auto_import;
+    radarrChangedElsewhere = false;
+  }
+
+  function resetProwlarrForm(settings: ProwlarrSettings = get(prowlarrSettings)) {
+    prowlarrUrl = savedProwlarrUrl = settings.url;
+    prowlarrApiKey = savedProwlarrApiKey = settings.api_key;
+    prowlarrChangedElsewhere = false;
+  }
+
+  async function saveSonarr() {
+    savingSonarr = true;
     const result = await systemStore.saveSonarrSettings({
-      enabled: sonarrEnabled,
+      enabled: true,
       url: sonarrUrl,
       api_key: sonarrApiKey,
       auto_import: sonarrAutoImport,
     });
-
-    if (result.success) {
-      toasts.success(result.message || "Sonarr settings saved");
-    } else {
-      toasts.error("Failed to save Sonarr settings");
-    }
+    savingSonarr = false;
+    if (result.success) resetSonarrForm();
+    const message = result.message || (result.success ? "Sonarr settings saved." : "Failed to save Sonarr settings.");
+    if (result.success) toasts.success(message);
+    else toasts.error(message);
   }
 
-  async function testSonarrConnection() {
-    sonarrTesting = true;
+  async function testSonarr() {
+    testingSonarr = true;
     const result = await systemStore.testSonarrConnection({
-      enabled: sonarrEnabled,
+      enabled: true,
       url: sonarrUrl,
       api_key: sonarrApiKey,
       auto_import: sonarrAutoImport,
     });
-
-    if (result.success) {
-      toasts.success(result.message || "Sonarr connection successful");
-      sonarrConnected = true;
-    } else {
-      toasts.error(result.message || "Sonarr connection failed");
-      sonarrConnected = false;
-    }
-    sonarrTesting = false;
+    const message = result.message || (result.success ? "Sonarr connection successful." : "Sonarr connection failed.");
+    if (result.success) toasts.success(message);
+    else toasts.error(message);
+    testingSonarr = false;
   }
 
-  $effect(() => {
-    sonarrUrl;
-    sonarrApiKey;
-    sonarrConnected = false;
-  });
-  $effect(() => {
-    radarrUrl;
-    radarrApiKey;
-    radarrConnected = false;
-  });
-
-  async function saveRadarrSettings() {
+  async function saveRadarr() {
+    savingRadarr = true;
     const result = await systemStore.saveRadarrSettings({
-      enabled: radarrEnabled,
+      enabled: true,
       url: radarrUrl,
       api_key: radarrApiKey,
       auto_import: radarrAutoImport,
     });
-
-    if (result.success) {
-      toasts.success(result.message || "Radarr settings saved");
-    } else {
-      toasts.error("Failed to save Radarr settings");
-    }
+    savingRadarr = false;
+    if (result.success) resetRadarrForm();
+    const message = result.message || (result.success ? "Radarr settings saved." : "Failed to save Radarr settings.");
+    if (result.success) toasts.success(message);
+    else toasts.error(message);
   }
 
-  async function testRadarrConnection() {
-    radarrTesting = true;
+  async function testRadarr() {
+    testingRadarr = true;
     const result = await systemStore.testRadarrConnection({
-      enabled: radarrEnabled,
+      enabled: true,
       url: radarrUrl,
       api_key: radarrApiKey,
       auto_import: radarrAutoImport,
     });
-
-    if (result.success) {
-      toasts.success(result.message || "Radarr connection successful");
-      radarrConnected = true;
-    } else {
-      toasts.error(result.message || "Radarr connection failed");
-      radarrConnected = false;
-    }
-    radarrTesting = false;
+    const message = result.message || (result.success ? "Radarr connection successful." : "Radarr connection failed.");
+    if (result.success) toasts.success(message);
+    else toasts.error(message);
+    testingRadarr = false;
   }
 
-  async function copyToClipboard(text: string, label: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      toasts.success(`${label} copied to clipboard`);
-    } catch (e) {
-      toasts.error("Failed to copy to clipboard");
-    }
+  async function saveProwlarr() {
+    savingProwlarr = true;
+    const result = await systemStore.saveProwlarrSettings({
+      enabled: true,
+      url: prowlarrUrl,
+      api_key: prowlarrApiKey,
+      limit: 50,
+    });
+    savingProwlarr = false;
+    if (result.success) resetProwlarrForm();
+    const message = result.message || (result.success ? "Prowlarr settings saved." : "Failed to save Prowlarr.");
+    if (result.success) toasts.success(message);
+    else toasts.error(message);
   }
 
-  async function switchAccount() {
-    if (!switchEmail.trim() || !switchPassword.trim()) {
-      toasts.error("Please enter both email and password");
-      return;
-    }
-    switchLoading = true;
+  async function testProwlarr() {
+    testingProwlarr = true;
+    const result = await systemStore.testProwlarrConnection({
+      enabled: true,
+      url: prowlarrUrl,
+      api_key: prowlarrApiKey,
+      limit: 50,
+    });
+    const message = result.message || (result.success ? "Prowlarr connected." : "Prowlarr failed.");
+    if (result.success) toasts.success(message);
+    else toasts.error(message);
+    testingProwlarr = false;
+  }
+
+  async function copyValue(value: string, label: string) {
+    if (await copyToClipboard(value)) toasts.success(`${label} copied to clipboard`);
+    else toasts.error("Failed to copy to clipboard");
+  }
+
+  async function clearLogs() {
+    systemStore.clearLogs();
+    toasts.success("Log view cleared until new entries arrive");
+  }
+
+  // ── Loading ──
+  async function loadSettings() {
+    loaded = false;
+    loadError = "";
     try {
-      const ok = await accountStore.switchAccount(
-        switchEmail.trim(),
-        switchPassword.trim(),
-      );
-      if (ok) {
-        toasts.success("Account switched and activated!");
-        switchEmail = "";
-        switchPassword = "";
-        showSwitchForm = false;
-      } else {
-        toasts.error("Failed to switch account — check your credentials");
+      const [downloadsOk, indexerOk, integrationsOk] = await Promise.all([
+        systemStore.fetchDownloadSettings(),
+        systemStore.fetchIndexerSettings(),
+        systemStore.refreshIntegrationState(),
+        systemStore.fetchLogs(),
+        systemStore.fetchActivity(),
+        fetchLibraryOverview().then((overview) => {
+          libraryOverview = overview;
+        }),
+        systemStore.fetchFolderSourceConfig(),
+        accountStore.fetch(),
+        loadTorBoxAccount(),
+        systemStore.fetchMetadataProviders(),
+        systemStore.fetchSystemHealth(),
+        systemStore.fetchStorageStatus(),
+      ]);
+      if (![downloadsOk, indexerOk, integrationsOk].every(Boolean)) {
+        loadError = "Settings could not be loaded.";
+        return;
       }
-    } finally {
-      switchLoading = false;
+      const downloads = get(downloadSettings);
+      concurrency = downloads.max_concurrent;
+      segmentsPerDownload = downloads.segments_per_download;
+      downloadPath = downloads.directory;
+      savedConcurrency = concurrency;
+      savedDownloadPath = downloadPath;
+      indexerApiKey = get(indexerSettings).api_key;
+      folderSourceInput = savedFolderSourceUrl = get(folderSourceUrl);
+      resetSonarrForm();
+      resetRadarrForm();
+      resetProwlarrForm();
+      await Promise.all(
+        get(metadataProviders)
+          .filter((provider) => provider.configured)
+          .map((provider) => systemStore.testMetadataProvider(provider.provider)),
+      );
+      loaded = true;
+    } catch (error) {
+      loadError = error instanceof Error ? error.message : "Settings could not be loaded.";
     }
   }
+
+  onMount(() => {
+    loadSettings();
+    const unsubscribeLogs = systemLogs.subscribe((value) => {
+      logs = value;
+    });
+    const unsubscribeActivity = systemActivity.subscribe((value) => {
+      activities = value;
+    });
+    // Another tab/session changed a connection: reload the form when it is clean, otherwise flag it.
+    const unsubscribeSonarr = sonarrSettings.subscribe((settings) => {
+      if (!loaded || !(settings.url !== savedSonarrUrl || settings.api_key !== savedSonarrApiKey)) return;
+      if (sonarrFormDirty()) sonarrChangedElsewhere = true;
+      else resetSonarrForm(settings);
+    });
+    const unsubscribeRadarr = radarrSettings.subscribe((settings) => {
+      if (!loaded || !(settings.url !== savedRadarrUrl || settings.api_key !== savedRadarrApiKey)) return;
+      if (radarrFormDirty()) radarrChangedElsewhere = true;
+      else resetRadarrForm(settings);
+    });
+    const unsubscribeProwlarr = prowlarrSettings.subscribe((settings) => {
+      if (!loaded || !(settings.url !== savedProwlarrUrl || settings.api_key !== savedProwlarrApiKey)) return;
+      if (prowlarrFormDirty()) prowlarrChangedElsewhere = true;
+      else resetProwlarrForm(settings);
+    });
+
+    fetchFolderCacheStatus();
+    cacheStatusTimer = setInterval(() => {
+      if (folderCacheStatus?.is_syncing) fetchFolderCacheStatus();
+    }, 2000);
+    integrationStatusTimer = setInterval(() => {
+      systemStore.fetchIntegrationStatus();
+    }, 30000);
+
+    // Desktop tab strip lives in the shell header slot.
+    const headerSlot = document.getElementById("header-dynamic-content");
+    if (headerSlot) {
+      headerSlot.innerHTML = "";
+      const tabList = document.createElement("div");
+      tabList.className = "settings-tabs-header media-toggle";
+      tabList.setAttribute("role", "tablist");
+      tabList.setAttribute("aria-label", "Settings sections");
+      SETTINGS_TABS.forEach((tab) => {
+        const button = document.createElement("button");
+        button.id = `settings-tab-${tab.id}`;
+        button.className = "toggle-btn";
+        button.type = "button";
+        button.setAttribute("role", "tab");
+        button.setAttribute("aria-controls", `settings-tabpanel-${tab.id}`);
+        button.setAttribute("tabindex", "-1");
+        button.innerHTML = `<span class="material-icons" aria-hidden="true">${tab.icon}</span>${tab.label}`;
+        button.onclick = () => {
+          selectTab(tab.id);
+          queueMicrotask(syncHeaderTabs);
+        };
+        button.onkeydown = (event) => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          selectTab(nextSettingsTab(tab.id, event.key));
+          queueMicrotask(() => {
+            syncHeaderTabs();
+            document.getElementById(`settings-tab-${activeTab}`)?.focus();
+          });
+        };
+        tabList.appendChild(button);
+      });
+      headerSlot.appendChild(tabList);
+      const syncHeaderTabs = () =>
+        tabList.querySelectorAll("button").forEach((button, index) => {
+          const selected = SETTINGS_TABS[index].id === activeTab;
+          button.classList.toggle("active", selected);
+          button.setAttribute("aria-selected", String(selected));
+          button.setAttribute("tabindex", selected ? "0" : "-1");
+        });
+      syncHeaderTabs();
+    }
+
+    return () => {
+      if (cacheStatusTimer) clearInterval(cacheStatusTimer);
+      if (integrationStatusTimer) clearInterval(integrationStatusTimer);
+      unsubscribeLogs();
+      unsubscribeActivity();
+      unsubscribeSonarr();
+      unsubscribeRadarr();
+      unsubscribeProwlarr();
+    };
+  });
 </script>
 
 <svelte:head>
@@ -351,618 +805,1637 @@
 </svelte:head>
 
 <div class="settings-viewport">
-  <div class="settings-two-col">
-    <!-- ═══════════ LEFT: Widget Grid (3 columns) ═══════════ -->
-    <div class="widget-grid">
-      <!-- Column 1: Account + Download Engine (1:1.5) -->
-      <div class="widget-col col-first">
-        <!-- Account -->
-        <section class="bento-card bento-account">
-          <div class="bento-head red-accent">
-            <span class="material-icons">person</span>
-            <h3>ACCOUNT INFO</h3>
-          </div>
-          <div class="acc-hero-banner">
-            <div class="acc-dots-overlay"></div>
-            <div class="acc-logo-ring">
-              <img src="/images/logo_fshare.png" alt="Fshare" />
-            </div>
-          </div>
-          <!-- Info -->
-          <div class="acc-card-info">
-            <div class="acc-info-left">
-              <span class="acc-card-email"
-                >{accountStore.listFormatted.length > 0
-                  ? accountStore.listFormatted[0]?.email
-                  : "No account"}</span
-              >
-              <span class="acc-card-expiry"
-                >{accountStore.listFormatted.length > 0
-                  ? `Expires ${accountStore.listFormatted[0]?.expiry || "—"}`
-                  : "—"}</span
-              >
-            </div>
-            <Badge
-              text={isVip ? "VIP" : "FREE"}
-              variant={isVip ? "vip" : "free"}
-              size="sm"
-            />
-          </div>
-          <div class="acc-card-actions">
-            <!-- Refresh: fixed 36px square -->
-            <Button
-              variant="ghost"
-              size="sm"
-              icon="refresh"
-              width="36px"
-              onclick={() => {
-                if (accountStore.listFormatted[0]?.email) {
-                  accountStore.refresh(accountStore.listFormatted[0].email);
-                  toasts.success("Refreshing...");
-                }
-              }}
-              title="Refresh"
-            />
-            <!-- Switch Account: fills all remaining space -->
-            <div style="flex:1; display:flex;">
-              <Button
-                accent="#dc3c3c"
-                icon="swap_horiz"
-                size="sm"
-                width="100%"
-                onclick={() => (showSwitchModal = true)}>Switch Account</Button
-              >
-            </div>
-          </div>
-        </section>
-
-        <!-- R1C2: Download Engine -->
-        <section class="bento-card bento-download">
-          <div class="bento-head cyan-accent">
-            <span class="material-icons">speed</span>
-            <h3>DOWNLOAD ENGINE</h3>
-          </div>
-          <div class="card-banner cyan-banner">
-            <div class="banner-dots"></div>
-            <div class="banner-logo-ring glow">
-              <img src="/images/flasharr_logo.png" alt="Flasharr" />
-            </div>
-          </div>
-          <!-- Download Engine Body -->
-          <div class="bento-body dl-body">
-            <!-- PATH section -->
-            <div class="dl-section">
-              <div class="dl-path-field">
-                <div class="dl-path-label">
-                  <span class="material-icons">folder_open</span>
-                  <span>PATH</span>
+  <SettingsMobileTabs active={activeTab} onSelect={selectTab} />
+  {#if loadError}
+    <div class="settings-load-error" role="alert">
+      <span>{loadError}</span><Button
+        variant="ghost"
+        onclick={() => {
+          loadSettings();
+        }}>Retry</Button
+      >
+    </div>
+  {:else if !loaded}
+    <p class="settings-loading" aria-live="polite">Loading Settings…</p>
+  {:else if activeTab === "general"}
+    <div id="settings-tabpanel-general" class="settings-panel general-settings" role="tabpanel" aria-labelledby="settings-tab-general">
+      <section class="bento-card bento-general" aria-labelledby="general-metadata">
+        <div class="bento-head cyan-accent"><span class="material-icons" aria-hidden="true">hub</span><h2 id="general-metadata">METADATA PROVIDERS</h2></div>
+        <div class="general-card-body">
+          <div class="provider-grid">
+            {#each METADATA_PROVIDERS as provider}
+              {@const row = providerRow(provider.id)}
+              <article class="provider-tile">
+                <a class="provider-logo" href={provider.url} target="_blank" rel="noreferrer" aria-label={`Open ${provider.name}`}><img src={provider.logo} alt={provider.name} /></a>
+                <div class="provider-copy">
+                  <b>{provider.name}</b>
+                  <span class="provider-status" class:connected={row.reachable === true} class:unavailable={row.reachable === false} role="status"><span class="provider-status-dot" aria-hidden="true"></span>{row.reachable === true ? "Connected" : row.reachable === false ? "Unavailable" : row.configured ? "Configured" : "Not configured"}</span>
                 </div>
-                <input
-                  type="text"
-                  id="b-dl-path"
-                  bind:value={downloadPath}
-                  placeholder="/media/downloads"
-                  class="dl-path-input"
-                />
-              </div>
-            </div>
+                <Button class="metadata-edit" size="sm" variant="ghost" title={`Edit ${provider.name} metadata provider`} onclick={() => openProviderEditor(provider.id)}><span class="material-icons" aria-hidden="true">edit</span><span class="sr-only">Edit {provider.name} metadata provider</span></Button>
+              </article>
+            {/each}
+          </div>
+          <p class="provider-attribution">This product uses the <a href="https://www.themoviedb.org" target="_blank" rel="noreferrer">TMDB API</a> but is not endorsed or certified by TMDB. Metadata provided by <a href="https://thetvdb.com/subscribe" target="_blank" rel="noreferrer">TheTVDB</a>.</p>
+        </div>
+      </section>
 
-            <!-- Folder Source URL section -->
-            <div class="dl-section dl-section--sep">
-              <div class="dl-path-field">
-                <div class="dl-path-label">
-                  <span class="material-icons">link</span>
-                  <span>FOLDER SOURCE</span>
-                </div>
-                <div class="dl-folder-source-row">
-                  <input
-                    type="text"
-                    id="b-folder-source"
-                    bind:value={folderSourceGistUrl}
-                    placeholder="https://gist.githubusercontent.com/.../fshare_folder_list.txt"
-                    class="dl-path-input"
-                  />
-                  <button
-                    class="dl-refresh-btn"
-                    class:spinning={folderCacheRefreshing}
-                    onclick={refreshFolderCache}
-                    disabled={folderCacheRefreshing}
-                    title="Refresh folder cache"
-                  >
-                    <span class="material-icons"
-                      >{folderCacheRefreshing
-                        ? "hourglass_empty"
-                        : "sync"}</span
-                    >
-                  </button>
-                </div>
-              </div>
-            </div>
+      <section class="bento-card bento-general" aria-labelledby="general-storage">
+        <div class="bento-head cyan-accent"><span class="material-icons" aria-hidden="true">storage</span><h2 id="general-storage">MOUNTED STORAGE</h2></div>
+        <div class="general-card-body storage-card">
+          <div class="storage-status"><span class="material-icons" aria-hidden="true">{$storageStatus?.mounted ? ($storageStatus.read_only ? "lock" : "check_circle") : "error"}</span><div><b>{$storageStatus?.message || "Checking storage"}</b><small class="mono">{$storageStatus?.path || "—"}</small></div></div>
+          <div class="storage-metrics"><div><small>AVAILABLE</small><b>{formatDiskSize($storageStatus?.available_bytes || 0)}</b></div><div><small>TOTAL</small><b>{formatDiskSize($storageStatus?.total_bytes || 0)}</b></div></div>
+          <div class="storage-meter" role="progressbar" aria-label="Storage used" aria-valuemin="0" aria-valuemax="100" aria-valuenow={$storageStatus?.used_percent || 0}><span style={`width:${$storageStatus?.used_percent || 0}%`}></span></div>
+          <small class="storage-caption">{$storageStatus?.used_percent || 0}% used</small>
+        </div>
+      </section>
 
-            <!-- Concurrency section -->
-            <div class="dl-section dl-section--conc dl-section--sep">
-              <div class="dl-conc-hud">
-                <div class="dl-conc-header">
-                  <span class="dl-conc-label">CONCURRENCY</span>
-                </div>
-                <div
-                  class="dl-dot-slider"
-                  style="--pct: {(concurrency - 1) / 9};"
-                  role="slider"
-                  aria-label="Concurrency"
-                  aria-valuemin="1"
-                  aria-valuemax="10"
-                  aria-valuenow={concurrency}
-                  tabindex="0"
-                  onpointerdown={onSliderPointerDown}
-                  onpointermove={onSliderPointerMove}
-                  onkeydown={(e) => {
-                    if (e.key === "ArrowRight" || e.key === "ArrowUp")
-                      concurrency = Math.min(10, concurrency + 1);
-                    if (e.key === "ArrowLeft" || e.key === "ArrowDown")
-                      concurrency = Math.max(1, concurrency - 1);
-                  }}
-                >
-                  <div class="dl-dots" aria-hidden="true">
-                    {#each Array.from({ length: 10 }) as _, i}
-                      <div
-                        class="dl-dot"
-                        class:lit={i < concurrency}
-                        class:hidden={i === concurrency - 1}
-                        style="left: calc({i / 9} * (100% - 40px) + 16px);"
-                      ></div>
-                    {/each}
-                  </div>
-                  <div class="dl-thumb-orb" aria-hidden="true">
-                    {concurrency}
-                  </div>
-                </div>
-              </div>
-            </div>
+      <section class="bento-card bento-general" aria-labelledby="general-admin">
+        <div class="bento-head cyan-accent"><span class="material-icons" aria-hidden="true">admin_panel_settings</span><h2 id="general-admin">ADMINISTRATOR</h2></div>
+        <div class="general-card-body administrator-card">
+          <div class="administrator-avatar" aria-hidden="true"><span class="material-icons">person</span></div>
+          <div class="administrator-copy"><small>ACTIVE IDENTITY</small><b>{authStore.session?.username || "Unknown user"}</b><Badge variant={authStore.session?.authenticated ? "success" : "warning"} noDot={false}>{authStore.session?.authenticated ? "Authenticated" : "Session unavailable"}</Badge></div>
+          <Button class="administrator-action" variant="ghost" icon="password" onclick={() => (passwordModalOpen = true)}>Change password</Button>
+        </div>
+      </section>
 
-            <div class="compact-actions">
-              <div style="flex:1; display:flex;">
-                <Button
-                  accent="#00f3ff"
-                  icon="save"
-                  size="sm"
-                  width="100%"
-                  onclick={saveEngineConfig}>APPLY</Button
-                >
-              </div>
-            </div>
-          </div>
-        </section>
-      </div>
-
-      <!-- Column 2: Newznab + Sonarr (1:1) -->
-      <div class="widget-col">
-        <!-- Newznab -->
-        <section class="bento-card bento-newznab">
-          <div class="bento-head violet-accent">
-            <img src="/images/newznab-logo.png" alt="" class="head-logo" />
-            <h3>NEWZNAB</h3>
-          </div>
-          <div class="card-banner violet-banner">
-            <div class="banner-dots"></div>
-            <div class="banner-logo-ring glow">
-              <img src="/images/newznab-logo.png" alt="Newznab" />
-            </div>
-          </div>
-          <div class="bento-body">
-            <div class="inline-field">
-              <span class="inline-label">URL</span><span class="inline-value"
-                >http://flasharr:8484/newznab/api</span
-              ><button
-                class="copy-inline-btn"
-                onclick={() =>
-                  copyToClipboard(
-                    "http://flasharr:8484/newznab/api",
-                    "Endpoint",
-                  )}><span class="material-icons">content_copy</span></button
-              >
-            </div>
-            <div class="inline-field">
-              <span class="inline-label">USER</span><span class="inline-value"
-                >flasharr</span
-              ><button
-                class="copy-inline-btn"
-                onclick={() => copyToClipboard("flasharr", "Username")}
-                ><span class="material-icons">content_copy</span></button
-              >
-            </div>
-            <div class="inline-field">
-              <span class="inline-label">PASS</span><span class="inline-value"
-                >flasharr-pwd</span
-              ><button
-                class="copy-inline-btn"
-                onclick={() => copyToClipboard("flasharr-pwd", "Password")}
-                ><span class="material-icons">content_copy</span></button
-              >
-            </div>
-            <div class="inline-field">
-              <span class="inline-label">KEY</span><span
-                class="inline-value mono"
-                >{indexerApiKey ? (showApiKey ? indexerApiKey : "•".repeat(12)) : "(no key — generating…)"}</span
-              ><button
-                class="copy-inline-btn"
-                onclick={() => (showApiKey = !showApiKey)}
-                ><span class="material-icons"
-                  >{showApiKey ? "visibility_off" : "visibility"}</span
-                ></button
-              ><button
-                class="copy-inline-btn"
-                onclick={() => copyToClipboard(indexerApiKey, "API Key")}
-                ><span class="material-icons">content_copy</span></button
-              >
-            </div>
-          </div>
-          <div class="acc-card-actions">
-            <div style="flex:1; display:flex;">
-              <Button
-                accent="#8b5cf6"
-                icon="autorenew"
-                size="sm"
-                width="100%"
-                onclick={generateApiKey}>Regen Key</Button
-              >
-            </div>
-          </div>
-        </section>
-
-        <!-- R2C1: Sonarr -->
-        <section class="bento-card bento-sonarr">
-          <div class="bento-head sky-accent">
-            <img
-              src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/sonarr.png"
-              alt=""
-              class="head-logo"
-            />
-            <h3>SONARR</h3>
-          </div>
-          <div class="card-banner sky-banner">
-            <div class="banner-dots"></div>
-            <div class="banner-logo-ring glow">
-              <img
-                src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/sonarr.png"
-                alt="Sonarr"
-              />
-              <span
-                class="banner-status-dot"
-                class:active={sonarrConnected}
-                title={sonarrConnected ? "Connected" : "Not tested"}
-              ></span>
-            </div>
-          </div>
-          <div class="bento-body">
-            <!-- URL field -->
-            <div class="inline-field">
-              <span class="inline-label">URL</span>
-              <input
-                type="text"
-                id="b-sn-url"
-                bind:value={sonarrUrl}
-                placeholder="http://localhost:8989"
-                class="inline-input-edit"
-              />
-            </div>
-            <!-- KEY field with visibility toggle -->
-            <div class="inline-field">
-              <span class="inline-label">KEY</span>
-              <input
-                type={showSonarrApiKey ? "text" : "password"}
-                id="b-sn-key"
-                bind:value={sonarrApiKey}
-                placeholder="API Key"
-                class="inline-input-edit mono"
-              />
-              <button
-                class="copy-inline-btn"
-                onclick={() => (showSonarrApiKey = !showSonarrApiKey)}
-                ><span class="material-icons"
-                  >{showSonarrApiKey ? "visibility_off" : "visibility"}</span
-                ></button
-              >
-            </div>
-            <div class="compact-actions">
-              <div style="flex:4; display:flex;">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  width="100%"
-                  disabled={sonarrTesting}
-                  onclick={testSonarrConnection}
-                >
-                  <span class="material-icons" class:rotating={sonarrTesting}
-                    >{sonarrTesting ? "refresh" : "sync_alt"}</span
-                  > TEST</Button
-                >
-              </div>
-              <div style="flex:6; display:flex;">
-                <Button
-                  accent="#38bdf8"
-                  size="sm"
-                  width="100%"
-                  onclick={saveSonarrSettings}>SAVE</Button
-                >
-              </div>
-            </div>
-          </div>
-        </section>
-      </div>
-
-      <!-- Column 3: SABnzbd + Radarr (1:1) -->
-      <div class="widget-col">
-        <!-- R2C3: SABnzbd -->
-        <section class="bento-card bento-sabnzbd">
-          <div class="bento-head teal-accent">
-            <img
-              src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/sabnzbd.png"
-              alt=""
-              class="head-logo"
-            />
-            <h3>SABNZBD</h3>
-          </div>
-          <div class="card-banner teal-banner">
-            <div class="banner-dots"></div>
-            <div class="banner-logo-ring glow">
-              <img
-                src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/sabnzbd.png"
-                alt="SABnzbd"
-              />
-            </div>
-          </div>
-          <div class="bento-body">
-            <div class="inline-field">
-              <span class="inline-label">URL</span><span class="inline-value"
-                >http://flasharr:8484/sabnzbd/api</span
-              ><button
-                class="copy-inline-btn"
-                onclick={() =>
-                  copyToClipboard(
-                    "http://flasharr:8484/sabnzbd/api",
-                    "Endpoint",
-                  )}><span class="material-icons">content_copy</span></button
-              >
-            </div>
-            <div class="inline-field">
-              <span class="inline-label">USER</span><span class="inline-value"
-                >flasharr</span
-              ><button
-                class="copy-inline-btn"
-                onclick={() => copyToClipboard("flasharr", "Username")}
-                ><span class="material-icons">content_copy</span></button
-              >
-            </div>
-            <div class="inline-field">
-              <span class="inline-label">PASS</span><span class="inline-value"
-                >flasharr-pwd</span
-              ><button
-                class="copy-inline-btn"
-                onclick={() => copyToClipboard("flasharr-pwd", "Password")}
-                ><span class="material-icons">content_copy</span></button
-              >
-            </div>
-            <div class="inline-field">
-              <span class="inline-label">KEY</span><span
-                class="inline-value mono"
-                >{indexerApiKey ? (showApiKey ? indexerApiKey : "•".repeat(12)) : "(no key — generating…)"}</span
-              ><button
-                class="copy-inline-btn"
-                onclick={() => (showApiKey = !showApiKey)}
-                ><span class="material-icons"
-                  >{showApiKey ? "visibility_off" : "visibility"}</span
-                ></button
-              ><button
-                class="copy-inline-btn"
-                onclick={() => copyToClipboard(indexerApiKey, "API Key")}
-                ><span class="material-icons">content_copy</span></button
-              >
-            </div>
-          </div>
-          <div class="acc-card-actions">
-            <div style="flex:1; display:flex;">
-              <Button
-                accent="#00d4aa"
-                icon="autorenew"
-                size="sm"
-                width="100%"
-                onclick={generateApiKey}>Regen Key</Button
-              >
-            </div>
-          </div>
-        </section>
-
-        <!-- Radarr -->
-        <section class="bento-card bento-radarr">
-          <div class="bento-head amber-accent">
-            <img
-              src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/radarr.png"
-              alt=""
-              class="head-logo"
-            />
-            <h3>RADARR</h3>
-          </div>
-          <div class="card-banner amber-banner">
-            <div class="banner-dots"></div>
-            <div class="banner-logo-ring glow">
-              <img
-                src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/radarr.png"
-                alt="Radarr"
-              />
-              <span
-                class="banner-status-dot"
-                class:active={radarrConnected}
-                title={radarrConnected ? "Connected" : "Not tested"}
-              ></span>
-            </div>
-          </div>
-          <div class="bento-body">
-            <!-- URL field -->
-            <div class="inline-field">
-              <span class="inline-label">URL</span>
-              <input
-                type="text"
-                id="b-rd-url"
-                bind:value={radarrUrl}
-                placeholder="http://localhost:7878"
-                class="inline-input-edit"
-              />
-            </div>
-            <!-- KEY field with visibility toggle -->
-            <div class="inline-field">
-              <span class="inline-label">KEY</span>
-              <input
-                type={showRadarrApiKey ? "text" : "password"}
-                id="b-rd-key"
-                bind:value={radarrApiKey}
-                placeholder="API Key"
-                class="inline-input-edit mono"
-              />
-              <button
-                class="copy-inline-btn"
-                onclick={() => (showRadarrApiKey = !showRadarrApiKey)}
-                ><span class="material-icons"
-                  >{showRadarrApiKey ? "visibility_off" : "visibility"}</span
-                ></button
-              >
-            </div>
-            <div class="compact-actions">
-              <div style="flex:4; display:flex;">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  width="100%"
-                  disabled={radarrTesting}
-                  onclick={testRadarrConnection}
-                >
-                  <span class="material-icons" class:rotating={radarrTesting}
-                    >{radarrTesting ? "refresh" : "sync_alt"}</span
-                  > TEST</Button
-                >
-              </div>
-              <div style="flex:6; display:flex;">
-                <Button
-                  accent="#f59e0b"
-                  size="sm"
-                  width="100%"
-                  onclick={saveRadarrSettings}>SAVE</Button
-                >
-              </div>
-            </div>
-          </div>
-        </section>
+      <section class="bento-card bento-general" aria-labelledby="general-runtime">
+        <div class="bento-head cyan-accent"><span class="material-icons" aria-hidden="true">monitor_heart</span><h2 id="general-runtime">FLASHARR SERVICE</h2></div>
+        <div class="general-card-body runtime-grid"><div><small>STATUS</small><b><Badge variant={$systemHealth?.status === "ok" ? "success" : "danger"} noDot={false}>{$systemHealth?.status === "ok" ? "Online" : "Unavailable"}</Badge></b></div><div><small>VERSION</small><b class="mono">{$systemHealth?.version || "Unknown"}</b></div></div>
+      </section>
+    </div>
+  {:else if activeTab === "accounts"}
+    <div id="settings-tabpanel-accounts" class="settings-panel account-settings" role="tabpanel" aria-labelledby="settings-tab-accounts">
+      <div class="panel-heading account-heading"><p>Gateway to the media universe.</p><div class="panel-actions"><Button class="account-add-button" variant="primary" icon="add" onclick={() => (addAccountOpen = true)}>Add Account</Button></div></div>
+      <div class="account-list" aria-live="polite">
+        {#each accountRows() as account}
+          <article class="status-card-v5 account-row-card" class:torbox-account={account.provider === "torbox"} class:inactive={!account.active}>
+            {#if account.active}
+              <Badge class="account-status-badge" variant={account.provider === "torbox" ? "success" : "info"}>ACTIVE</Badge>
+            {/if}
+            <div class="account-provider"><img src={account.provider === "fshare" ? "/images/logo_fshare.png" : "/images/logo_torbox.png"} alt={account.provider === "fshare" ? "Fshare" : "TorBox"} />{#if account.provider === "fshare"}<span class="account-online-dot" aria-label="Online"></span>{/if}</div>
+            <div class="account-identity"><div class="account-email">{account.email}</div><small>{account.provider === "fshare" ? "Fshare" : account.subtitle}</small></div>
+            <div class="account-detail account-plan-detail"><span>PLAN</span><b class="account-plan">{account.plan}</b></div>
+            <div class="account-detail account-expiry-detail"><span>EXPIRES</span><b class="account-expiry">{account.expiry}</b></div>
+            <div class="account-actions"><Button class="account-icon-action" variant="ghost" size="sm" title={account.provider === "fshare" ? "Refresh Fshare" : "Test TorBox connection"} disabled={refreshingAccountId === account.id} onclick={() => refreshAccount(account)}><span class="material-icons" aria-hidden="true">{refreshingAccountId === account.id ? "sync" : account.provider === "fshare" ? "refresh" : "wifi_tethering"}</span><span class="sr-only">{account.provider === "fshare" ? "Refresh Fshare" : "Test TorBox connection"}</span></Button><Button class="account-icon-action danger" variant="danger" size="sm" title={account.provider === "fshare" ? "Delete Fshare" : "Remove TorBox configuration"} disabled={refreshingAccountId === account.id} onclick={() => (pendingRemoval = account)}><span class="material-icons" aria-hidden="true">delete</span><span class="sr-only">{account.provider === "fshare" ? "Delete Fshare" : "Remove TorBox configuration"}</span></Button>{#if refreshingAccountId === account.id}<small class="account-action-status" role="status">Checking…</small>{:else if accountActionResult?.id === account.id}<small class="account-action-status" role="status">{accountActionResult.message}</small>{/if}</div>
+          </article>
+        {:else}
+          <div class="empty-state"><span class="material-icons">key_off</span><h3>No accounts configured</h3><p>Add an Fshare or TorBox account to unlock provider downloads.</p><Button class="account-add-button" variant="primary" icon="add" onclick={() => (addAccountOpen = true)}>Add Account</Button></div>
+        {/each}
       </div>
     </div>
-
-    <!-- ═══════════ RIGHT: System Log / Activity Panel ═══════════ -->
-    <aside class="log-panel">
-      <div class="log-panel-header">
-        <div class="log-toggle">
-          <button
-            class="log-tab"
-            class:active={activeCategory === "services"}
-            onclick={() => (activeCategory = "services")}
-          >
-            <span class="material-icons">terminal</span> System Log
-          </button>
-          <button
-            class="log-tab"
-            class:active={activeCategory === "system"}
-            onclick={() => (activeCategory = "system")}
-          >
-            <span class="material-icons">history</span> Activity
-          </button>
-        </div>
-        {#if activeCategory === "services"}
-          <button class="btn-clear-log" onclick={clearLogs} title="Clear logs">
-            <span class="material-icons">delete_sweep</span>
-          </button>
-        {/if}
-      </div>
-
-      <div class="log-panel-body">
-        {#if activeCategory === "services"}
-          <!-- System Log Mode -->
-          {#if logs.length === 0}
-            <div class="log-empty">
-              <span class="material-icons">hourglass_empty</span> Waiting for system
-              signals...
-            </div>
-          {:else}
-            {#each logs as log}
-              <div class="log-line {log.level.toLowerCase()}">
-                <span class="log-ts">[{log.timestamp}]</span>
-                <span class="log-lvl">{log.level}</span>
-                <span class="log-msg">{log.message}</span>
-              </div>
-            {/each}
+  {:else if activeTab === "download"}
+    <div id="settings-tabpanel-download" class="settings-panel download-grid" role="tabpanel" aria-labelledby="settings-tab-download">
+      <article class="bento-card bento-download" aria-labelledby="download-engine-title">
+        <div class="bento-head cyan-accent"><span class="material-icons" aria-hidden="true">speed</span><h2 id="download-engine-title">DOWNLOAD ENGINE</h2></div>
+        <div class="card-banner cyan-banner"><div class="banner-dots"></div><div class="banner-logo-ring download-logo"><img src="/images/flasharr_logo.png" alt="Flasharr" /></div></div>
+        <div class="bento-body dl-body">
+          <div class="dl-section"><label class="dl-path-field" for="b-dl-path"><span class="dl-path-label"><span class="material-icons" aria-hidden="true">folder_open</span>PATH</span><input id="b-dl-path" class="dl-path-input" bind:value={downloadPath} placeholder="/media/downloads" aria-invalid={!!downloadError} /></label></div>
+          <div class="dl-section dl-section--conc dl-section--sep"><div class="dl-conc-hud"><span class="dl-conc-label">CONCURRENCY</span><div
+                class="dl-dot-slider"
+                role="slider"
+                aria-label="Concurrent downloads"
+                aria-valuemin="1"
+                aria-valuemax="10"
+                aria-valuenow={concurrency}
+                tabindex="0"
+                style={`--pct:${(concurrency - 1) / 9}`}
+                onpointerdown={handleSliderPointerDown}
+                onpointermove={handleSliderPointerMove}
+                onpointerup={handleSliderPointerUp}
+                onpointercancel={handleSliderPointerUp}
+                onkeydown={handleSliderKeydown}
+              ><div class="dl-dots" aria-hidden="true">{#each Array.from({ length: 10 }) as _, index}<span class="dl-dot" class:lit={index < concurrency} class:hidden={index === concurrency - 1} style={`left:calc(${index / 9} * (100% - 40px) + 16px)`}></span>{/each}</div><span class="dl-thumb-orb" aria-hidden="true">{concurrency}</span></div></div></div>
+          {#if downloadError}
+            <p class="settings-result error" role="alert">{downloadError}</p>
+          {:else if downloadMessage}
+            <p class="settings-result success" role="status">{downloadMessage}</p>
           {/if}
-        {:else}
-          <!-- Activity Mode -->
-          <div class="activity-feed">
-            {#if logs.length === 0}
-              <div class="log-empty">
-                <span class="material-icons">inbox</span> No recent activity
+          <div class="compact-actions"><Button accent="#00f3ff" icon="save" width="100%" loading={savingDownload} disabled={savingDownload || (downloadPath === savedDownloadPath && concurrency === savedConcurrency)} onclick={saveDownloadConfig}>APPLY</Button></div>
+        </div>
+      </article>
+      <article class="settings-card config-card"><div><p class="eyebrow">BITTORRENT</p><h2>qBittorrent</h2><p>Instances, transfer state, and torrent actions live on the dedicated Torrents surface.</p></div><div class="managed"><span class="material-icons">downloading</span><div><b>Server managed clients</b><small>Connection credentials stay outside this browser.</small></div></div><div class="card-actions"><a class="primary-link" href="/torrents">Open Torrents</a></div></article>
+    </div>
+  {:else if activeTab === "integrations"}
+    <div id="settings-tabpanel-integrations" class="settings-panel integrations-panel" role="tabpanel" aria-labelledby="settings-tab-integrations">
+      <IntegrationCards
+        bind:indexerApiKey
+        {showIndexerApiKey}
+        bind:sonarrUrl
+        bind:sonarrApiKey
+        sonarrStatus={$integrationStatus.sonarr}
+        sonarrTesting={testingSonarr}
+        radarrStatus={$integrationStatus.radarr}
+        radarrTesting={testingRadarr}
+        sonarrSaving={savingSonarr}
+        {sonarrChangedElsewhere}
+        bind:radarrUrl
+        bind:radarrApiKey
+        radarrSaving={savingRadarr}
+        {radarrChangedElsewhere}
+        {libraryOverview}
+        {showSonarrApiKey}
+        {showRadarrApiKey}
+        onToggleIndexerKey={() => (showIndexerApiKey = !showIndexerApiKey)}
+        onToggleSonarrKey={() => (showSonarrApiKey = !showSonarrApiKey)}
+        onToggleRadarrKey={() => (showRadarrApiKey = !showRadarrApiKey)}
+        onCopy={copyValue}
+        onGenerateKey={regenerateIndexerKey}
+        onTestSonarr={testSonarr}
+        onSaveSonarr={saveSonarr}
+        onReloadSonarr={() => resetSonarrForm()}
+        onTestRadarr={testRadarr}
+        onSaveRadarr={saveRadarr}
+        onReloadRadarr={() => resetRadarrForm()}
+      />
+    </div>
+  {:else if activeTab === "sources"}
+    <div id="settings-tabpanel-sources" class="settings-panel sources-panel" role="tabpanel" aria-labelledby="settings-tab-sources">
+      <div class="sources-layout">
+        <aside class="sources-rail" aria-label="Source connections">
+          <article class="bento-card bento-prowlarr" aria-labelledby="source-prowlarr-title">
+            <div class="bento-head orange-accent"><img class="head-logo" src="/images/integrations/prowlarr.svg" alt="" /><h2 id="source-prowlarr-title">PROWLARR</h2></div>
+            <div class="card-banner orange-banner"><div class="banner-dots"></div><div class="banner-logo-ring glow"><img src="/images/integrations/prowlarr.svg" alt="Prowlarr" /><span
+                  class="banner-status-dot"
+                  class:active={integrationStatusKind($integrationStatus.prowlarr, testingProwlarr || savingProwlarr) === "connected"}
+                  class:unreachable={integrationStatusKind($integrationStatus.prowlarr, testingProwlarr || savingProwlarr) === "unreachable"}
+                  role="status"
+                  aria-label={`Prowlarr: ${integrationStatusLabel($integrationStatus.prowlarr, testingProwlarr || savingProwlarr)}`}
+                ></span></div></div>
+            <div class="bento-body">
+              {#if prowlarrChangedElsewhere}
+                <button class="reload-config" onclick={() => resetProwlarrForm()}>Configuration changed elsewhere · Reload</button>
+              {/if}
+              <div class="inline-field"><label class="inline-label" for="prowlarr-url">URL</label><input id="prowlarr-url" class="inline-input-edit" bind:value={prowlarrUrl} placeholder="http://localhost:9696" /></div>
+              <div class="inline-field"><label class="inline-label" for="prowlarr-key">KEY</label><input id="prowlarr-key" class="inline-input-edit mono" type="password" bind:value={prowlarrApiKey} placeholder="API Key" /></div>
+              <div class="compact-actions"><div><Button variant="ghost" size="sm" width="100%" loading={testingProwlarr} disabled={testingProwlarr || savingProwlarr} onclick={testProwlarr}><span class="material-icons">sync_alt</span> VERIFY</Button></div><div><Button accent="#f97316" size="sm" width="100%" loading={savingProwlarr} disabled={savingProwlarr || (prowlarrUrl === savedProwlarrUrl && prowlarrApiKey === savedProwlarrApiKey)} onclick={saveProwlarr}>SAVE</Button></div></div>
+            </div>
+          </article>
+          <article class="bento-card bento-fshare" aria-labelledby="source-fshare-title">
+            <div class="bento-head fshare-accent"><img class="head-logo" src="/images/logo_fshare.png" alt="" /><h2 id="source-fshare-title">FSHARE CACHE</h2></div>
+            <div class="card-banner fshare-banner"><div class="banner-dots"></div><div class="banner-logo-ring glow"><img src="/images/logo_fshare.png" alt="Fshare" /></div></div>
+            <div class="bento-body fshare-body">
+              <p class="cache-summary" class:stale={cacheHealth() === "attention"} role="status">{cacheSummary()}</p>
+              <div class="source-entry">
+                <input id="fshare-source-url" aria-label="Remote Fshare source text-file URL" bind:value={folderSourceInput} placeholder="https://gist.githubusercontent.com/.../fshare_folder_list.txt" />
+                <Button class="upload-button" variant="ghost" size="sm" title="Upload local .txt list" onclick={() => sourceFileInput?.click()}><span class="material-icons" aria-hidden="true">upload_file</span><span class="sr-only">Upload local .txt list</span></Button>
+                <input bind:this={sourceFileInput} class="source-file-input" type="file" accept=".txt,text/plain" onchange={(event) => stageSourceFile(event.currentTarget.files)} />
               </div>
-            {:else}
-              {#each logs.filter((l) => l.level === "INFO" || l.level === "WARN") as log}
-                <div class="activity-item">
-                  <div class="activity-icon">
-                    <span class="material-icons"
-                      >{log.level === "WARN"
-                        ? "warning"
-                        : log.message.includes("download")
-                          ? "cloud_download"
-                          : log.message.includes("import")
-                            ? "move_to_inbox"
-                            : "check_circle"}</span
-                    >
-                  </div>
-                  <div class="activity-content">
-                    <span class="activity-msg">{log.message}</span>
-                    <span class="activity-time">{log.timestamp}</span>
-                  </div>
-                </div>
-              {/each}
-            {/if}
-          </div>
-        {/if}
+              <small class="source-helper">{stagedSourceName
+                  ? `${stagedSourceName} staged · remote URL retained`
+                  : $folderImportedSourceCount
+                    ? `${$folderImportedSourceCount} local source${$folderImportedSourceCount === 1 ? "" : "s"} stored · remote URL optional`
+                    : "Remote text-file URL · local .txt optional"}</small>
+              {#if folderSourceMessage}
+                <p class="settings-result" class:success={folderSourceMessage.includes("Imported")} class:error={!folderSourceMessage.includes("Imported")} role={folderSourceMessage.includes("Imported") ? "status" : "alert"}>{folderSourceMessage}</p>
+              {/if}
+              <div class="fshare-actions">
+                <Button size="sm" accent="#ef5350" width="100%" loading={savingFolderSources} disabled={savingFolderSources || (!stagedSourceText.trim() && folderSourceInput.trim() === savedFolderSourceUrl)} onclick={updateFolderSources}>UPDATE</Button>
+                <Button size="sm" variant="ghost" width="100%" loading={startingCacheSync} onclick={startCacheSync}>SYNC</Button>
+              </div>
+              <Button class="singular-sync" accent="#ef5350" icon="autorenew" size="sm" width="100%" onclick={() => (refreshModalOpen = true)}>SINGULAR SYNC</Button>
+            </div>
+          </article>
+        </aside>
+        <main class="sources-main"><StremioAddonsSettings /></main>
       </div>
-
-      <div class="log-panel-footer">
-        <span class="dot-pulse"></span>
-        <span class="log-status">LIVE · {logs.length} events</span>
-      </div>
-    </aside>
-  </div>
+    </div>
+  {:else}
+    <div id="settings-tabpanel-logs" class="settings-panel logs-panel" role="tabpanel" aria-labelledby="settings-tab-logs">
+      <SettingsLogPanel {logs} {activities} onClearLogs={clearLogs} bind:activeCategory={logCategory} />
+    </div>
+  {/if}
 </div>
 
-<SwitchAccountModal
-  bind:open={showSwitchModal}
-  onclose={() => (showSwitchModal = false)}
-/>
+<FolderCacheSyncModal open={cacheModalOpen} status={folderCacheStatus} onclose={() => (cacheModalOpen = false)} />
+<FolderCacheRefreshModal open={refreshModalOpen} onclose={() => (refreshModalOpen = false)} onsubmit={refreshSingleFolder} />
+<SwitchAccountModal open={addAccountOpen} onclose={() => (addAccountOpen = false)} onswitched={reloadAccounts} />
+
+<Modal open={!!pendingRemoval} onClose={() => !removingAccount && (pendingRemoval = null)} maxWidth="380px" accent="var(--cui-danger, #ef4444)" ariaLabel="Remove account">
+  {#snippet header()}
+    <p class="remove-modal-title">REMOVE {pendingRemoval?.provider === "torbox" ? "TORBOX" : "FSHARE"} ACCOUNT</p>
+  {/snippet}
+  {#snippet children()}
+    <p class="remove-modal-copy">{pendingRemoval?.provider === "torbox"
+        ? "Remove the TorBox configuration? Flasharr will lose TorBox access until configured again."
+        : `Remove ${pendingRemoval?.email}? Flasharr will lose access until this account is added again.`}</p>
+    <div class="remove-modal-actions">
+      <Button size="sm" variant="ghost" disabled={removingAccount} onclick={() => (pendingRemoval = null)}>Cancel</Button>
+      <Button size="sm" variant="danger" loading={removingAccount} onclick={removeAccount}>Remove</Button>
+    </div>
+  {/snippet}
+</Modal>
+
+<Modal open={passwordModalOpen} onClose={closePasswordModal} maxWidth="480px" accent="var(--cui-primary)" ariaLabel="Change administrator password">
+  {#snippet header()}
+    <div class="general-modal-head"><div><p class="modal-title">CHANGE PASSWORD</p><p class="modal-sub">All active sessions will be signed out.</p></div><button class="close-btn" aria-label="Close" disabled={changingPassword} onclick={closePasswordModal}><span class="material-icons">close</span></button></div>
+  {/snippet}
+  <form
+    class="general-form"
+    onsubmit={(event) => {
+      event.preventDefault();
+      changePassword();
+    }}
+  ><label class="field-label" for="administrator-current-password">CURRENT PASSWORD</label><div class="general-input"><input id="administrator-current-password" name="current-password" type="password" bind:value={currentPassword} autocomplete="current-password" required /></div><label class="field-label" for="administrator-new-password">NEW PASSWORD</label><div class="general-input"><input id="administrator-new-password" name="new-password" type="password" bind:value={newPassword} autocomplete="new-password" minlength="12" required /></div><label class="field-label" for="administrator-confirm-password">CONFIRM NEW PASSWORD</label><div class="general-input"><input id="administrator-confirm-password" name="confirm-password" type="password" bind:value={confirmPassword} autocomplete="new-password" minlength="12" required /></div>{#if passwordError}<p class="general-error" role="alert">{passwordError}</p>{/if}<div class="general-form-actions"><Button variant="ghost" disabled={changingPassword} onclick={closePasswordModal}>Cancel</Button><Button type="submit" loading={changingPassword} disabled={changingPassword || !currentPassword || newPassword.length < 12 || !confirmPassword}>Change password</Button></div></form>
+</Modal>
+
+<Modal open={!!editingProvider} onClose={closeProviderEditor} maxWidth="480px" accent="var(--cui-gold)" ariaLabel="Edit metadata provider API key">
+  {#snippet header()}
+    <div class="general-modal-head"><div><p class="modal-title">EDIT {editingProvider?.toUpperCase()} API KEY</p><p class="modal-sub">Test before saving. Saved credentials apply server-wide.</p></div><button class="close-btn" aria-label="Close" disabled={savingProvider || testingProvider} onclick={closeProviderEditor}><span class="material-icons">close</span></button></div>
+  {/snippet}
+  {#snippet children()}
+    <form
+      class="general-form"
+      onsubmit={(event) => {
+        event.preventDefault();
+        saveProviderKey();
+      }}
+    ><p class="field-label">CURRENT KEY <span class="mono">{editingProvider ? providerRow(editingProvider).maskedKey || "Not configured" : ""}</span></p><label class="field-label" for="general-provider-key">NEW API KEY</label><div class="general-input"><input id="general-provider-key" type={showProviderKey ? "text" : "password"} bind:value={providerKeyInput} placeholder="Paste a replacement key" autocomplete="off" /><button type="button" aria-label={showProviderKey ? "Hide API key" : "Reveal API key"} onclick={() => (showProviderKey = !showProviderKey)}><span class="material-icons">{showProviderKey ? "visibility_off" : "visibility"}</span></button></div>{#if providerError}<p class="general-error" role="alert">{providerError}</p>{:else if providerFeedback}<p class="general-feedback" role="status">{providerFeedback}</p>{/if}<div class="general-form-actions"><Button size="sm" variant="ghost" disabled={savingProvider || testingProvider} onclick={closeProviderEditor}>Cancel</Button><Button size="sm" variant="ghost" loading={testingProvider} disabled={savingProvider || testingProvider} onclick={testProviderKey}>Test</Button><Button type="submit" size="sm" accent="var(--cui-gold)" loading={savingProvider} disabled={savingProvider || testingProvider || !providerKeyInput.trim()}>Save</Button></div></form>
+  {/snippet}
+</Modal>
 
 <style>
-  /* ============================== */
-  /* Two-Column Settings Layout      */
-  /* ============================== */
+  :global(.settings-tabs-header) {
+    display: flex;
+    gap: .15rem;
+    background: #00000059;
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 10px;
+    padding: .2rem;
+    box-shadow: inset 0 2px 4px #00000080;
+  }
+
+  :global(.settings-tabs-header .toggle-btn) {
+    min-height: 44px;
+    padding: .45rem 1rem;
+    border-radius: 8px;
+    color: #ffffff61;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: all .22s cubic-bezier(.2,.8,.2,1);
+    font-size: .78rem;
+    font-family: var(--font-mono,monospace);
+  }
+
+  :global(.settings-tabs-header .toggle-btn:focus-visible) {
+    outline: 2px solid var(--cui-primary);
+    outline-offset: 2px;
+  }
+
+  :global(.settings-tabs-header .toggle-btn:hover:not(.active)) {
+    color: #ffffffbf;
+  }
+
+  :global(.settings-tabs-header .toggle-btn.active) {
+    background: #00f3ff24;
+    color: #00f3ff;
+    box-shadow: 0 0 12px #00f3ff2e,inset 0 1px #00f3ff26;
+    text-shadow: 0 0 8px rgba(0,243,255,.5);
+  }
+
+  :global(.settings-tabs-header .toggle-btn .material-icons) {
+    font-size: 1.15rem;
+    margin-right: .35rem;
+    vertical-align: middle;
+  }
+
   .settings-viewport {
     height: 100%;
+    min-width: 0;
     overflow: hidden;
     padding: 1rem;
-  }
-  .settings-two-col {
-    display: grid;
-    grid-template-columns: 3fr 1fr;
+    display: flex;
+    flex-direction: column;
     gap: 1rem;
-    height: 100%;
-    animation: slideUp 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    color: var(--cui-text-primary,#f4f7fb);
   }
+
+  .settings-loading,
+  .settings-load-error {
+    margin: auto;
+    color: var(--cui-text-secondary);
+    font-size: var(--cui-text-sm);
+  }
+
+  .settings-load-error {
+    display: flex;
+    align-items: center;
+    gap: var(--cui-space-sm);
+    color: var(--cui-danger);
+  }
+
+  .settings-panel {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    animation: slideUp .22s ease-out;
+  }
+
+  .general-settings {
+    display: grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    grid-auto-rows: minmax(260px,auto);
+    gap: var(--cui-space-md);
+    max-width: 1180px;
+    width: 100%;
+    margin: 0 auto;
+    padding-bottom: var(--cui-space-xl);
+    overflow: auto;
+  }
+
+  .bento-general {
+    --card-accent: var(--cui-primary);
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    border-color: color-mix(in srgb,var(--cui-primary) 35%,var(--cui-glass-border));
+    box-shadow: var(--cui-shadow-glass),inset 3px 0 color-mix(in srgb,var(--cui-primary) 70%,transparent);
+  }
+
+  .general-card-body {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: var(--cui-space-md);
+    padding: var(--cui-space-lg);
+  }
+
+  .mono {
+    font-family: var(--cui-font-mono,monospace);
+    font-size: .72rem;
+  }
+
+  .provider-grid {
+    display: grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: var(--cui-space-sm);
+  }
+
+  .provider-tile {
+    display: grid;
+    grid-template-columns: 64px minmax(0,1fr) 44px;
+    align-items: center;
+    gap: var(--cui-space-sm);
+    min-width: 0;
+    min-height: 100px;
+    padding: var(--cui-space-sm);
+    border: 1px solid color-mix(in srgb,var(--cui-primary) 28%,var(--cui-glass-border));
+    background: color-mix(in srgb,var(--cui-primary) 5%,var(--cui-surface-2));
+    box-sizing: border-box;
+  }
+
+  .provider-logo {
+    display: grid;
+    place-items: center;
+    width: 64px;
+    height: 64px;
+    padding: var(--cui-space-xs);
+    box-sizing: border-box;
+  }
+
+  .provider-logo img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+  }
+
+  .provider-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--cui-space-xs);
+  }
+
+  .provider-copy b {
+    color: var(--cui-text-primary);
+    font-size: var(--cui-text-md);
+  }
+
+  .provider-status {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--cui-space-xs);
+    color: var(--cui-warning);
+    font: 700 .68rem/1 var(--cui-font-mono,monospace);
+  }
+
+  .provider-status.connected {
+    color: var(--cui-success);
+  }
+
+  .provider-status.unavailable {
+    color: var(--cui-danger);
+  }
+
+  .provider-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 7px currentColor;
+  }
+
+  :global(.metadata-edit.flasharr-btn) {
+    display: grid;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    place-items: center;
+    padding: 0;
+    border-color: color-mix(in srgb,var(--cui-primary) 30%,var(--cui-glass-border));
+    color: var(--cui-primary);
+  }
+
+  :global(.metadata-edit.flasharr-btn .material-icons) {
+    font-size: 1rem;
+  }
+
+  .provider-attribution {
+    margin: auto 0 0;
+    color: var(--cui-text-tertiary);
+    font-size: .65rem;
+    line-height: 1.5;
+  }
+
+  .provider-attribution a {
+    color: var(--cui-primary);
+  }
+
+  .storage-status {
+    display: flex;
+    align-items: center;
+    gap: var(--cui-space-md);
+    min-width: 0;
+  }
+
+  .storage-status > .material-icons {
+    font-size: 2rem;
+    color: var(--cui-primary);
+  }
+
+  .storage-status div {
+    min-width: 0;
+  }
+
+  .storage-status b,
+  .storage-status small {
+    display: block;
+  }
+
+  .storage-status small {
+    margin-top: var(--cui-space-xxs);
+    overflow: hidden;
+    color: var(--cui-text-tertiary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .storage-metrics {
+    display: grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    gap: var(--cui-space-sm);
+  }
+
+  .storage-metrics div,
+  .runtime-grid > div {
+    padding: var(--cui-space-md);
+    border: 1px solid color-mix(in srgb,var(--cui-primary) 22%,var(--cui-glass-border));
+    background: color-mix(in srgb,var(--cui-primary) 4%,transparent);
+  }
+
+  .storage-metrics small,
+  .runtime-grid small,
+  .administrator-copy small {
+    display: block;
+    color: var(--cui-text-tertiary);
+    font: 800 .62rem/1 var(--cui-font-mono,monospace);
+    letter-spacing: .08em;
+  }
+
+  .storage-metrics b,
+  .runtime-grid b {
+    display: block;
+    margin-top: var(--cui-space-xs);
+    color: var(--cui-primary);
+    font-size: var(--cui-text-sm);
+  }
+
+  .storage-meter {
+    height: 6px;
+    background: var(--cui-surface-hover);
+  }
+
+  .storage-meter span {
+    display: block;
+    height: 100%;
+    background: var(--cui-primary);
+  }
+
+  .storage-caption {
+    color: var(--cui-text-tertiary);
+    font-size: var(--cui-text-xs);
+  }
+
+  .administrator-card {
+    display: grid;
+    grid-template-columns: 72px minmax(0,1fr);
+    align-items: center;
+  }
+
+  .administrator-avatar {
+    display: grid;
+    width: 72px;
+    height: 72px;
+    place-items: center;
+    border: 1px solid color-mix(in srgb,var(--cui-primary) 40%,var(--cui-glass-border));
+    background: color-mix(in srgb,var(--cui-primary) 9%,transparent);
+    color: var(--cui-primary);
+  }
+
+  .administrator-avatar .material-icons {
+    font-size: 2rem;
+  }
+
+  .administrator-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--cui-space-xs);
+  }
+
+  .administrator-copy b {
+    font-size: var(--cui-text-lg);
+  }
+
+  :global(.administrator-action.flasharr-btn) {
+    grid-column: 1/-1;
+    width: 100%;
+    margin-top: auto;
+  }
+
+  .runtime-grid {
+    display: grid;
+    grid-template-columns: repeat(2,minmax(0,1fr));
+    align-content: start;
+  }
+
+  .general-card-body.runtime-grid {
+    padding: var(--cui-space-lg);
+  }
+
+  .general-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cui-space-md);
+  }
+
+  .modal-title {
+    margin: 0;
+    color: var(--cui-text-primary);
+    font: 800 .72rem/1 var(--cui-font-mono,monospace);
+    letter-spacing: .1em;
+  }
+
+  .modal-sub {
+    margin: var(--cui-space-xxs) 0 0;
+    color: var(--cui-text-secondary);
+    font-size: var(--cui-text-xs);
+  }
+
+  .general-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--cui-space-sm);
+  }
+
+  .field-label {
+    color: var(--cui-text-tertiary);
+    font: 800 .64rem/1 var(--cui-font-mono,monospace);
+    letter-spacing: .08em;
+  }
+
+  .field-label .mono {
+    float: right;
+    color: var(--cui-primary);
+  }
+
+  .general-input {
+    display: flex;
+    align-items: center;
+    border: 1px solid var(--cui-glass-border);
+    background: var(--cui-input-bg);
+  }
+
+  .general-input:focus-within {
+    border-color: var(--cui-gold);
+    box-shadow: 0 0 0 2px color-mix(in srgb,var(--cui-gold) 16%,transparent);
+  }
+
+  .general-input input {
+    flex: 1;
+    min-width: 0;
+    padding: .7rem .8rem;
+    border: 0;
+    background: transparent;
+    outline: 0;
+    color: var(--cui-text-primary);
+    font: var(--cui-text-sm) var(--cui-font-body);
+  }
+
+  .general-input button {
+    display: grid;
+    place-items: center;
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
+    margin-right: var(--cui-space-xs);
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--cui-text-secondary);
+    cursor: pointer;
+  }
+
+  .general-input button:hover {
+    color: var(--cui-gold);
+  }
+
+  .general-input .material-icons {
+    font-size: 1rem;
+  }
+
+  .general-form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--cui-space-xs);
+    margin-top: var(--cui-space-sm);
+  }
+
+  .general-feedback,
+  .general-error {
+    margin: 0;
+    font-size: var(--cui-text-xs);
+  }
+
+  .general-feedback {
+    color: var(--cui-success);
+  }
+
+  .general-error {
+    color: var(--cui-danger);
+  }
+
+  @media (max-width:900px) {
+    .general-settings {
+      grid-template-columns: 1fr;
+      grid-auto-rows: auto;
+      overflow: visible;
+    }
+  }
+
+  @media (max-width:768px) {
+    .general-settings {
+      padding-bottom: var(--cui-space-lg);
+    }
+    .general-card-body {
+      padding: var(--cui-space-md);
+    }
+  }
+
+  @media (max-width:520px) {
+    .provider-grid {
+      grid-template-columns: 1fr;
+    }
+    .provider-tile {
+      grid-template-columns: 56px minmax(0,1fr) 44px;
+    }
+    .provider-logo {
+      width: 56px;
+      height: 56px;
+    }
+    .storage-metrics,
+    .runtime-grid {
+      grid-template-columns: 1fr;
+    }
+    .general-form-actions {
+      flex-wrap: wrap;
+      justify-content: flex-start;
+    }
+  }
+
+  .eyebrow {
+    margin: 0 0 .45rem;
+    color: var(--cui-primary,#22d3ee);
+    font: 700 .68rem/1 var(--cui-font-mono,monospace);
+    letter-spacing: .14em;
+  }
+
+  .settings-card h2 {
+    margin: 0 0 .45rem;
+    font-size: 1.05rem;
+  }
+
+  .settings-card p,
+  .panel-heading p {
+    color: var(--cui-text-secondary,#91a0ae);
+    font-size: .82rem;
+    line-height: 1.5;
+  }
+
+  .managed {
+    margin-top: 1.25rem;
+    display: flex;
+    gap: .7rem;
+    align-items: center;
+    padding: .8rem;
+    border-radius: .7rem;
+    background: #ffffff09;
+  }
+
+  .managed small {
+    display: block;
+    color: var(--cui-text-tertiary,#71808e);
+    font: 600 .64rem/1.5 var(--cui-font-mono,monospace);
+  }
+
+  .panel-heading {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+  }
+
+  .panel-actions {
+    display: flex;
+    gap: .5rem;
+  }
+
+  .account-settings {
+    padding: .75rem;
+    box-sizing: border-box;
+  }
+
+  .account-list {
+    display: flex;
+    flex-direction: column;
+    gap: .75rem;
+    max-height: calc(100% - 4.5rem);
+    overflow: auto;
+    padding-top: .75rem;
+  }
+
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: .75rem;
+  }
+
+  :global(.account-add-button.flasharr-btn) {
+    min-height: 44px;
+    padding-inline: 1.15rem;
+    font-size: .82rem;
+    font-weight: 800;
+  }
+
+  .account-row-card {
+    --account-accent: #ef4444;
+    position: relative;
+    isolation: isolate;
+    display: grid;
+    grid-template-columns: 42px calc(40% - 42px) 20% 25% 15%;
+    align-items: center;
+    column-gap: 0;
+    min-height: 86px;
+    box-sizing: border-box;
+    padding: 1rem 1.25rem;
+    border: 1px solid color-mix(in srgb,var(--account-accent) 35%,transparent);
+    border-radius: 12px;
+    background: linear-gradient(110deg,color-mix(in srgb,var(--account-accent) 9%,var(--cui-surface-1,#0e151c)),var(--cui-surface-1,#0e151c));
+    box-shadow: inset 0 1px #ffffff0a;
+    overflow: visible;
+    transition: transform .25s cubic-bezier(.16,1,.3,1),border-color .25s,box-shadow .35s;
+  }
+
+  .torbox-account {
+    --account-accent: #22c55e;
+  }
+
+  .account-row-card:before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: 0;
+    border-radius: inherit;
+    opacity: .22;
+    background-image: radial-gradient(color-mix(in srgb,var(--account-accent) 55%,transparent) 1px,transparent 1px);
+    background-size: 12px 12px;
+    mask-image: linear-gradient(90deg,#000,transparent 70%);
+    pointer-events: none;
+  }
+
+  .account-row-card.inactive {
+    opacity: .72;
+  }
+
+  .account-row-card:hover {
+    transform: translateY(-3px);
+    border-color: color-mix(in srgb,var(--account-accent) 80%,transparent);
+    box-shadow: 0 8px 32px #00000080,0 0 28px color-mix(in srgb,var(--account-accent) 25%,transparent);
+  }
+
+  :global(.account-status-badge) {
+    position: absolute;
+    top: 0;
+    left: 1.25rem;
+    transform: translateY(-50%);
+    border: 1px solid var(--account-accent) !important;
+    background: var(--cui-surface-0,#0a1016) !important;
+    color: var(--account-accent) !important;
+    font: 700 .6rem/1 var(--cui-font-mono,monospace);
+    letter-spacing: .08em;
+    z-index: 1;
+  }
+
+  .account-provider {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+  }
+
+  .account-provider img {
+    max-width: 36px;
+    max-height: 36px;
+    object-fit: contain;
+    filter: drop-shadow(0 0 8px color-mix(in srgb,var(--account-accent) 80%,transparent));
+  }
+
+  .account-online-dot {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 9px;
+    height: 9px;
+    border: 2px solid var(--cui-surface-1,#0e151c);
+    border-radius: 50%;
+    background: var(--cui-success,#22c55e);
+    box-shadow: 0 0 8px var(--cui-success,#22c55e);
+  }
+
+  .account-identity {
+    min-width: 0;
+    padding-left: 1rem;
+  }
+
+  .account-email {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--cui-text-primary,#f4f7fb);
+    font-size: 1rem;
+  }
+
+  .account-identity small,
+  .account-detail span {
+    display: block;
+    color: var(--cui-text-tertiary,#71808e);
+    font: 700 .6rem/1.4 var(--cui-font-mono,monospace);
+    letter-spacing: .08em;
+  }
+
+  .account-detail {
+    padding-left: 1rem;
+    border-left: 1px solid color-mix(in srgb,var(--account-accent) 22%,transparent);
+  }
+
+  .account-detail b {
+    display: block;
+    margin-top: .2rem;
+    color: var(--account-accent);
+    font-size: .9rem;
+  }
+
+  .account-actions {
+    display: flex;
+    gap: .35rem;
+    justify-self: end;
+  }
+
+  .account-actions :global(.account-icon-action) {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    padding: 0;
+    border: 1px solid var(--cui-glass-border,rgba(255,255,255,.1));
+    border-radius: .5rem;
+  }
+
+  .account-actions :global(.account-icon-action:hover) {
+    border-color: var(--account-accent);
+    color: var(--account-accent);
+  }
+
+  .account-actions :global(.account-icon-action.danger:hover) {
+    border-color: var(--cui-danger,#ef4444);
+    color: var(--cui-danger,#ef4444);
+  }
+
+  .account-actions :global(.account-icon-action:disabled) {
+    opacity: .55;
+    cursor: wait;
+  }
+
+  .account-actions :global(.account-icon-action) :global(.material-icons) {
+    font-size: 1rem;
+  }
+
+  .account-action-status {
+    position: absolute;
+    right: 1.25rem;
+    bottom: .25rem;
+    color: var(--cui-text-secondary);
+    font-size: .62rem;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0,0,0,0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  @media (max-width:900px) {
+    .account-row-card {
+      grid-template-columns: 42px minmax(0,1fr) auto;
+      grid-template-areas: "provider identity delete" "provider plan expiry";
+      gap: .6rem 1rem;
+      min-height: 104px;
+    }
+    .account-provider {
+      grid-area: provider;
+    }
+    .account-identity {
+      grid-area: identity;
+    }
+    .account-plan-detail {
+      grid-area: plan;
+    }
+    .account-expiry-detail {
+      grid-area: expiry;
+    }
+    .account-actions {
+      grid-area: delete;
+    }
+    .account-detail {
+      padding-left: 0;
+      border-left: 0;
+    }
+  }
+
+  @media (max-width:560px) {
+    .account-heading {
+      align-items: flex-start;
+      gap: .75rem;
+    }
+    .panel-actions {
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .account-row-card {
+      grid-template-columns: 40px minmax(0,1fr) auto;
+      min-height: 112px;
+      padding: 1rem;
+    }
+    .account-provider {
+      width: 40px;
+      height: 40px;
+    }
+    .account-detail b {
+      font-size: .72rem;
+    }
+    :global(.account-status-badge) {
+      left: 1rem;
+    }
+  }
+
+  .download-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+    overflow: hidden;
+  }
+
+  .bento-download {
+    --card-accent: rgba(0,243,255,.5);
+  }
+
+  .bento-download .bento-head h2 {
+    flex: 1;
+    margin: 0;
+    color: #fff;
+    font-size: .75rem;
+    font-weight: 800;
+    letter-spacing: .12em;
+  }
+
+  .cyan-accent {
+    border-left-color: #00f3ff8c;
+  }
+
+  .cyan-banner {
+    background: linear-gradient(135deg,#00f3ff26,#00648c0f 50%,#0a0a0f80);
+  }
+
+  .download-logo img {
+    filter: drop-shadow(0 0 10px rgba(0,243,255,.7)) drop-shadow(0 0 20px rgba(0,243,255,.3));
+  }
+
+  .dl-body {
+    gap: 0;
+    padding: 0;
+  }
+
+  .dl-section {
+    padding: .85rem;
+  }
+
+  .dl-section--sep {
+    border-top: 1px solid rgba(255,255,255,.05);
+  }
+
+  .dl-section--conc {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  .dl-path-field,
+  .dl-conc-hud {
+    display: flex;
+    flex-direction: column;
+    gap: .6rem;
+  }
+
+  .dl-path-label,
+  .dl-conc-label {
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    color: var(--cui-text-tertiary);
+    font: 700 .68rem/1 var(--cui-font-mono,monospace);
+    letter-spacing: .12em;
+  }
+
+  .dl-path-label .material-icons {
+    color: var(--cui-primary);
+    font-size: 1rem;
+  }
+
+  .dl-path-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: .65rem;
+    border: 1px solid color-mix(in srgb,var(--cui-primary) 18%,transparent);
+    border-radius: 8px;
+    outline: none;
+    background: color-mix(in srgb,var(--cui-primary) 3%,transparent);
+    color: var(--cui-text-primary);
+    font: .82rem var(--cui-font-mono,monospace);
+  }
+
+  .dl-path-input:focus-visible {
+    border-color: color-mix(in srgb,var(--cui-primary) 55%,transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb,var(--cui-primary) 12%,transparent);
+  }
+
+  .dl-dot-slider {
+    position: relative;
+    display: flex;
+    align-items: center;
+    height: 48px;
+    cursor: col-resize;
+    touch-action: none;
+    outline: none;
+    user-select: none;
+  }
+
+  .dl-dot-slider:focus-visible {
+    outline: 2px solid var(--cui-primary);
+    outline-offset: 2px;
+    border-radius: 24px;
+  }
+
+  .dl-dot-slider:before {
+    content: "";
+    position: absolute;
+    right: 22px;
+    left: 22px;
+    top: 50%;
+    height: 2px;
+    border-radius: 2px;
+    background: linear-gradient(to right,#00f3ff80 0% calc(var(--pct) * 100%),#ffffff14 calc(var(--pct) * 100%));
+    transform: translateY(-50%);
+  }
+
+  .dl-dots {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  .dl-dot {
+    position: absolute;
+    top: 50%;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ffffff1f;
+    transform: translateY(-50%);
+  }
+
+  .dl-dot.lit {
+    background: var(--cui-primary);
+    box-shadow: 0 0 9px color-mix(in srgb,var(--cui-primary) 75%,transparent);
+  }
+
+  .dl-dot.hidden {
+    opacity: 0;
+  }
+
+  .dl-thumb-orb {
+    position: absolute;
+    z-index: 1;
+    top: 50%;
+    left: calc(var(--pct) * (100% - 40px));
+    display: grid;
+    width: 40px;
+    height: 40px;
+    place-items: center;
+    border: 2px solid var(--cui-primary);
+    border-radius: 50%;
+    background: radial-gradient(circle at 38% 32%,#b4ffff38,#00507814);
+    box-shadow: 0 0 16px color-mix(in srgb,var(--cui-primary) 35%,transparent);
+    color: var(--cui-primary);
+    font: 900 1rem var(--cui-font-mono,monospace);
+    transform: translateY(-50%);
+    pointer-events: none;
+  }
+
+  .dl-body > .settings-result {
+    padding: 0 .85rem;
+  }
+
+  .dl-body > .compact-actions {
+    padding: .4rem .85rem .85rem;
+  }
+
+  .dl-body > .compact-actions :global(.flasharr-btn) {
+    min-height: 44px;
+  }
+
+  .integrations-panel {
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+  }
+
+  .integrations-panel :global(.integration-grid) {
+    width: 100%;
+    height: 72%;
+    margin-inline: auto;
+  }
+
+  .config-card {
+    display: flex;
+    flex-direction: column;
+    gap: .7rem;
+    overflow: hidden;
+  }
+
+  .card-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: .5rem;
+    margin-top: auto;
+  }
+
+  .primary-link {
+    align-self: flex-start;
+    padding: .65rem .9rem;
+    border-radius: .55rem;
+    background: var(--cui-primary,#22d3ee);
+    color: #041014;
+    font: 800 .7rem var(--cui-font-mono,monospace);
+    text-decoration: none;
+    text-transform: uppercase;
+  }
+
+  .sources-panel {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .sources-layout {
+    display: grid;
+    grid-template-columns: minmax(0,35fr) minmax(0,65fr);
+    grid-template-rows: auto;
+    align-items: stretch;
+    gap: 1rem;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .sources-rail {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .sources-main {
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    contain: size;
+  }
+
+  .bento-prowlarr {
+    --card-accent: rgba(249,115,22,.5);
+  }
+
+  .sources-rail .bento-head,
+  .bento-download .bento-head {
+    position: relative;
+    overflow: hidden;
+    border-left: 3px solid var(--card-accent);
+    font-family: var(--cui-font-mono,monospace);
+  }
+
+  .sources-rail .bento-head:after,
+  .bento-download .bento-head:after,
+  .banner-dots {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(rgba(0,0,0,.25) 1px,transparent 1px);
+    background-size: 6px 6px;
+  }
+
+  .sources-rail .bento-head:after,
+  .bento-download .bento-head:after {
+    mask-image: linear-gradient(to right,#000,transparent 70%);
+  }
+
+  .sources-rail .bento-head > *,
+  .bento-download .bento-head > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .bento-head h2 {
+    flex: 1;
+    margin: 0;
+    color: #fff;
+    font-size: .7rem;
+    font-weight: 900;
+    letter-spacing: .1em;
+  }
+
+  .bento-head .head-logo {
+    width: 22px;
+    height: 22px;
+    object-fit: contain;
+    filter: drop-shadow(0 0 6px rgba(249,115,22,.55));
+  }
+
+  .card-banner {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 72px;
+    flex-shrink: 0;
+  }
+
+  .orange-banner {
+    background: linear-gradient(135deg,#f9731626,#c2410c0f 50%,#0a0a0f80);
+  }
+
+  .banner-logo-ring {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    width: 48px;
+    height: 48px;
+  }
+
+  .banner-logo-ring > img {
+    width: 44px;
+    height: 44px;
+    object-fit: contain;
+    filter: drop-shadow(0 0 10px rgba(249,115,22,.7)) drop-shadow(0 0 20px rgba(249,115,22,.35));
+  }
+
+  .banner-status-dot {
+    position: absolute;
+    right: -3px;
+    bottom: -3px;
+    width: 11px;
+    height: 11px;
+    border: 2px solid rgba(8,10,15,.95);
+    border-radius: 50%;
+    background: #50505ad9;
+  }
+
+  .banner-status-dot.active {
+    background: #22c55e;
+    box-shadow: 0 0 8px #22c55ed9;
+  }
+
+  .banner-status-dot.unreachable {
+    background: #ef4444;
+    box-shadow: 0 0 8px #ef4444bf;
+  }
+
+  .reload-config {
+    width: fit-content;
+    padding: .3rem 0;
+    border: 0;
+    background: none;
+    color: #fbbf24;
+    font-size: var(--cui-text-xs);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .reload-config:focus-visible {
+    outline: 2px solid var(--cui-primary);
+    outline-offset: 2px;
+  }
+
+  .bento-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    padding: .6rem .85rem;
+  }
+
+  .bento-body .inline-field {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) auto;
+    align-items: center;
+    gap: .4rem;
+    padding: .55rem 0;
+    border-bottom: 1px solid rgba(255,255,255,.03);
+  }
+
+  .bento-body .inline-label {
+    grid-column: 1/-1;
+    color: #ffffff59;
+    font: 700 .72rem/1 var(--cui-font-mono,monospace);
+    letter-spacing: .1em;
+  }
+
+  .bento-body .inline-input-edit {
+    grid-column: 1;
+    min-width: 0;
+    padding: .05rem .2rem;
+    border: 0;
+    border-bottom: 1px solid rgba(255,255,255,.06);
+    outline: none;
+    background: transparent;
+    color: #fffc;
+    font-size: .8rem;
+  }
+
+  .bento-body .inline-input-edit:focus-visible {
+    outline: 2px solid #f97316;
+    outline-offset: 2px;
+  }
+
+  .compact-actions {
+    display: flex;
+    gap: .4rem;
+    margin-top: auto;
+    padding-top: .6rem;
+  }
+
+  .compact-actions > div {
+    display: flex;
+  }
+
+  .compact-actions > div:first-child {
+    flex: 4;
+  }
+
+  .compact-actions > div:last-child {
+    flex: 6;
+  }
+
+  .compact-actions :global(.flasharr-btn) {
+    height: 44px;
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+
+  .bento-fshare {
+    --card-accent: rgba(239,83,80,.5);
+  }
+
+  .fshare-accent {
+    border-left-color: #ef535080;
+  }
+
+  .fshare-banner {
+    background: linear-gradient(135deg,#ef535026,#b423280f 50%,#0a0a0f80);
+  }
+
+  .fshare-banner .banner-logo-ring > img {
+    filter: drop-shadow(0 0 10px rgba(239,83,80,.7)) drop-shadow(0 0 20px rgba(239,83,80,.35));
+  }
+
+  .fshare-body {
+    gap: .55rem;
+  }
+
+  .cache-summary {
+    margin: 0;
+    padding: .55rem 0;
+    border-top: 1px solid rgba(239,83,80,.2);
+    border-bottom: 1px solid rgba(239,83,80,.2);
+    color: var(--cui-text-secondary);
+    font-size: .7rem;
+    line-height: 1.5;
+  }
+
+  .cache-summary.stale,
+  .settings-result.error {
+    color: var(--cui-danger);
+  }
+
+  .source-entry {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) auto;
+    gap: .45rem;
+    align-items: stretch;
+  }
+
+  .source-entry > input {
+    min-width: 0;
+    height: 32px;
+    box-sizing: border-box;
+    padding: 0 .65rem;
+    border: 1px solid rgba(239,83,80,.25);
+    border-radius: 8px;
+    background: var(--cui-surface-0);
+    color: var(--cui-text-primary);
+    font: var(--cui-text-xs) var(--cui-font-body);
+  }
+
+  .source-entry > input:focus-visible {
+    outline: 2px solid #ef5350;
+    outline-offset: 2px;
+  }
+
+  :global(.upload-button.flasharr-btn) {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    min-width: 36px;
+    height: 32px;
+    min-height: 32px;
+    padding: 0;
+    border-color: #ef535059;
+    color: #ff8a87;
+  }
+
+  :global(.upload-button.flasharr-btn .material-icons) {
+    font-size: 1rem;
+  }
+
+  .source-file-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .source-helper {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--cui-text-tertiary);
+    font-size: .65rem;
+  }
+
+  .fshare-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .45rem;
+    margin-top: auto;
+  }
+
+  .fshare-actions :global(.flasharr-btn),
+  :global(.singular-sync.flasharr-btn) {
+    height: 44px;
+    min-height: 44px;
+  }
+
+  :global(.singular-sync.flasharr-btn) {
+    position: relative;
+    overflow: hidden;
+  }
+
+  :global(.singular-sync.flasharr-btn:before) {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(rgba(80,0,0,.45) 1px,transparent 1px);
+    background-size: 6px 6px;
+    pointer-events: none;
+    mask-image: linear-gradient(to right,#000,transparent 70%);
+  }
+
+  :global(.singular-sync.flasharr-btn>*) {
+    position: relative;
+    z-index: 1;
+  }
+
+  .settings-result {
+    margin: 0;
+    font-size: var(--cui-text-xs);
+    color: var(--cui-text-secondary);
+  }
+
+  .settings-result.success {
+    color: var(--cui-success);
+  }
+
+  .logs-panel {
+    overflow: hidden;
+    display: flex;
+  }
+
+  .logs-panel :global(.log-panel) {
+    height: 100%;
+    width: 100%;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 5rem 1rem;
+    color: var(--cui-text-secondary,#91a0ae);
+  }
+
+  .empty-state .material-icons {
+    font-size: 2.5rem;
+    color: var(--cui-primary,#22d3ee);
+  }
+
+  .remove-modal-title {
+    margin: 0;
+    font: 700 .75rem/1 var(--cui-font-mono,monospace);
+    letter-spacing: .1em;
+    color: #fff;
+  }
+
+  .remove-modal-copy {
+    margin: 0 0 1.25rem;
+    color: var(--cui-text-secondary,#91a0ae);
+    font-size: .85rem;
+    line-height: 1.5;
+  }
+
+  .remove-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: .5rem;
+  }
+
   @keyframes slideUp {
     from {
       opacity: 0;
-      transform: translateY(12px);
+      transform: translateY(8px);
     }
     to {
       opacity: 1;
@@ -970,2007 +2443,98 @@
     }
   }
 
-  /* ── Left: 3-Column Widget Grid ── */
-  .widget-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.1fr) minmax(0, 1.1fr);
-    gap: 0.65rem;
-    height: 100%;
-    overflow: hidden;
-  }
-  .widget-col {
-    display: flex;
-    flex-direction: column;
-    gap: 0.65rem;
-    min-height: 0;
-  }
-  .widget-col .bento-card {
-    flex: 1;
-    min-height: 0;
-  }
-  .col-first .bento-card:first-child {
-    flex: 1;
-  }
-  .col-first .bento-card:last-child {
-    flex: 2;
-  }
-
-  .bento-card {
-    border-radius: 14px;
-    background: rgba(8, 10, 15, 0.7);
-    backdrop-filter: blur(12px);
-    border: 1px solid
-      color-mix(
-        in srgb,
-        var(--card-accent, rgba(255, 255, 255, 0.05)) 35%,
-        transparent
-      );
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    transition:
-      transform 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-      border-color 0.25s,
-      box-shadow 0.3s;
-  }
-  .bento-card:hover {
-    transform: translateY(-3px);
-    border-color: color-mix(
-      in srgb,
-      var(--card-accent, rgba(255, 255, 255, 0.12)) 80%,
-      transparent
-    );
-    box-shadow:
-      0 0 0 1px
-        color-mix(in srgb, var(--card-accent, transparent) 40%, transparent),
-      0 12px 40px rgba(0, 0, 0, 0.4),
-      0 0 32px
-        color-mix(in srgb, var(--card-accent, transparent) 20%, transparent);
-  }
-  /* Per-card accent colors */
-  .bento-account {
-    --card-accent: rgba(220, 60, 60, 0.5);
-  }
-  .bento-download {
-    --card-accent: rgba(0, 243, 255, 0.4);
-  }
-  .bento-newznab {
-    --card-accent: rgba(139, 92, 246, 0.5);
-  }
-  .bento-sonarr {
-    --card-accent: rgba(56, 189, 248, 0.5);
-  }
-  .bento-radarr {
-    --card-accent: rgba(245, 158, 11, 0.5);
-  }
-  .bento-sabnzbd {
-    --card-accent: rgba(0, 212, 170, 0.5);
-  }
-
-  /* ── Card Header ── */
-  .bento-head {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.55rem 0.7rem;
-    border-bottom: none;
-    font-family: var(--font-mono, monospace);
-    flex-shrink: 0;
-    position: relative;
-    z-index: 1;
-    overflow: hidden;
-    background: transparent;
-  }
-  .bento-head::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background-image: radial-gradient(rgba(0, 0, 0, 0.25) 1px, transparent 1px);
-    background-size: 6px 6px;
-    mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 100%
-    );
-    -webkit-mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 100%
-    );
-    pointer-events: none;
-  }
-  .bento-head h3 {
-    font-size: 0.75rem;
-    font-weight: 800;
-    letter-spacing: 0.12em;
-    color: #fff;
-    margin: 0;
-    flex: 1;
-  }
-  .bento-head .material-icons {
-    font-size: 1.2rem;
-  }
-  .head-logo {
-    width: 22px;
-    height: 22px;
-    border-radius: 4px;
-    object-fit: contain;
-  }
-  .bento-sw {
-    margin-left: auto;
-  }
-
-  /* ── Accent Colors ── */
-  .cyan-accent {
-    border-left: 3px solid rgba(0, 243, 255, 0.5);
-  }
-  .cyan-accent .material-icons {
-    color: #00f3ff;
-  }
-  .cyan-accent::after {
-    background-image: radial-gradient(
-      rgba(0, 243, 255, 0.25) 1px,
-      transparent 1px
-    );
-    mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 70%
-    );
-    -webkit-mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 70%
-    );
-  }
-
-  .red-accent {
-    border-left: 3px solid rgba(220, 60, 60, 0.6);
-  }
-  .red-accent .material-icons {
-    color: #dc3c3c;
-  }
-  .red-accent::after {
-    background-image: radial-gradient(
-      rgba(220, 60, 60, 0.3) 1px,
-      transparent 1px
-    );
-    mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 70%
-    );
-    -webkit-mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 70%
-    );
-  }
-
-  .violet-accent {
-    border-left: 3px solid rgba(139, 92, 246, 0.5);
-  }
-  .violet-accent .material-icons {
-    color: #8b5cf6;
-  }
-  .violet-accent::after {
-    background-image: radial-gradient(
-      rgba(139, 92, 246, 0.25) 1px,
-      transparent 1px
-    );
-    mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 70%
-    );
-    -webkit-mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 70%
-    );
-  }
-
-  .sky-accent {
-    border-left: 3px solid rgba(56, 189, 248, 0.5);
-  }
-  .sky-accent .material-icons {
-    color: #38bdf8;
-  }
-  .sky-accent::after {
-    background-image: radial-gradient(
-      rgba(56, 189, 248, 0.25) 1px,
-      transparent 1px
-    );
-    mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 70%
-    );
-    -webkit-mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 70%
-    );
-  }
-
-  .amber-accent {
-    border-left: 3px solid rgba(245, 158, 11, 0.5);
-  }
-  .amber-accent .material-icons {
-    color: #f59e0b;
-  }
-  .amber-accent::after {
-    background-image: radial-gradient(
-      rgba(245, 158, 11, 0.25) 1px,
-      transparent 1px
-    );
-    mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 70%
-    );
-    -webkit-mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 70%
-    );
-  }
-
-  .teal-accent {
-    border-left: 3px solid rgba(0, 212, 170, 0.5);
-  }
-  .teal-accent .material-icons {
-    color: #00d4aa;
-  }
-  .teal-accent::after {
-    background-image: radial-gradient(
-      rgba(0, 212, 170, 0.25) 1px,
-      transparent 1px
-    );
-    mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 70%
-    );
-    -webkit-mask-image: linear-gradient(
-      to right,
-      rgba(0, 0, 0, 1) 0%,
-      rgba(0, 0, 0, 0) 70%
-    );
-  }
-
-  /* ── Shared Card Banner ── */
-  .card-banner {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 115px;
-    box-sizing: border-box;
-    flex-shrink: 0;
-  }
-  .banner-dots {
-    position: absolute;
-    inset: 0;
-    background-image: radial-gradient(rgba(0, 0, 0, 0.25) 1px, transparent 1px);
-    background-size: 6px 6px;
-    pointer-events: none;
-  }
-  .banner-logo-ring {
-    width: 48px;
-    height: 48px;
-    border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.15);
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.3);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-    position: relative;
-    z-index: 1;
-  }
-  .banner-logo-ring img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-  .banner-logo-ring .material-icons {
-    font-size: 1.4rem;
-    color: rgba(255, 255, 255, 0.7);
-  }
-
-  /* Glow variant: for transparent-bg logos — no crop, color drop-shadow */
-  .banner-logo-ring.glow {
-    border-radius: 0;
-    border: none;
-    overflow: visible;
-    background: transparent;
-    box-shadow: none;
-  }
-  .banner-logo-ring.glow img {
-    /* Base: overridden per card below */
-    width: 44px;
-    height: 44px;
-    object-fit: contain;
-  }
-  /* Optical normalization: target ~33px visible content.
-     each logo's fill ratio = visible content / canvas size.
-     img size = 33px / fill_ratio                            */
-  .bento-download .banner-logo-ring.glow img {
-    width: 94px;
-    height: 94px;
-  } /* Flasharr: ~40% fill, +15% */
-  .bento-newznab .banner-logo-ring.glow img {
-    width: 44px;
-    height: 44px;
-  } /* Newznab:  ~87% fill, +15% */
-  .bento-sonarr .banner-logo-ring.glow img {
-    width: 40px;
-    height: 40px;
-  } /* Sonarr:   ~82% fill */
-  .bento-radarr .banner-logo-ring.glow img {
-    width: 44px;
-    height: 44px;
-  } /* Radarr:   ~75% fill */
-  .bento-sabnzbd .banner-logo-ring.glow img {
-    width: 44px;
-    height: 44px;
-  } /* SABnzbd:  ~75% fill */
-
-  /* ── Status Dot ── */
-  .status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.2);
-    margin-left: auto;
-    flex-shrink: 0;
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.06);
-    transition:
-      background 0.3s,
-      box-shadow 0.3s;
-  }
-  .status-dot.active {
-    background: #22c55e;
-    box-shadow:
-      0 0 6px rgba(34, 197, 94, 0.7),
-      0 0 0 2px rgba(34, 197, 94, 0.2);
-  }
-
-  /* Banner logo status dot — bottom-right overlay */
-  .banner-logo-ring {
-    position: relative;
-  }
-  .banner-status-dot {
-    position: absolute;
-    bottom: -3px;
-    right: -3px;
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    background: rgba(80, 80, 90, 0.85);
-    border: 2px solid rgba(8, 10, 15, 0.95);
-    transition:
-      background 0.3s,
-      box-shadow 0.3s;
-    z-index: 2;
-  }
-  .banner-status-dot.active {
-    background: #22c55e;
-    box-shadow: 0 0 8px rgba(34, 197, 94, 0.85);
-  }
-  .cyan-banner .banner-logo-ring.glow img {
-    filter: drop-shadow(0 0 10px rgba(0, 243, 255, 0.7))
-      drop-shadow(0 0 20px rgba(0, 243, 255, 0.35));
-  }
-  .sky-banner .banner-logo-ring.glow img {
-    filter: drop-shadow(0 0 10px rgba(56, 189, 248, 0.7))
-      drop-shadow(0 0 20px rgba(56, 189, 248, 0.35));
-  }
-  .amber-banner .banner-logo-ring.glow img {
-    filter: drop-shadow(0 0 10px rgba(245, 158, 11, 0.7))
-      drop-shadow(0 0 20px rgba(245, 158, 11, 0.35));
-  }
-  .teal-banner .banner-logo-ring.glow img {
-    filter: drop-shadow(0 0 10px rgba(0, 212, 170, 0.7))
-      drop-shadow(0 0 20px rgba(0, 212, 170, 0.35));
-  }
-  .violet-banner .banner-logo-ring.glow img {
-    filter: drop-shadow(0 0 10px rgba(139, 92, 246, 0.7))
-      drop-shadow(0 0 20px rgba(139, 92, 246, 0.35));
-  }
-
-  /* Also glow the Fshare logo in Account card */
-  .acc-logo-ring img {
-    filter: drop-shadow(0 0 8px rgba(220, 60, 60, 0.5));
-  }
-
-  /* Banner color variants */
-  .cyan-banner {
-    background: linear-gradient(
-      135deg,
-      rgba(0, 243, 255, 0.15) 0%,
-      rgba(0, 180, 200, 0.06) 50%,
-      rgba(10, 10, 15, 0.5) 100%
-    );
-  }
-  .violet-banner {
-    background: linear-gradient(
-      135deg,
-      rgba(139, 92, 246, 0.15) 0%,
-      rgba(100, 60, 200, 0.06) 50%,
-      rgba(10, 10, 15, 0.5) 100%
-    );
-  }
-  .sky-banner {
-    background: linear-gradient(
-      135deg,
-      rgba(56, 189, 248, 0.15) 0%,
-      rgba(40, 140, 200, 0.06) 50%,
-      rgba(10, 10, 15, 0.5) 100%
-    );
-  }
-  .amber-banner {
-    background: linear-gradient(
-      135deg,
-      rgba(245, 158, 11, 0.15) 0%,
-      rgba(200, 120, 10, 0.06) 50%,
-      rgba(10, 10, 15, 0.5) 100%
-    );
-  }
-  .teal-banner {
-    background: linear-gradient(
-      135deg,
-      rgba(0, 212, 170, 0.15) 0%,
-      rgba(0, 160, 130, 0.06) 50%,
-      rgba(10, 10, 15, 0.5) 100%
-    );
-  }
-
-  /* ── Card Body ── */
-  .bento-body {
-    padding: 0.5rem 0.75rem 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-    flex: 1;
-    overflow-y: auto;
-  }
-  .bento-disabled {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    flex: 1;
-    color: rgba(255, 255, 255, 0.2);
-    font-size: 0.7rem;
-    font-family: var(--font-mono, monospace);
-    letter-spacing: 0.1em;
-  }
-  .bento-disabled .material-icons {
-    font-size: 1.1rem;
-  }
-
-  /* ── Account Card (Profile Hero) ── */
-  .bento-account {
-    overflow: hidden;
-  }
-
-  .acc-hero-banner {
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 115px;
-    box-sizing: border-box;
-    background: linear-gradient(
-      135deg,
-      rgba(220, 60, 60, 0.25) 0%,
-      rgba(180, 40, 40, 0.12) 50%,
-      rgba(10, 10, 15, 0.6) 100%
-    );
-    flex-shrink: 0;
-  }
-  .acc-dots-overlay {
-    position: absolute;
-    inset: 0;
-    background-image: radial-gradient(rgba(0, 0, 0, 0.3) 1px, transparent 1px);
-    background-size: 6px 6px;
-    pointer-events: none;
-  }
-  .acc-logo-ring {
-    width: 50px;
-    height: 50px;
-    border-radius: 50%;
-    border: 2.5px solid rgba(255, 255, 255, 0.2);
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(0, 0, 0, 0.3);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
-    position: relative;
-    z-index: 1;
-  }
-  .acc-logo-ring img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .acc-card-info {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.75rem 0.85rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-  }
-  .acc-info-left {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    flex: 1;
-    min-width: 0;
-  }
-  .acc-card-email {
-    font-size: 0.92rem;
-    font-weight: 700;
-    color: #fff;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .acc-card-expiry {
-    font-size: 0.7rem;
-    color: rgba(255, 255, 255, 0.35);
-    font-family: var(--font-mono, monospace);
-  }
-  .acc-card-actions {
-    display: flex;
-    gap: 0.4rem;
-    padding: 0 0.75rem 0.75rem;
-    margin-top: auto;
-  }
-  .acc-action-btn.icon-only {
-    flex: none;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    aspect-ratio: 1;
-  }
-  .acc-action-btn.primary {
-    flex: 5;
-  }
-  .acc-action-btn {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    padding: 0.55rem 0.6rem;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 10px;
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 0.72rem;
-    font-weight: 700;
-    font-family: var(--font-mono, monospace);
-    cursor: pointer;
-    transition: all 0.2s;
-    white-space: nowrap;
-  }
-  .acc-action-btn .material-icons {
-    font-size: 1rem;
-  }
-  .acc-action-btn:hover {
-    border-color: rgba(255, 255, 255, 0.2);
-    color: #fff;
-    background: rgba(255, 255, 255, 0.06);
-  }
-  .acc-action-btn.primary {
-    background: rgba(0, 243, 255, 0.08);
-    border-color: rgba(0, 243, 255, 0.2);
-    color: #00f3ff;
-  }
-  .acc-action-btn.primary:hover {
-    background: rgba(0, 243, 255, 0.15);
-    border-color: rgba(0, 243, 255, 0.4);
-    box-shadow: 0 0 12px rgba(0, 243, 255, 0.1);
-  }
-
-  /* ── Compact field ── */
-  .compact-field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-  .compact-field label {
-    font-size: 0.55rem;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    color: rgba(255, 255, 255, 0.4);
-    font-family: var(--font-mono, monospace);
-  }
-  .compact-field input[type="text"],
-  .compact-field input[type="password"] {
-    width: 100%;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 6px;
-    color: #fff;
-    font-size: 0.72rem;
-    padding: 0.35rem 0.5rem;
-    font-family: var(--font-mono, monospace);
-    transition: border-color 0.2s;
-  }
-  .compact-field input:focus {
-    border-color: rgba(0, 243, 255, 0.4);
-    outline: none;
-  }
-  .compact-actions {
-    display: flex;
-    gap: 0.4rem;
-    margin-top: auto;
-    /* same bottom padding as .acc-card-actions so all card buttons sit at equal distance from card edge */
-    padding: 0.4rem 0.75rem 0.75rem;
-  }
-
-  /* ── Download Engine Card ── */
-  /* Two-section body: PATH above, CONCURRENCY below */
-  .dl-body {
-    gap: 0; /* sections carry their own padding; no extra gap */
-    padding: 0; /* sections carry horizontal padding */
-  }
-  .dl-section {
-    padding: 0.85rem 0.85rem;
-  }
-  .dl-section--sep {
-    border-top: 1px solid rgba(255, 255, 255, 0.05);
-  }
-  .dl-section--conc {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .dl-path-field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-  .dl-path-label {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    color: rgba(255, 255, 255, 0.4);
-    font-family: var(--font-mono, monospace);
-    margin-bottom: 0.35rem;
-  }
-  .dl-path-label .material-icons {
-    font-size: 1rem;
-    color: var(--color-primary, #00f3ff);
-    opacity: 0.65;
-  }
-  .dl-path-input {
-    width: 100%;
-    box-sizing: border-box;
-    background: rgba(0, 243, 255, 0.03);
-    border: 1px solid rgba(0, 243, 255, 0.12);
-    border-radius: 8px;
-    color: #fff;
-    font-size: 0.82rem;
-    padding: 0.45rem 0.65rem;
-    font-family: var(--font-mono, monospace);
-    outline: none;
-    transition:
-      border-color 0.2s,
-      box-shadow 0.2s;
-  }
-  .dl-path-input::placeholder {
-    color: rgba(255, 255, 255, 0.2);
-  }
-  .dl-path-input:focus {
-    border-color: rgba(0, 243, 255, 0.4);
-    box-shadow: 0 0 10px rgba(0, 243, 255, 0.1);
-  }
-
-  /* Folder source row: input + refresh btn */
-  .dl-folder-source-row {
-    display: flex;
-    gap: 0.4rem;
-    align-items: stretch;
-  }
-  .dl-folder-source-row .dl-path-input {
-    flex: 1;
-    min-width: 0;
-  }
-  .dl-refresh-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 36px;
-    min-width: 36px;
-    background: rgba(0, 243, 255, 0.06);
-    border: 1px solid rgba(0, 243, 255, 0.15);
-    border-radius: 8px;
-    color: rgba(0, 243, 255, 0.7);
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-  .dl-refresh-btn .material-icons {
-    font-size: 1.1rem;
-    transition: transform 0.3s ease;
-  }
-  .dl-refresh-btn:hover:not(:disabled) {
-    background: rgba(0, 243, 255, 0.12);
-    border-color: rgba(0, 243, 255, 0.35);
-    color: #00f3ff;
-    box-shadow: 0 0 12px rgba(0, 243, 255, 0.15);
-  }
-  .dl-refresh-btn:active:not(:disabled) {
-    transform: scale(0.92);
-  }
-  .dl-refresh-btn:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-  }
-  .dl-refresh-btn.spinning .material-icons {
-    animation: spin-icon 1s linear infinite;
-  }
-  @keyframes spin-icon {
-    from {
-      transform: rotate(0deg);
+  @media (prefers-reduced-motion:reduce) {
+    .settings-panel,
+    .account-row-card,
+    .dl-dot,
+    .dl-thumb-orb,
+    :global(.settings-tabs-header .toggle-btn) {
+      animation: none;
+      transition: none;
     }
-    to {
-      transform: rotate(360deg);
+    .account-row-card:hover {
+      transform: none;
     }
   }
 
-  .dl-conc-hud {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    flex: 1;
-  }
-  .dl-conc-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .dl-conc-label {
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    color: rgba(255, 255, 255, 0.4);
-    font-family: var(--font-mono, monospace);
-  }
-  .dl-conc-value {
-    font-size: 1rem;
-    font-weight: 900;
-    font-family: var(--font-mono, monospace);
-    color: var(--color-primary, #00f3ff);
-    text-shadow: 0 0 12px rgba(0, 243, 255, 0.6);
-    min-width: 1.5ch;
-    text-align: right;
-  }
-
-  /* Segmented bar */
-  /* ── Dot-track slider ── */
-  .dl-dot-slider {
-    position: relative;
-    height: 48px;
-    display: flex;
-    align-items: center;
-    cursor: col-resize;
-    outline: none;
-    user-select: none;
-    -webkit-user-select: none;
-  }
-  .dl-dot-slider:focus-visible {
-    outline: 1px solid rgba(0, 243, 255, 0.35);
-    border-radius: 24px;
-  }
-
-  /* Track line: cyan left of orb, dim right */
-  .dl-dot-slider::before {
-    content: "";
-    position: absolute;
-    left: 22px; /* half of new 44px orb */
-    right: 22px;
-    top: 50%;
-    transform: translateY(-50%);
-    height: 1.5px;
-    background: linear-gradient(
-      to right,
-      rgba(0, 243, 255, 0.5) 0%,
-      rgba(0, 243, 255, 0.5) calc(var(--pct, 0) * 100%),
-      rgba(255, 255, 255, 0.07) calc(var(--pct, 0) * 100%),
-      rgba(255, 255, 255, 0.07) 100%
-    );
-    border-radius: 1px;
-    pointer-events: none;
-  }
-
-  /* 10 dots — absolute, each positioned to match orb travel axis */
-  .dl-dots {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    z-index: 1;
-  }
-  .dl-dot {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.12);
-    transition:
-      background 0.15s,
-      box-shadow 0.15s,
-      transform 0.15s,
-      opacity 0.12s;
-  }
-  .dl-dot.lit {
-    background: rgba(0, 243, 255, 0.85);
-    box-shadow: 0 0 9px rgba(0, 243, 255, 0.75);
-    transform: translateY(-50%) scale(1.25);
-  }
-  /* Hide dot sitting beneath the orb so value text is readable */
-  .dl-dot.hidden {
-    opacity: 0;
-  }
-
-  /* Pulsing circle thumb — value inside */
-  .dl-thumb-orb {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    left: calc(var(--pct, 0) * (100% - 40px));
-    width: 40px;
-    height: 40px;
-    border-radius: 50%;
-    background: radial-gradient(
-      circle at 38% 32%,
-      rgba(180, 255, 255, 0.22) 0%,
-      rgba(0, 180, 210, 0.14) 60%,
-      rgba(0, 80, 120, 0.08) 100%
-    );
-    border: 2px solid #00f3ff;
-    color: #00f3ff;
-    font-family: var(--font-mono, monospace);
-    font-weight: 900;
-    font-size: 1rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    pointer-events: none;
-    z-index: 5;
-    transition: left 0.04s linear;
-    animation: orb-pulse 2.4s ease-in-out infinite;
-  }
-  @keyframes orb-pulse {
-    0%,
-    100% {
-      box-shadow:
-        0 0 10px rgba(0, 243, 255, 0.4),
-        0 0 20px rgba(0, 243, 255, 0.15),
-        inset 0 0 8px rgba(0, 243, 255, 0.1);
-    }
-    50% {
-      box-shadow:
-        0 0 20px rgba(0, 243, 255, 0.8),
-        0 0 42px rgba(0, 243, 255, 0.3),
-        inset 0 0 14px rgba(0, 243, 255, 0.2);
-    }
-  }
-
-  /* ── Inline field ── */
-  .inline-field {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.25rem 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
-  }
-  .inline-field:last-of-type {
-    border-bottom: none;
-  }
-  .inline-label {
-    font-size: 0.62rem;
-    font-weight: 700;
-    letter-spacing: 0.1em;
-    color: rgba(255, 255, 255, 0.35);
-    font-family: var(--font-mono, monospace);
-    min-width: 32px;
-  }
-  .inline-value {
-    flex: 1;
-    font-size: 0.8rem;
-    color: rgba(255, 255, 255, 0.8);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .inline-value.mono {
-    font-family: var(--font-mono, monospace);
-  }
-  /* Editable inline input — matches .inline-value visually but is an <input> */
-  .inline-input-edit {
-    flex: 1;
-    min-width: 0;
-    background: transparent;
-    border: none;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    color: rgba(255, 255, 255, 0.8);
-    font-size: 0.8rem;
-    font-family: inherit;
-    padding: 0.05rem 0.2rem;
-    outline: none;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    transition: border-color 0.2s;
-  }
-  .inline-input-edit.mono {
-    font-family: var(--font-mono, monospace);
-  }
-  .inline-input-edit::placeholder {
-    color: rgba(255, 255, 255, 0.2);
-  }
-  .inline-input-edit:focus {
-    border-bottom-color: rgba(0, 243, 255, 0.4);
-  }
-  .copy-inline-btn {
-    background: none;
-    border: none;
-    color: rgba(255, 255, 255, 0.25);
-    cursor: pointer;
-    padding: 2px;
-    display: flex;
-    transition: color 0.2s;
-  }
-  .copy-inline-btn .material-icons {
-    font-size: 0.8rem;
-  }
-  .copy-inline-btn:hover {
-    color: #00f3ff;
-  }
-
-  .btn-regen {
-    display: flex;
-    align-items: center;
-    gap: 0.3rem;
-    padding: 0.3rem 0.5rem;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 6px;
-    color: rgba(255, 255, 255, 0.5);
-    font-size: 0.6rem;
-    font-weight: 700;
-    font-family: var(--font-mono, monospace);
-    cursor: pointer;
-    transition: all 0.2s;
-    margin-top: auto;
-  }
-  .btn-regen .material-icons {
-    font-size: 0.85rem;
-  }
-  .btn-regen:hover {
-    border-color: rgba(0, 243, 255, 0.3);
-    color: #00f3ff;
-    background: rgba(0, 243, 255, 0.06);
-  }
-
-  /* ═══════════════════════════════ */
-  /* Right: Log / Activity Panel    */
-  /* ═══════════════════════════════ */
-  .log-panel {
-    display: flex;
-    flex-direction: column;
-    border-radius: 14px;
-    background: rgba(8, 10, 15, 0.85);
-    backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    overflow: hidden;
-  }
-
-  .log-panel-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.5rem 0.75rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-    flex-shrink: 0;
-  }
-  .log-toggle {
-    display: flex;
-    gap: 0.25rem;
-    background: rgba(255, 255, 255, 0.03);
-    border-radius: 8px;
-    padding: 2px;
-  }
-  .log-tab {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.4rem 0.75rem;
-    border: none;
-    border-radius: 6px;
-    background: transparent;
-    color: rgba(255, 255, 255, 0.4);
-    font-size: 0.75rem;
-    font-weight: 700;
-    font-family: var(--font-mono, monospace);
-    letter-spacing: 0.06em;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .log-tab .material-icons {
-    font-size: 1rem;
-  }
-  .log-tab.active {
-    background: rgba(0, 243, 255, 0.1);
-    color: #00f3ff;
-    box-shadow: 0 0 8px rgba(0, 243, 255, 0.08);
-  }
-  .log-tab:hover:not(.active) {
-    color: rgba(255, 255, 255, 0.6);
-  }
-
-  .btn-clear-log {
-    width: 28px;
-    height: 28px;
-    border-radius: 6px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: rgba(255, 255, 255, 0.3);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .btn-clear-log .material-icons {
-    font-size: 0.9rem;
-  }
-  .btn-clear-log:hover {
-    color: #ff5252;
-    border-color: rgba(255, 82, 82, 0.3);
-    background: rgba(255, 82, 82, 0.06);
-  }
-
-  /* ── Log Panel Body ── */
-  .log-panel-body {
-    flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 0.5rem;
-    font-family: var(--font-mono, monospace);
-    font-size: 0.65rem;
-    line-height: 1.6;
-  }
-  .log-panel-body::-webkit-scrollbar {
-    width: 4px;
-  }
-  .log-panel-body::-webkit-scrollbar-thumb {
-    background: rgba(0, 243, 255, 0.15);
-    border-radius: 2px;
-  }
-
-  .log-empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    height: 100%;
-    color: rgba(255, 255, 255, 0.2);
-    font-size: 0.7rem;
-  }
-  .log-empty .material-icons {
-    font-size: 1.2rem;
-  }
-
-  .log-line {
-    padding: 0.15rem 0.4rem;
-    border-radius: 3px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .log-line:hover {
-    background: rgba(255, 255, 255, 0.03);
-  }
-  .log-ts {
-    color: rgba(255, 255, 255, 0.25);
-    margin-right: 0.4rem;
-  }
-  .log-lvl {
-    font-weight: 800;
-    margin-right: 0.4rem;
-    min-width: 36px;
-    display: inline-block;
-  }
-  .log-msg {
-    color: rgba(255, 255, 255, 0.7);
-  }
-
-  .log-line.info .log-lvl {
-    color: #00f3ff;
-  }
-  .log-line.warn .log-lvl {
-    color: #ffb400;
-  }
-  .log-line.error .log-lvl {
-    color: #ff5252;
-  }
-  .log-line.debug .log-lvl {
-    color: rgba(255, 255, 255, 0.35);
-  }
-
-  /* ── Activity Feed ── */
-  .activity-feed {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-  .activity-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.5rem;
-    padding: 0.5rem;
-    border-radius: 8px;
-    transition: background 0.2s;
-  }
-  .activity-item:hover {
-    background: rgba(255, 255, 255, 0.03);
-  }
-  .activity-icon {
-    width: 24px;
-    height: 24px;
-    border-radius: 6px;
-    background: rgba(0, 243, 255, 0.08);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-  .activity-icon .material-icons {
-    font-size: 0.85rem;
-    color: #00f3ff;
-  }
-  .activity-content {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-  }
-  .activity-msg {
-    font-size: 0.65rem;
-    color: rgba(255, 255, 255, 0.75);
-    line-height: 1.4;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-  }
-  .activity-time {
-    font-size: 0.55rem;
-    color: rgba(255, 255, 255, 0.25);
-  }
-
-  /* ── Log Panel Footer ── */
-  .log-panel-footer {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.4rem 0.75rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.04);
-    flex-shrink: 0;
-  }
-  .log-status {
-    font-size: 0.55rem;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.3);
-    font-family: var(--font-mono, monospace);
-    letter-spacing: 0.05em;
-  }
-  .dot-pulse {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: #00ffa3;
-    animation: dot-blink 1.5s ease-in-out infinite;
-  }
-  @keyframes dot-blink {
-    0%,
-    100% {
-      opacity: 1;
-    }
-    50% {
-      opacity: 0.3;
-    }
-  }
-
-  /* ── Responsive ── */
-  @media (max-width: 1100px) {
-    .settings-two-col {
-      grid-template-columns: 1fr;
+  @media (max-width:900px) {
+    .settings-viewport {
+      overflow: auto;
       height: auto;
-      overflow-y: auto;
+      min-height: 100%;
     }
-    .log-panel {
-      min-height: 300px;
+    .settings-panel {
+      flex: none;
+      overflow: visible;
     }
-  }
-  @media (max-width: 700px) {
-    .widget-grid {
-      grid-template-columns: 1fr;
+    .integrations-panel :global(.integration-grid) {
       height: auto;
     }
-    .widget-col {
-      min-height: 300px;
+    .sources-panel {
+      overflow: visible;
+    }
+    .sources-layout {
+      height: auto;
+      overflow: visible;
+      grid-template-columns: 1fr;
+    }
+    .sources-rail {
+      display: grid;
+      overflow: visible;
+      grid-template-columns: repeat(2,minmax(0,1fr));
+    }
+    .sources-main {
+      position: static;
+      min-height: 0;
+      overflow: visible;
+      contain: none;
+    }
+    .sources-main :global(.stremio-surface) {
+      position: static;
     }
   }
 
-  /* ============================== */
-  /* Glass Card System              */
-  /* ============================== */
-  .btn-apply-v3 {
-    background: var(--color-primary);
-    color: #000;
-    border: none;
-    border-radius: 14px;
-    height: 52px;
-    padding: 0 2rem;
-    font-weight: 900;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-size: 0.8rem;
-    transition: all 0.3s;
-    box-shadow: 0 4px 15px rgba(0, 243, 255, 0.3);
+  @media (max-width:767px) {
+    .settings-viewport {
+      gap: .65rem;
+      padding: .65rem;
+    }
+    .settings-panel {
+      width: 100%;
+      min-width: 0;
+    }
+    .download-grid {
+      grid-template-columns: 1fr;
+      overflow: visible;
+    }
+    .integrations-panel,
+    .sources-main,
+    .logs-panel {
+      overflow: visible;
+    }
+    .logs-panel :global(.log-panel) {
+      height: auto;
+      min-height: 360px;
+    }
+    .account-list {
+      max-height: none;
+      overflow: visible;
+    }
   }
 
-  .btn-apply-v3:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(0, 243, 255, 0.4);
-    filter: brightness(1.1);
-  }
-
-  .btn-secondary-v3 {
-    background: transparent;
-    color: #fff;
-    border: 1px solid rgba(255, 255, 255, 0.15);
-    border-radius: 14px;
-    height: 52px;
-    padding: 0 2rem;
-    font-weight: 800;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-size: 0.8rem;
-    transition: all 0.3s;
-  }
-
-  .btn-secondary-v3:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: var(--color-primary);
-    color: var(--color-primary);
-    transform: translateY(-2px);
-  }
-
-  .btn-secondary-v3 .material-icons {
-    font-size: 1.2rem;
-  }
-
-  .arr-grid-v3 {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-    gap: 2rem;
-  }
-
-  .services-grid-3col {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 1rem;
-  }
-
-  @media (max-width: 900px) {
-    .services-grid-3col {
+  @media (max-width:560px) {
+    .sources-rail {
+      grid-template-columns: 1fr;
+    }
+    .sources-main {
+      min-height: 0;
+    }
+    .source-entry {
+      grid-template-columns: minmax(0,1fr) auto;
+    }
+    .fshare-actions {
       grid-template-columns: 1fr;
     }
   }
 
-  .service-icon {
-    width: 48px;
-    height: 48px;
-    font-size: 2rem !important;
-    color: var(--color-primary);
-    filter: drop-shadow(0 0 8px rgba(0, 243, 255, 0.3));
-  }
-
-  .input-with-copy {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-
-  .input-with-copy input {
-    flex: 1;
-    background: rgba(0, 0, 0, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 12px;
-    height: 48px;
-    padding: 0 1rem;
-    color: #fff;
-    font-family: var(--font-mono);
-    font-size: 0.85rem;
-    outline: none;
-    transition: all 0.2s;
-  }
-
-  .input-with-copy input:focus {
-    border-color: var(--color-primary);
-    background: rgba(0, 0, 0, 0.6);
-    box-shadow: 0 0 0 3px rgba(0, 243, 255, 0.1);
-  }
-
-  .copy-btn {
-    background: rgba(255, 255, 255, 0.05);
-    border: none;
-    color: var(--text-muted);
-    width: 36px;
-    height: 36px;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: all 0.2s;
-    flex-shrink: 0;
-  }
-
-  .copy-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--color-primary);
-  }
-
-  .copy-btn .material-icons {
-    font-size: 1.1rem;
-  }
-
-  .btn-secondary-full {
-    width: 100%;
-    background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: var(--text-secondary);
-    border-radius: 12px;
-    height: 48px;
-    padding: 0 1.5rem;
-    font-weight: 700;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    font-size: 0.75rem;
-    transition: all 0.3s;
-  }
-
-  .btn-secondary-full:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: var(--color-primary);
-    color: var(--color-primary);
-  }
-
-  .btn-secondary-full .material-icons {
-    font-size: 1.2rem;
-  }
-
-  /* Integration Card - Wizard Style */
-  .integration-card {
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 12px;
-    padding: 1rem;
-    transition: all 0.2s;
-  }
-
-  .integration-card:hover {
-    border-color: rgba(0, 243, 255, 0.2);
-  }
-
-  .integration-card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding-bottom: 0.5rem;
-  }
-
-  .integration-card-body {
-    display: flex;
-    flex-direction: column;
-    gap: 0.6rem;
-    margin-top: 0.5rem;
-    padding-top: 0.5rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.05);
-  }
-
-  .integration-brand {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-  }
-
-  .integration-icon {
-    width: 32px;
-    height: 32px;
-    object-fit: contain;
-    padding: 4px;
-    border-radius: 8px;
-    position: relative;
-    z-index: 1;
-    filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.5))
-      drop-shadow(0 0 8px rgba(0, 243, 255, 0.3));
-  }
-
-  .integration-brand > span {
-    font-weight: 600;
-    font-size: 0.9rem;
-    color: #fff;
-  }
-
-  .arr-node-v3 {
-    background: rgba(10, 12, 18, 0.6);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 24px;
-    padding: 2rem;
-    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-    position: relative;
-    overflow: hidden;
-  }
-
-  .arr-node-v3::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 3px;
-    background: linear-gradient(
-      90deg,
-      transparent,
-      var(--brand-color),
-      transparent
-    );
-    opacity: 0;
-    transition: opacity 0.3s;
-  }
-
-  .arr-node-v3:hover {
-    border-color: rgba(255, 255, 255, 0.15);
-    background: rgba(12, 14, 20, 0.8);
-    transform: translateY(-4px);
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
-  }
-
-  .arr-node-v3:hover::before {
-    opacity: 1;
-  }
-
-  .arr-node-v3.sonarr {
-    --brand-color: #00aaff;
-  }
-
-  .arr-node-v3.radarr {
-    --brand-color: #ffc230;
-  }
-
-  .node-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 2rem;
-    padding-bottom: 1.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  }
-
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-  }
-
-  .brand-logo {
-    width: 48px;
-    height: 48px;
-    object-fit: contain;
-    position: relative;
-    z-index: 1;
-    filter: drop-shadow(0 0 1px rgba(255, 255, 255, 0.5))
-      drop-shadow(0 0 8px rgba(0, 243, 255, 0.3));
-    transition: all 0.3s ease;
-  }
-
-  .arr-node-v3:hover .brand-logo {
-    filter: drop-shadow(0 0 2px rgba(255, 255, 255, 0.7))
-      drop-shadow(0 0 12px rgba(0, 243, 255, 0.5));
-  }
-
-  .brand > span {
-    font-weight: 600;
-    font-size: 1.05rem;
-    color: #fff;
-    letter-spacing: 0.02em;
-  }
-
-  .node-body {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-    margin-bottom: 2rem;
-  }
-
-  .node-field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-
-  .node-field label,
-  .node-field .field-label {
-    font-size: 0.65rem;
-    font-weight: 900;
-    color: var(--text-muted);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-  }
-
-  .node-field input,
-  .pass-box input {
-    width: 100%;
-    background: rgba(0, 0, 0, 0.35);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    border-radius: 10px;
-    height: 40px;
-    padding: 0 0.85rem;
-    color: #fff;
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
-    outline: none;
-    transition: all 0.2s;
-  }
-
-  .node-field input:focus,
-  .pass-box input:focus {
-    border-color: var(--color-primary);
-    background: rgba(0, 0, 0, 0.6);
-    box-shadow: 0 0 0 3px rgba(0, 243, 255, 0.1);
-  }
-
-  .node-field input::placeholder,
-  .pass-box input::placeholder {
-    color: rgba(255, 255, 255, 0.3);
-  }
-
-  .pass-box {
-    position: relative;
-  }
-
-  .pass-box button,
-  .visibility-toggle {
-    position: absolute;
-    right: 0.75rem;
-    top: 50%;
-    transform: translateY(-50%);
-    background: rgba(255, 255, 255, 0.05);
-    border: none;
-    color: var(--text-muted);
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .pass-box button:hover,
-  .visibility-toggle:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--color-primary);
-  }
-
-  .node-toggle {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: rgba(255, 255, 255, 0.03);
-    padding: 0.65rem 1rem;
-    border-radius: 10px;
-    transition: background 0.2s;
-  }
-
-  .node-toggle:hover {
-    background: rgba(255, 255, 255, 0.05);
-  }
-
-  .node-toggle .txt span {
-    font-weight: 700;
-    color: #fff;
-    font-size: 0.85rem;
-    display: block;
-    margin-bottom: 0.25rem;
-  }
-
-  .node-toggle .txt small {
-    font-size: 0.7rem;
-    color: var(--text-muted);
-  }
-
-  .v3-switch-mini {
-    width: 44px;
-    height: 24px;
-    position: relative;
-    display: inline-block;
-    cursor: pointer;
-  }
-
-  .v3-switch-mini input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-  }
-
-  .slider-mini {
-    position: absolute;
-    inset: 0;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 24px;
-    cursor: pointer;
-    transition: all 0.3s;
-  }
-
-  .slider-mini:before {
-    content: "";
-    position: absolute;
-    height: 18px;
-    width: 18px;
-    left: 3px;
-    bottom: 3px;
-    background: #fff;
-    border-radius: 50%;
-    transition: all 0.3s;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-  }
-
-  .v3-switch-mini input:checked + .slider-mini {
-    background: var(--color-primary);
-  }
-
-  .v3-switch-mini input:checked + .slider-mini:before {
-    transform: translateX(20px);
-    background: #000;
-  }
-
-  .node-actions {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.75rem;
-  }
-
-  .node-actions.single-action {
-    grid-template-columns: 1fr;
-  }
-
-  .readonly-input {
-    background: rgba(0, 0, 0, 0.4) !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    cursor: default !important;
-    color: rgba(255, 255, 255, 0.7) !important;
-  }
-
-  .full-width {
-    width: 100%;
-  }
-
-  /* Premium Range V3 */
-  .range-v3-wrapper {
-    position: relative;
-    padding: 1.5rem 0 0.5rem 0;
-    margin-top: 1rem;
-    --thumb-size: 48px;
-  }
-
-  /* Value display overlay */
-  .range-v3-wrapper::after {
-    content: var(--current-val);
-    position: absolute;
-    top: 2.22rem;
-    left: calc(var(--slider-val) * (100% - 48px) / 100% + 24px);
-    transform: translate(-50%, -50%);
-    color: #000;
-    font-weight: 900;
-    font-size: 0.9rem;
-    font-family: var(--font-mono);
-    pointer-events: none;
-    z-index: 10;
-    transition: left 0.15s ease-out;
-  }
-
-  .v3-track-dots {
-    position: absolute;
-    top: 2.22rem;
-    left: 0;
-    right: 0;
-    height: 6px;
-    display: flex;
-    justify-content: space-between;
-    padding: 0 calc(var(--thumb-size) / 2);
-    pointer-events: none;
-  }
-
-  .v3-track-dots .dot {
-    width: 4px;
-    height: 4px;
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 50%;
-    margin-top: 1px;
-    transition: all 0.3s;
-  }
-
-  .v3-track-dots .dot.active {
-    background: #000;
-    box-shadow: 0 0 5px var(--color-primary);
-    z-index: 3;
-    background: var(--color-primary);
-  }
-
-  input[type="range"] {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 100%;
-    background: transparent;
-    position: relative;
-    z-index: 5;
-    margin: 0;
-  }
-
-  input[type="range"]:focus {
-    outline: none;
-  }
-
-  /* Track */
-  input[type="range"]::-webkit-slider-runnable-track {
-    width: 100%;
-    height: 6px;
-    background: linear-gradient(
-      to right,
-      var(--color-primary) 0%,
-      var(--color-primary) var(--slider-val),
-      rgba(255, 255, 255, 0.1) var(--slider-val),
-      rgba(255, 255, 255, 0.1) 100%
-    );
-    border-radius: 3px;
-    transition: all 0.1s;
-  }
-
-  /* Thumb */
-  input[type="range"]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    height: var(--thumb-size);
-    width: var(--thumb-size);
-    border-radius: 50%;
-    background: var(--color-primary);
-    cursor: pointer;
-    margin-top: calc(-1 * var(--thumb-size) / 2 + 3px);
-    box-shadow: 0 0 20px rgba(0, 243, 255, 0.6);
-    transition: transform 0.2s;
-    border: 4px solid rgba(0, 0, 0, 0.3);
-  }
-
-  input[type="range"]:active::-webkit-slider-thumb {
-    transform: scale(1.1);
-  }
-
-  .marks-premium {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 1.25rem;
-    font-family: var(--font-mono);
-    font-size: 0.65rem;
-    color: var(--text-muted);
-    padding: 0 5px;
-  }
-
-  .marks-premium span {
-    position: relative;
-    width: 20px;
-    text-align: center;
-  }
-
-  /* Correct alignment for '5' which is at 4/9 position */
-  .marks-premium span:nth-child(2) {
-    position: absolute;
-    left: 44.44%;
-    transform: translateX(-50%);
-  }
-
-  .btn-test,
-  .btn-save {
-    height: 40px;
-    border-radius: 10px;
-    font-weight: 800;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    transition: all 0.2s;
-    font-size: 0.75rem;
-    letter-spacing: 0.05em;
-  }
-
-  .btn-save {
-    background: var(--color-primary);
-    border: none;
-    color: #000;
-  }
-
-  .btn-save:hover {
-    filter: brightness(1.1);
-    transform: translateY(-2px);
-  }
-
-  .btn-test {
-    background: transparent;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #fff;
-  }
-
-  .btn-test:hover {
-    background: rgba(255, 255, 255, 0.05);
-  }
-
-  .system-v3-layout {
-    display: grid;
-    grid-template-columns: 1fr 320px;
-    gap: 2rem;
-    height: 600px;
-  }
-
-  .terminal-pane-v3 {
-    background: #05070a;
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    border-radius: 20px;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .pane-header {
-    background: rgba(255, 255, 255, 0.02);
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    display: flex;
-    justify-content: space-between;
-  }
-
-  .pane-body {
-    flex: 1;
-    overflow-y: auto;
-    padding: 1.5rem;
-    font-family: monospace;
-    font-size: 0.75rem;
-  }
-
-  .log-line-v3 {
-    display: flex;
-    gap: 0.75rem;
-    margin-bottom: 0.25rem;
-  }
-  .log-ts {
-    color: var(--text-muted);
-  }
-  .log-lvl {
-    font-weight: bold;
-  }
-  .log-line-v3.info .log-lvl {
-    color: #00aaff;
-  }
-  .log-line-v3.error .log-lvl {
-    color: #ff5252;
-  }
-
-  .hybrid-switch {
-    width: 54px;
-    height: 28px;
-    position: relative;
-    cursor: pointer;
-  }
-  .hybrid-switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-  }
-  .switch-ui {
-    position: absolute;
-    inset: 0;
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 30px;
-  }
-  .switch-ui:before {
-    content: "";
-    position: absolute;
-    height: 22px;
-    width: 22px;
-    left: 3px;
-    bottom: 3px;
-    background: #fff;
-    border-radius: 50%;
-    transition: 0.4s;
-  }
-  input:checked + .switch-ui {
-    background: var(--color-primary);
-  }
-  input:checked + .switch-ui:before {
-    transform: translateX(26px);
-    background: #000;
-  }
-
-  .rotating {
-    animation: rot 1s linear infinite;
-  }
-  @keyframes rot {
-    from {
-      transform: rotate(0deg);
-    }
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  .dot-pulse {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--color-primary);
-    animation: dPulse 2s infinite;
-  }
-  @keyframes dPulse {
-    0% {
-      box-shadow: 0 0 0 0 rgba(0, 243, 255, 0.4);
-    }
-    70% {
-      box-shadow: 0 0 0 10px rgba(0, 243, 255, 0);
-    }
-    100% {
-      box-shadow: 0 0 0 0 rgba(0, 243, 255, 0);
-    }
-  }
-
-  @media (max-width: 1024px) {
-    .system-v3-layout {
-      grid-template-columns: 1fr;
-    }
-    .arr-grid-v3 {
-      grid-template-columns: 1fr;
-    }
-  }
 </style>

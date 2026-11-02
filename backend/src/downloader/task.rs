@@ -2,15 +2,15 @@
 //!
 //! Represents a single download task with state management.
 
-use serde::{Serialize, Deserialize};
-use uuid::Uuid;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
+use super::error_classifier::{ErrorCategory, ErrorClassifier};
 use super::state_machine::{TaskState, TaskStateFactory};
-use super::error_classifier::{ErrorClassifier, ErrorCategory};
 
 /// Download task state
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -36,6 +36,8 @@ pub enum DownloadState {
     Extracting,
     /// Skipped by user or logic
     Skipped,
+    /// File moved to arr library path; polling arr history for import confirmation
+    Importing,
 }
 
 impl Default for DownloadState {
@@ -48,46 +50,70 @@ impl Default for DownloadState {
 impl DownloadState {
     /// Check if pause action is available
     pub fn can_pause(&self) -> bool {
-        matches!(self, Self::Queued | Self::Starting | Self::Downloading | Self::Waiting)
+        matches!(
+            self,
+            Self::Queued | Self::Starting | Self::Downloading | Self::Waiting
+        )
     }
-    
+
     /// Check if resume action is available
     pub fn can_resume(&self) -> bool {
         matches!(self, Self::Paused | Self::Waiting | Self::Skipped)
     }
-    
+
     /// Check if cancel action is available
     pub fn can_cancel(&self) -> bool {
-        matches!(self, 
-            Self::Queued | Self::Starting | Self::Downloading | 
-            Self::Waiting | Self::Paused | Self::Extracting
+        matches!(
+            self,
+            Self::Queued
+                | Self::Starting
+                | Self::Downloading
+                | Self::Waiting
+                | Self::Paused
+                | Self::Extracting
+                | Self::Importing
         )
     }
-    
+
     /// Check if retry action is available
     pub fn can_retry(&self) -> bool {
-        matches!(self, 
-            Self::Waiting | Self::Completed | Self::Failed | 
-            Self::Cancelled | Self::Skipped
+        matches!(
+            self,
+            Self::Waiting | Self::Completed | Self::Failed | Self::Cancelled | Self::Skipped
         )
     }
-    
+
     /// Check if delete action is available
     pub fn can_delete(&self) -> bool {
-        matches!(self, 
-            Self::Queued | Self::Paused | Self::Completed | 
-            Self::Failed | Self::Cancelled | Self::Skipped
+        matches!(
+            self,
+            Self::Queued
+                | Self::Paused
+                | Self::Completed
+                | Self::Failed
+                | Self::Cancelled
+                | Self::Skipped
         )
     }
-    
+
     /// Get list of available actions
     pub fn available_actions(&self) -> Vec<&'static str> {
         let mut actions = Vec::new();
-        if self.can_pause() { actions.push("pause"); }
-        if self.can_resume() { actions.push("resume"); }
-        if self.can_cancel() { actions.push("cancel"); }
-        if self.can_retry() { actions.push("retry"); }
-        if self.can_delete() { actions.push("delete"); }
+        if self.can_pause() {
+            actions.push("pause");
+        }
+        if self.can_resume() {
+            actions.push("resume");
+        }
+        if self.can_cancel() {
+            actions.push("cancel");
+        }
+        if self.can_retry() {
+            actions.push("retry");
+        }
+        if self.can_delete() {
+            actions.push("delete");
+        }
         actions
     }
 }
@@ -108,111 +134,168 @@ pub enum MediaType {
 pub struct DownloadTask {
     /// Unique task ID
     pub id: Uuid,
-    
-    /// Download URL (may be direct or needs resolution)
+
+    /// Download URL (may be direct or needs resolution). Never expose publicly.
+    #[serde(default, skip_serializing)]
     pub url: String,
-    
-    /// Original URL (e.g., Fshare page URL)
+
+    /// Original URL (e.g., Fshare page URL). May contain signed credentials.
+    #[serde(default, skip_serializing)]
     pub original_url: String,
-    
+
     /// Target filename
     pub filename: String,
-    
-    /// Destination path
+
+    /// Destination path. Internal filesystem detail.
+    #[serde(skip_serializing)]
     pub destination: String,
-    
+
     /// Current state
     pub state: DownloadState,
-    
+
     /// Progress percentage (0.0 to 100.0)
     pub progress: f32,
-    
+
     /// Total file size in bytes
     pub size: u64,
-    
+
     /// Bytes downloaded so far
     #[serde(default)]
     pub downloaded: u64,
-    
+
     /// Current download speed in bytes/sec
     #[serde(default)]
     pub speed: f64,
-    
+
     /// Estimated time remaining in seconds
     #[serde(default)]
     pub eta: f64,
-    
+
     /// Host identifier (e.g., "fshare", "gdrive")
     pub host: String,
-    
+
     /// Category (e.g., "tv", "movies", "other")
     pub category: String,
-    
+
     /// Priority (0 = normal, higher = more priority)
     pub priority: i32,
-    
+
     /// Number of segments for this download
     pub segments: u32,
-    
+
     /// Retry count
     pub retry_count: u32,
-    
+
     /// Time when task was created
     pub created_at: DateTime<Utc>,
-    
+
     /// Time when download started
     pub started_at: Option<DateTime<Utc>>,
-    
+
     /// Time when download completed/failed
     pub completed_at: Option<DateTime<Utc>>,
-    
+
     /// Wait until this time before retrying
     pub wait_until: Option<DateTime<Utc>>,
-    
+
     /// Error message if failed
     pub error_message: Option<String>,
-    
+
     /// URL metadata for expiration tracking
     pub url_metadata: Option<UrlMetadata>,
-    
+
     /// Error history for debugging
     #[serde(default)]
     pub error_history: Vec<ErrorRecord>,
-    
-    /// Fshare file code for duplicate detection (e.g., "8DW6WQOV5R551DL")
+
+    /// Legacy wire compatibility. Runtime identity uses provider_id/provider_item_id.
+    #[serde(default)]
     pub fshare_code: Option<String>,
-    
+
+    /// Canonical provider identity used for cross-provider-safe duplicate detection.
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub provider_item_id: Option<String>,
+
+    /// Source/provider metadata for externally-managed downloads (e.g. torrents).
+    pub download_source: Option<String>,
+    pub external_provider: Option<String>,
+    pub external_id: Option<String>,
+    pub external_instance_id: Option<String>,
+    pub info_hash: Option<String>,
+    #[serde(default)]
+    pub file_idx: Option<usize>,
+    #[serde(default)]
+    pub source_filename: Option<String>,
+    #[serde(default)]
+    pub selected_episodes: Option<String>,
+    #[serde(default)]
+    pub execution_strategy: Option<String>,
+    #[serde(default)]
+    pub torbox_remote_state: Option<String>,
+    #[serde(default)]
+    pub torbox_remote_completed_at: Option<String>,
+    #[serde(default)]
+    pub selected_remote_file_ids: Option<String>,
+    #[serde(default)]
+    pub selected_artifacts: Option<String>,
+    pub origin_provider: Option<String>,
+    pub origin_indexer: Option<String>,
+    pub seeders: Option<i64>,
+    pub leechers: Option<i64>,
+
+    /// Additive qB mirror semantics; derived at response time, never persisted.
+    #[serde(default)]
+    pub task_state: Option<String>,
+    #[serde(default)]
+    pub qbit_state: Option<String>,
+    #[serde(default)]
+    pub sync_health: Option<String>,
+    #[serde(default)]
+    pub last_sync_at: Option<String>,
+    #[serde(default)]
+    pub transfer_state: Option<String>,
+    #[serde(default)]
+    pub transfer_active: bool,
+
     /// Batch ID for grouping related downloads (e.g., TV season episodes)
     /// Downloads with the same batch_id are displayed as a collapsible group
     pub batch_id: Option<String>,
-    
+
     /// Batch display name (e.g., "Breaking Bad S01")
     pub batch_name: Option<String>,
-    
-    /// TMDB metadata for Sonarr/Radarr matching
-    pub tmdb_id: Option<i64>,          // TMDB ID for series/movie
-    pub tmdb_title: Option<String>,    // Series/Movie title
-    pub tmdb_season: Option<u32>,      // Season number (TV only)
-    pub tmdb_episode: Option<u32>,     // Episode number (TV only)
-    
+
+    /// Metadata IDs for Sonarr/Radarr matching.
+    /// TV: tvdb_id is canonical; tmdb_id is bridge/backcompat only.
+    /// Movie: tmdb_id is canonical.
+    pub tvdb_id: Option<i64>, // TVDB ID for TV series/episodes
+    pub tmdb_id: Option<i64>,       // TMDB ID for movies; bridge ID for TV
+    pub media_type: Option<String>, // "tv" or "movie"
+    pub media_item_id: Option<i64>,
+    pub tmdb_title: Option<String>, // Series/Movie title
+    pub tmdb_season: Option<u32>,   // Season number (TV only)
+    pub tmdb_episode: Option<u32>,  // Episode number (TV only)
+    pub info_path: Option<String>,
+
     /// Quality metadata (parsed from filename at creation time)
-    pub quality: Option<String>,       // e.g. "1080p WEB-DL"
-    pub resolution: Option<String>,    // e.g. "1080p", "2160p", "720p"
-    
+    pub quality: Option<String>, // e.g. "1080p WEB-DL"
+    pub resolution: Option<String>, // e.g. "1080p", "2160p", "720p"
+
     /// Arr integration IDs (populated by webhook when series/movie is added)
-    pub arr_series_id: Option<i64>,    // Sonarr series ID
-    pub arr_movie_id: Option<i64>,     // Radarr movie ID
-    pub arr_announced: bool,           // Whether Arr has been notified of completion
+    pub arr_series_id: Option<i64>, // Sonarr series ID
+    pub arr_movie_id: Option<i64>,          // Radarr movie ID
+    pub arr_announced: bool,                // Whether Arr has been notified of completion
     pub arr_announce_error: Option<String>, // Error message if Arr announcement failed
-    
+
     /// State machine object (not serialized)
     #[serde(skip, default = "default_state_obj")]
     pub state_obj: Arc<dyn TaskState>,
-    
+
     /// Cancellation token (not serialized)
     #[serde(skip)]
     pub cancel_token: CancellationToken,
-    
+
     /// Pause notification (not serialized)
     #[serde(skip)]
     pub pause_notify: Arc<Notify>,
@@ -232,7 +315,7 @@ pub struct ErrorRecord {
 pub struct UrlMetadata {
     /// When the URL was resolved
     pub resolved_at: DateTime<Utc>,
-    
+
     /// When the URL expires
     pub expires_at: DateTime<Utc>,
 }
@@ -243,6 +326,17 @@ fn default_state_obj() -> Arc<dyn TaskState> {
 }
 
 impl DownloadTask {
+    pub fn canonical_media_leaf_key(&self) -> Option<String> {
+        match self.media_type.as_deref() {
+            Some("movie") => self.tmdb_id.map(|id| format!("movie:{id}")),
+            Some("tv") => Some(format!(
+                "episode:{}:{}:{}",
+                self.tvdb_id?, self.tmdb_season?, self.tmdb_episode?
+            )),
+            _ => None,
+        }
+    }
+
     /// Create a new download task
     pub fn new(url: String, filename: String, host: String, category: String) -> Self {
         let state = DownloadState::Queued;
@@ -271,12 +365,41 @@ impl DownloadTask {
             url_metadata: None,
             error_history: Vec::new(),
             fshare_code: None,
+            provider_id: None,
+            provider_item_id: None,
+            download_source: None,
+            external_provider: None,
+            external_id: None,
+            external_instance_id: None,
+            info_hash: None,
+            file_idx: None,
+            source_filename: None,
+            selected_episodes: None,
+            execution_strategy: None,
+            torbox_remote_state: None,
+            torbox_remote_completed_at: None,
+            selected_remote_file_ids: None,
+            selected_artifacts: None,
+            origin_provider: None,
+            origin_indexer: None,
+            seeders: None,
+            leechers: None,
+            task_state: None,
+            qbit_state: None,
+            sync_health: None,
+            last_sync_at: None,
+            transfer_state: None,
+            transfer_active: false,
             batch_id: None,
             batch_name: None,
+            tvdb_id: None,
             tmdb_id: None,
+            media_type: None,
+            media_item_id: None,
             tmdb_title: None,
             tmdb_season: None,
             tmdb_episode: None,
+            info_path: None,
             quality: None,
             resolution: None,
             arr_series_id: None,
@@ -288,7 +411,7 @@ impl DownloadTask {
             pause_notify: Arc::new(Notify::new()),
         }
     }
-    
+
     /// Transition to new state with validation
     pub fn transition_to(&mut self, new_state: DownloadState) -> Result<(), String> {
         if !self.state_obj.can_transition_to(new_state) {
@@ -297,17 +420,17 @@ impl DownloadTask {
                 self.state, new_state
             ));
         }
-        
+
         self.state = new_state;
         self.state_obj = TaskStateFactory::get_state(new_state);
-        
+
         Ok(())
     }
-    
+
     /// Handle error and return recovery action
     pub fn on_error(&mut self, error: &anyhow::Error) -> ErrorCategory {
         let category = ErrorClassifier::classify(error);
-        
+
         // Log error to history
         self.error_history.push(ErrorRecord {
             timestamp: Utc::now(),
@@ -315,22 +438,22 @@ impl DownloadTask {
             error_category: format!("{:?}", category),
             retry_attempt: self.retry_count,
         });
-        
+
         category
     }
-    
+
     /// Check if task is cancelled
     pub fn is_cancelled(&self) -> bool {
         self.cancel_token.is_cancelled()
     }
-    
+
     /// Cancel the task
     pub fn cancel(&self) {
         self.cancel_token.cancel();
     }
-    
+
     /// Detect media type for Arr integration routing
-    /// 
+    ///
     /// Logic:
     /// - Has tmdb_season + tmdb_episode → TvEpisode (single episode)
     /// - Has batch_id → TvSeries (batch of episodes)
@@ -341,27 +464,27 @@ impl DownloadTask {
         if self.tmdb_season.is_some() && self.tmdb_episode.is_some() {
             return MediaType::TvEpisode;
         }
-        
+
         // Batch download (multiple episodes)
         if self.batch_id.is_some() {
             return MediaType::TvSeries;
         }
-        
+
         // Category-based detection
         let category_lower = self.category.to_lowercase();
         if category_lower.contains("movie") || category_lower.contains("radarr") {
             return MediaType::Movie;
         }
-        
+
         if category_lower.contains("tv") || category_lower.contains("sonarr") {
             // Default to single episode for TV category
             return MediaType::TvEpisode;
         }
-        
+
         // Default fallback: Movie
         MediaType::Movie
     }
-    
+
     /// Get available actions for current state
     pub fn get_available_actions(&self) -> Vec<&'static str> {
         self.state_obj.available_actions()
@@ -376,5 +499,65 @@ impl Default for DownloadTask {
             String::from("unknown"),
             String::from("other"),
         )
+    }
+}
+
+#[cfg(test)]
+mod migration_tests {
+    use super::DownloadTask;
+
+    #[test]
+    fn fshare_code_preserves_legacy_wire_without_runtime_secrets() {
+        let mut task = DownloadTask::default();
+        task.fshare_code = Some("LEGACY".into());
+        let mut value = serde_json::to_value(&task).expect("serialize task");
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("destination".into(), "/tmp/legacy".into());
+        assert_eq!(value["fshare_code"], "LEGACY");
+        for secret in ["password", "token", "access_token", "cancel_token"] {
+            assert!(
+                value.get(secret).is_none(),
+                "serialized secret field {secret}"
+            );
+        }
+        let task: DownloadTask = serde_json::from_value(value).expect("deserialize legacy task");
+        assert_eq!(task.fshare_code.as_deref(), Some("LEGACY"));
+    }
+
+    #[test]
+    fn task_wire_has_additive_torrent_semantics_defaults() {
+        let value = serde_json::to_value(DownloadTask::default()).unwrap();
+        assert!(value["task_state"].is_null());
+        assert!(value["qbit_state"].is_null());
+        assert!(value["sync_health"].is_null());
+        assert!(value["last_sync_at"].is_null());
+        assert!(value["transfer_state"].is_null());
+        assert_eq!(value["transfer_active"], false);
+    }
+
+    #[test]
+    fn legacy_task_without_url_deserializes_to_explicit_safe_default() {
+        let mut value = serde_json::to_value(DownloadTask::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("url");
+        object.insert("original_url".into(), "legacy-ref".into());
+        object.insert("destination".into(), "/tmp/legacy".into());
+        let task: DownloadTask = serde_json::from_value(value).expect("legacy task without url");
+        assert_eq!(task.url, "");
+    }
+
+    #[test]
+    fn legacy_task_without_original_url_deserializes_to_explicit_safe_default() {
+        let mut value = serde_json::to_value(DownloadTask::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.insert("url".into(), "opaque-provider-id".into());
+        object.remove("original_url");
+        object.insert("destination".into(), "/tmp/legacy".into());
+        let task: DownloadTask =
+            serde_json::from_value(value).expect("legacy task without original_url");
+        assert_eq!(task.original_url, "");
+        assert_eq!(task.url, "opaque-provider-id");
     }
 }

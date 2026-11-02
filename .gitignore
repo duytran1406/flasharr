@@ -41,11 +41,19 @@ test-data/
 
 # Agent and local documentation
 .agent/
+.claude-flow/
+.claude/
+.loki/
+.mcp.json
+.rtk/
+.swarm/
 docs/_internal/
 PUBLISHED.md
 PUBLISHING_SETUP.md
 VERSIONING_SETUP.md
 READY_TO_PUBLISH.md
+docs/e2e-archive/**
+
 
 # Sensitive config — copy config.example.toml → config.toml and fill in your own values
 backend/config.toml

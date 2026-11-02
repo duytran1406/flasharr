@@ -1,13 +1,13 @@
-use serde::{Deserialize, Serialize};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Resolution {
-    SD = 1,      // 480p, 576p
-    HD = 2,      // 720p
-    FHD = 3,     // 1080p
-    UHD = 4,     // 2160p, 4K
+    SD = 1,  // 480p, 576p
+    HD = 2,  // 720p
+    FHD = 3, // 1080p
+    UHD = 4, // 2160p, 4K
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -22,8 +22,6 @@ pub enum Source {
     BluRay = 8,
     Remux = 9,
 }
-
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QualityAttributes {
@@ -136,26 +134,41 @@ impl QualityAttributes {
 
     pub fn custom_format_score(&self) -> i32 {
         let mut score = 0;
-        if self.dolby_vision { score += 50; }
-        else if self.hdr { score += 30; }
+        if self.dolby_vision {
+            score += 50;
+        } else if self.hdr {
+            score += 30;
+        }
 
-        if self.viet_dub { score += 100; }
-        else if self.viet_sub { score += 10; }
+        if self.viet_dub {
+            score += 100;
+        } else if self.viet_sub {
+            score += 10;
+        }
 
-        if self.video_codec.as_deref() == Some("x265") || self.video_codec.as_deref() == Some("hevc") {
+        if self.video_codec.as_deref() == Some("x265")
+            || self.video_codec.as_deref() == Some("hevc")
+        {
             score += 10;
         }
 
         // Simplified audio scoring based on strings
         if let Some(ac) = &self.audio_codec {
             let ac_lower = ac.to_lowercase();
-            if ac_lower.contains("atmos") { score += 15; }
-            else if ac_lower.contains("truehd") { score += 12; }
-            else if ac_lower.contains("dts-hd") || ac_lower.contains("dtshd") { score += 10; }
-            else if ac_lower.contains("dd+") || ac_lower.contains("eac3") { score += 5; }
+            if ac_lower.contains("atmos") {
+                score += 15;
+            } else if ac_lower.contains("truehd") {
+                score += 12;
+            } else if ac_lower.contains("dts-hd") || ac_lower.contains("dtshd") {
+                score += 10;
+            } else if ac_lower.contains("dd+") || ac_lower.contains("eac3") {
+                score += 5;
+            }
         }
 
-        if self.bit_depth >= 10 { score += 5; }
+        if self.bit_depth >= 10 {
+            score += 5;
+        }
 
         score
     }
@@ -167,24 +180,48 @@ impl QualityAttributes {
     pub fn normalized_score(&self) -> f32 {
         let q_score = self.quality_score();
         let quality = (q_score as f32 / 180.0 * 40.0).min(40.0);
-        let lang = if self.viet_dub { 25.0 } else if self.viet_sub { 15.0 } else { 10.0 };
-        let hdr = if self.dolby_vision { 15.0 } else if self.hdr { 10.0 } else { 0.0 };
-        
+        let lang = if self.viet_dub {
+            25.0
+        } else if self.viet_sub {
+            15.0
+        } else {
+            10.0
+        };
+        let hdr = if self.dolby_vision {
+            15.0
+        } else if self.hdr {
+            10.0
+        } else {
+            0.0
+        };
+
         let mut audio = 2.0;
         if let Some(ac) = &self.audio_codec {
             let ac_lower = ac.to_lowercase();
-            audio = if ac_lower.contains("atmos") { 10.0 }
-            else if ac_lower.contains("truehd") { 9.0 }
-            else if ac_lower.contains("dts-hd") || ac_lower.contains("dtshd") { 8.0 }
-            else if ac_lower.contains("dts") { 6.0 }
-            else if ac_lower.contains("dd+") || ac_lower.contains("eac3") { 5.0 }
-            else if ac_lower.contains("ac3") { 4.0 }
-            else if ac_lower.contains("aac") { 3.0 }
-            else if ac_lower.contains("mp3") { 1.0 }
-            else { 2.0 };
+            audio = if ac_lower.contains("atmos") {
+                10.0
+            } else if ac_lower.contains("truehd") {
+                9.0
+            } else if ac_lower.contains("dts-hd") || ac_lower.contains("dtshd") {
+                8.0
+            } else if ac_lower.contains("dts") {
+                6.0
+            } else if ac_lower.contains("dd+") || ac_lower.contains("eac3") {
+                5.0
+            } else if ac_lower.contains("ac3") {
+                4.0
+            } else if ac_lower.contains("aac") {
+                3.0
+            } else if ac_lower.contains("mp3") {
+                1.0
+            } else {
+                2.0
+            };
         }
-        
-        let codec = if self.video_codec.as_deref() == Some("x265") || self.video_codec.as_deref() == Some("hevc") {
+
+        let codec = if self.video_codec.as_deref() == Some("x265")
+            || self.video_codec.as_deref() == Some("hevc")
+        {
             10.0
         } else {
             5.0
@@ -217,15 +254,15 @@ impl FilenameParser {
     fn se_patterns() -> &'static Vec<Regex> {
         SE_PATTERNS.get_or_init(|| {
             vec![
-                Regex::new(r"(?i)S(\d{1,4})E(\d{1,3})").unwrap(),           // S01E14
-                Regex::new(r"(?i)S(\d{1,4})\s*EP?(\d{1,3})").unwrap(),      // S01 E14, S01 EP14
-                Regex::new(r"(?i)\bE(\d{1,3})\b").unwrap(),                 // E14 (standalone)
-                Regex::new(r"(?i)\bEP(\d{1,3})\b").unwrap(),                // EP14 (standalone)
-                Regex::new(r"(?i)\bChapter\s*(\d{1,4})\b").unwrap(),        // Chapter 14
-                Regex::new(r"(?i)\s-\s(\d{1,4})(?:\D|$)").unwrap(),         // - 01 (Anime)
-                Regex::new(r"(?i)\bTap\s*(\d{1,3})\b").unwrap(),            // Tap 01 (Vietnamese)
-                Regex::new(r"^(\d{1,3})[._\s]").unwrap(),                   // 01_Title (Leading digit)
-                Regex::new(r"[\s._-](\d{1,3})$").unwrap(),                  // Title 01 (Trailing digit before ext)
+                Regex::new(r"(?i)S(\d{1,4})E(\d{1,3})").unwrap(), // S01E14
+                Regex::new(r"(?i)S(\d{1,4})\s*EP?(\d{1,3})").unwrap(), // S01 E14, S01 EP14
+                Regex::new(r"(?i)\bE(\d{1,3})\b").unwrap(),       // E14 (standalone)
+                Regex::new(r"(?i)\bEP(\d{1,3})\b").unwrap(),      // EP14 (standalone)
+                Regex::new(r"(?i)\bChapter\s*(\d{1,4})\b").unwrap(), // Chapter 14
+                Regex::new(r"(?i)\s-\s(\d{1,4})(?:\D|$)").unwrap(), // - 01 (Anime)
+                Regex::new(r"(?i)\bTap\s*(\d{1,3})\b").unwrap(),  // Tap 01 (Vietnamese)
+                Regex::new(r"^(\d{1,3})[._\s]").unwrap(),         // 01_Title (Leading digit)
+                Regex::new(r"[\s._-](\d{1,3})$").unwrap(), // Title 01 (Trailing digit before ext)
             ]
         })
     }
@@ -238,20 +275,115 @@ impl FilenameParser {
         QUALITY_PATTERN.get_or_init(|| {
             let keywords = vec![
                 // Resolutions
-                "2160p", "4k", "uhd", "8k", "4320p", "1080p", "1080i", "720p", "576p", "480p", "360p",
+                "2160p",
+                "4k",
+                "uhd",
+                "8k",
+                "4320p",
+                "1080p",
+                "1080i",
+                "720p",
+                "576p",
+                "480p",
+                "360p",
                 // Sources
-                "bluray", "blu-ray", "bdrip", "brrip", "bd25", "bd50", "web-dl", "webdl", "web-rip", "webrip",
-                "hdtv", "pdtv", "tvrip", "dvdrip", "dvd", "dvd5", "dvd9", "remux", "cam", "ts", "tc",
+                "bluray",
+                "blu-ray",
+                "bdrip",
+                "brrip",
+                "bd25",
+                "bd50",
+                "web-dl",
+                "webdl",
+                "web-rip",
+                "webrip",
+                "hdtv",
+                "pdtv",
+                "tvrip",
+                "dvdrip",
+                "dvd",
+                "dvd5",
+                "dvd9",
+                "remux",
+                "cam",
+                "ts",
+                "tc",
                 // Codecs
-                "x265", "x264", "hevc", "avc", "h.265", "h.264", "h265", "h264", "mpeg2", "xvid", "divx", "vp9", "av1",
+                "x265",
+                "x264",
+                "hevc",
+                "avc",
+                "h.265",
+                "h.264",
+                "h265",
+                "h264",
+                "mpeg2",
+                "xvid",
+                "divx",
+                "vp9",
+                "av1",
                 // Audio
-                "aac", "ac3", "dts", "dts-hd", "dtshd", "dts-x", "truehd", "atmos", "d[\\s.]*d[p\\s.]*[0-9]\\.[0-9]", "d[\\s.]*d[p\\s.]*[0-9][0-9]", "ddp", "dd\\+", "eac3", "flac", "mp3", "5\\.1", "7\\.1", "2\\.0", "2\\.1",
+                "aac",
+                "ac3",
+                "dts",
+                "dts-hd",
+                "dtshd",
+                "dts-x",
+                "truehd",
+                "atmos",
+                "d[\\s.]*d[p\\s.]*[0-9]\\.[0-9]",
+                "d[\\s.]*d[p\\s.]*[0-9][0-9]",
+                "ddp",
+                "dd\\+",
+                "eac3",
+                "flac",
+                "mp3",
+                "5\\.1",
+                "7\\.1",
+                "2\\.0",
+                "2\\.1",
                 // HDR/Bit Depth
-                "hdr", "hdr10", "hdr10+", "dv", "dolby vision", "sdr", "10bit", "10-bit", "12bit",
+                "hdr",
+                "hdr10",
+                "hdr10+",
+                "dv",
+                "dolby vision",
+                "sdr",
+                "10bit",
+                "10-bit",
+                "12bit",
                 // Language/Dub Tags
-                "vie", "eng", "vietsub", "thuyet minh", "long tieng", "phim long tieng", "phim thuyet minh", "tmph", "tvp", "tmpd", "sub viet", "phu de", "dub", "non-dub", "vietdub",
+                "vie",
+                "eng",
+                "vietsub",
+                "thuyet minh",
+                "long tieng",
+                "phim long tieng",
+                "phim thuyet minh",
+                "tmph",
+                "tvp",
+                "tmpd",
+                "sub viet",
+                "phu de",
+                "dub",
+                "non-dub",
+                "vietdub",
                 // Group/Release Tags
-                "jadvie", "proper", "repack", "real", "rerip", "hybrid", "dual-audio", "dual", "audio", "multi", "internal", "amzn", "nf", "hulu", "dsnp"
+                "jadvie",
+                "proper",
+                "repack",
+                "real",
+                "rerip",
+                "hybrid",
+                "dual-audio",
+                "dual",
+                "audio",
+                "multi",
+                "internal",
+                "amzn",
+                "nf",
+                "hulu",
+                "dsnp",
             ];
             let pattern = format!(r"(?i)\b({})\b", keywords.join("|"));
             Regex::new(&pattern).unwrap()
@@ -261,8 +393,12 @@ impl FilenameParser {
     #[allow(dead_code)]
     pub fn parse(filename: &str) -> ParsedFilename {
         static EXT_RE: OnceLock<Regex> = OnceLock::new();
-        let name = EXT_RE.get_or_init(|| Regex::new(r"(?i)\.(mkv|mp4|avi|ts|m4v|mov|wmv|flv|webm|m2ts)$").unwrap())
-            .replace(filename, "").to_string();
+        let name = EXT_RE
+            .get_or_init(|| {
+                Regex::new(r"(?i)\.(mkv|mp4|avi|ts|m4v|mov|wmv|flv|webm|m2ts)$").unwrap()
+            })
+            .replace(filename, "")
+            .to_string();
 
         let mut season = None;
         let mut episode = None;
@@ -277,7 +413,7 @@ impl FilenameParser {
                 if let Some(m) = caps.get(0) {
                     pivot_start = m.start();
                     pivot_end = m.end();
-                    
+
                     if caps.len() == 3 {
                         season = caps.get(1).and_then(|m| m.as_str().parse().ok());
                         episode = caps.get(2).and_then(|m| m.as_str().parse().ok());
@@ -295,7 +431,7 @@ impl FilenameParser {
         // 2. Identify Year
         let year_match = Self::year_pattern().find(&name);
         let year = year_match.and_then(|m| m.as_str().parse().ok());
-        
+
         // If no S/E found, year can be a pivot
         if !is_series {
             if let Some(m) = year_match {
@@ -306,7 +442,7 @@ impl FilenameParser {
 
         // 3. Extract Quality Attributes
         let quality_attrs = Self::extract_quality_attributes(filename);
-        
+
         // 4. Determine Title Part using Pivot
         let mut title_part = if pivot_start == 0 {
             // Leading pivot (e.g. "01_Title") - title is AFTER
@@ -326,29 +462,35 @@ impl FilenameParser {
         // 5. Advanced Title Cleaning
         // 5a. Remove Release Group prefixes: [Group], (Group), 【Group】
         static GROUP_RE: OnceLock<Regex> = OnceLock::new();
-        title_part = GROUP_RE.get_or_init(|| Regex::new(r"^(\[.*?\]|\(.*?\)|【.*?】)").unwrap())
+        title_part = GROUP_RE
+            .get_or_init(|| Regex::new(r"^(\[.*?\]|\(.*?\)|【.*?】)").unwrap())
             .replace(&title_part, "")
             .to_string();
 
         // 5b. Remove quality keywords from title part (case-insensitive)
-        title_part = Self::quality_pattern().replace_all(&title_part, "").to_string();
-        
+        title_part = Self::quality_pattern()
+            .replace_all(&title_part, "")
+            .to_string();
+
         // 5c. Remove year from title part if it existed
-        title_part = Self::year_pattern().replace_all(&title_part, "").to_string();
-        
+        title_part = Self::year_pattern()
+            .replace_all(&title_part, "")
+            .to_string();
+
         // 5d. Handle "Double Dash" or "Separator Overload"
-        title_part = title_part.replace(" - ", " ").replace('_', " ").replace('.', " ");
+        title_part = title_part
+            .replace(" - ", " ")
+            .replace('_', " ")
+            .replace('.', " ");
 
         // 6. Final normalization
-        let mut clean_title = title_part
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
+        let mut clean_title = title_part.split_whitespace().collect::<Vec<_>>().join(" ");
 
-        // Fallback: If title is empty after stripping (e.g. "S01E01.x264.mkv"), 
+        // Fallback: If title is empty after stripping (e.g. "S01E01.x264.mkv"),
         // use the original name without the pivot
         if clean_title.is_empty() {
-             clean_title = name.replace(&name[pivot_start..pivot_end], "")
+            clean_title = name
+                .replace(&name[pivot_start..pivot_end], "")
                 .replace('.', " ")
                 .replace('_', " ")
                 .trim()
@@ -362,7 +504,7 @@ impl FilenameParser {
             episode,
             year,
             is_series,
-    #[allow(dead_code)]
+            #[allow(dead_code)]
             quality_attrs,
         }
     }
@@ -387,8 +529,8 @@ impl FilenameParser {
         static TS_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
         static TC_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
         static DVD_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-        let ts_re  = TS_RE.get_or_init(|| Regex::new(r"(?i)\b(ts|telesync|telecine)\b").unwrap());
-        let tc_re  = TC_RE.get_or_init(|| Regex::new(r"(?i)\b(tc|telecine)\b").unwrap());
+        let ts_re = TS_RE.get_or_init(|| Regex::new(r"(?i)\b(ts|telesync|telecine)\b").unwrap());
+        let tc_re = TC_RE.get_or_init(|| Regex::new(r"(?i)\b(tc|telecine)\b").unwrap());
         let dvd_re = DVD_RE.get_or_init(|| Regex::new(r"(?i)\b(dvd|dvdrip|dvd5|dvd9)\b").unwrap());
 
         if fl.contains("remux") {
@@ -421,7 +563,7 @@ impl FilenameParser {
         // Audio
         static DD_RE: OnceLock<Regex> = OnceLock::new();
         let dd_re = DD_RE.get_or_init(|| Regex::new(r"(?i)dd[p\s.]*[0-9](\.[0-9])?").unwrap());
-        
+
         if fl.contains("atmos") {
             attrs.audio_codec = Some("Atmos".to_string());
         } else if fl.contains("truehd") {
@@ -458,8 +600,18 @@ impl FilenameParser {
 
         // Vietnamese
         let viet_sub_markers = ["vietsub", "sub viet", "phu de", "phụ đề"];
-        let viet_dub_markers = ["vie", "thuyet minh", "thuyết minh", "long tieng", "lồng tiếng", "tmph", "tvp", "tmpd", "vietdub"];
-        
+        let viet_dub_markers = [
+            "vie",
+            "thuyet minh",
+            "thuyết minh",
+            "long tieng",
+            "lồng tiếng",
+            "tmph",
+            "tvp",
+            "tmpd",
+            "vietdub",
+        ];
+
         if viet_sub_markers.iter().any(|m| fl.contains(m)) {
             attrs.viet_sub = true;
         }
@@ -470,7 +622,3 @@ impl FilenameParser {
         attrs
     }
 }
-
-
-
-

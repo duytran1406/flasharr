@@ -27,15 +27,14 @@ export interface FshareAccount {
 }
 
 /**
- * Integration Settings
+ * Result of an account mutation (POST/DELETE /api/accounts, POST .../refresh).
+ * `persisted` is set by the backend when the account was stored even though
+ * the login check failed (the list is refreshed in that case too).
  */
-export interface IntegrationSettings {
-  radarr_url: string;
-  radarr_api_key: string;
-  radarr_enabled: boolean;
-  sonarr_url: string;
-  sonarr_api_key: string;
-  sonarr_enabled: boolean;
+export interface AccountMutationResult {
+  success: boolean;
+  message?: string;
+  persisted?: boolean;
 }
 
 /**
@@ -44,7 +43,6 @@ export interface IntegrationSettings {
 interface SettingsStoreState {
   settings: Settings;
   accounts: FshareAccount[];
-  integrations: IntegrationSettings;
   loading: boolean;
   error: string | null;
   saveStatus: 'idle' | 'saving' | 'saved' | 'error';
@@ -65,14 +63,6 @@ function createSettingsStore() {
       debug_logs: true,
     },
     accounts: [],
-    integrations: {
-      radarr_url: 'http://localhost:7878',
-      radarr_api_key: '',
-      radarr_enabled: false,
-      sonarr_url: 'http://localhost:8989',
-      sonarr_api_key: '',
-      sonarr_enabled: false,
-    },
     loading: false,
     error: null,
     saveStatus: 'idle',
@@ -102,33 +92,17 @@ function createSettingsStore() {
       
       update(state => {
         const currentSettings = state.settings;
-        const currentIntegrations = state.integrations;
-        
-        const newSettings: Settings = {
-          ...currentSettings,
-          download_path: data.downloads?.directory || currentSettings.download_path,
-          max_concurrent_downloads: data.downloads?.max_concurrent || currentSettings.max_concurrent_downloads,
-          segments_per_download: data.downloads?.segments_per_download || currentSettings.segments_per_download,
-        };
-
-        const newIntegrations: IntegrationSettings = {
-          ...currentIntegrations,
-          sonarr_enabled: data.sonarr ? data.sonarr.enabled : currentIntegrations.sonarr_enabled,
-          sonarr_url: data.sonarr?.url || currentIntegrations.sonarr_url,
-          sonarr_api_key: data.sonarr?.api_key || currentIntegrations.sonarr_api_key,
-          radarr_enabled: data.radarr ? data.radarr.enabled : currentIntegrations.radarr_enabled,
-          radarr_url: data.radarr?.url || currentIntegrations.radarr_url,
-          radarr_api_key: data.radarr?.api_key || currentIntegrations.radarr_api_key,
-        };
-
         return {
           ...state,
-          settings: newSettings,
-          integrations: newIntegrations,
+          settings: {
+            ...currentSettings,
+            download_path: data.downloads?.directory || currentSettings.download_path,
+            max_concurrent_downloads: data.downloads?.max_concurrent || currentSettings.max_concurrent_downloads,
+            segments_per_download: data.downloads?.segments_per_download || currentSettings.segments_per_download,
+          },
           loading: false,
         };
       });
-
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to fetch settings';
       console.error('[SettingsStore] Fetch error:', errorMsg);
@@ -212,125 +186,66 @@ function createSettingsStore() {
   }
 
   /**
-   * Add Fshare account
+   * Add (or replace) an Fshare account. Returns the backend response body.
+   * The account list is refreshed when the request succeeded or the backend
+   * reports the account was persisted anyway.
    */
-  async function addAccount(email: string, password: string): Promise<boolean> {
+  async function addAccount(email: string, password: string): Promise<AccountMutationResult> {
     try {
       const response = await fetch(`${API_BASE}/accounts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
       });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
-      // Refresh accounts list
-      await fetchAccounts();
-      
-      return true;
+      const data: AccountMutationResult = await response
+        .json()
+        .catch(() => ({ success: false, message: `HTTP ${response.status}` }));
+      if (response.ok || data.persisted) await fetchAccounts();
+      return data;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to add account';
       console.error('[SettingsStore] Add account error:', errorMsg);
       update(state => ({ ...state, error: errorMsg }));
-      return false;
+      return { success: false, message: errorMsg };
     }
   }
 
   /**
-   * Remove Fshare account
+   * Remove an Fshare account. Returns the backend response body.
    */
-  async function removeAccount(email: string): Promise<boolean> {
+  async function removeAccount(email: string): Promise<AccountMutationResult> {
     try {
       const response = await fetch(`${API_BASE}/accounts/${encodeURIComponent(email)}`, {
         method: 'DELETE',
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      // Refresh accounts list
-      await fetchAccounts();
-      
-      return true;
+      const data: AccountMutationResult = await response
+        .json()
+        .catch(() => ({ success: false, message: `HTTP ${response.status}` }));
+      if (response.ok) await fetchAccounts();
+      return data;
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to remove account';
       console.error('[SettingsStore] Remove account error:', errorMsg);
-      return false;
+      return { success: false, message: errorMsg };
     }
   }
 
   /**
-   * Refresh account info
+   * Re-login / refresh quota info for an account. Returns the backend response body.
    */
-  async function refreshAccount(email: string): Promise<boolean> {
+  async function refreshAccount(email: string): Promise<AccountMutationResult> {
     try {
       const response = await fetch(`${API_BASE}/accounts/${encodeURIComponent(email)}/refresh`, {
         method: 'POST',
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      // Refresh accounts list
-      await fetchAccounts();
-      
-      return true;
+      const data: AccountMutationResult = await response
+        .json()
+        .catch(() => ({ success: false, message: `HTTP ${response.status}` }));
+      if (response.ok) await fetchAccounts();
+      return data;
     } catch (err) {
       console.error('[SettingsStore] Refresh account error:', err);
-      return false;
-    }
-  }
-
-  /**
-   * Test integration connection
-   */
-  async function testIntegration(type: 'radarr' | 'sonarr'): Promise<{ success: boolean; message: string }> {
-    try {
-      const response = await fetch(`${API_BASE}/integrations/${type}/test`, {
-        method: 'POST',
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        return { success: false, message: data.error || 'Connection failed' };
-      }
-
-      return { success: true, message: 'Connection successful' };
-    } catch (err) {
-      return { success: false, message: 'Connection failed' };
-    }
-  }
-
-  /**
-   * Save integration settings
-   */
-  async function saveIntegrations(newIntegrations: Partial<IntegrationSettings>): Promise<boolean> {
-    try {
-      const response = await fetch(`${API_BASE}/integrations`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newIntegrations),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      update(state => ({
-        ...state,
-        integrations: { ...state.integrations, ...newIntegrations },
-      }));
-
-      return true;
-    } catch (err) {
-      console.error('[SettingsStore] Save integrations error:', err);
-      return false;
+      return { success: false, message: 'Network error' };
     }
   }
 
@@ -370,8 +285,6 @@ function createSettingsStore() {
     addAccount,
     removeAccount,
     refreshAccount,
-    testIntegration,
-    saveIntegrations,
   };
 }
 
@@ -394,14 +307,6 @@ export const settings = derived(
 export const accounts = derived(
   settingsStore,
   $store => $store.accounts
-);
-
-/**
- * Derived store: Integrations
- */
-export const integrations = derived(
-  settingsStore,
-  $store => $store.integrations
 );
 
 /**
@@ -433,7 +338,7 @@ export function formatExpiry(timestamp: number): string {
 }
 
 /**
- * Helper: Format quota
+ * Helper: Format quota (not referenced by the 2026-09-02 build)
  */
 export function formatQuota(used: number, total: number): string {
   const usedGB = (used / (1024 ** 3)).toFixed(2);

@@ -17,8 +17,8 @@ WORKDIR /build
 
 # ── Planner stage: compute the dependency recipe ─────────────────────────────
 FROM chef AS planner
-COPY flasharr/backend/Cargo.toml flasharr/backend/Cargo.lock ./
-COPY flasharr/backend/src ./src
+COPY backend/Cargo.toml backend/Cargo.lock ./
+COPY backend/src ./src
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ── Backend builder: cook deps (cached unless Cargo.toml/lock change) ─────────
@@ -30,15 +30,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo chef cook --release --recipe-path recipe.json
 
 # Now copy real source and do the final incremental compile (just flasharr crate)
-COPY flasharr/backend/Cargo.toml flasharr/backend/Cargo.lock ./
-COPY flasharr/backend/src ./src
+COPY backend/Cargo.toml backend/Cargo.lock ./
+COPY backend/src ./src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     cargo build --release && \
     cp /build/target/release/flasharr /build/flasharr-binary
 
 # Frontend builder stage
-FROM node:22-slim as frontend-builder
+FROM node:22-slim AS frontend-builder
 
 # Install build tools for native modules
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -47,22 +47,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /build
+WORKDIR /build/frontend
 
-# Copy core-ui shared package
+# Shared UI kit, linked from frontend/package.json as "file:../core-ui".
+# Its own deps (animejs) must sit in core-ui/node_modules; svelte stays a
+# peer so only the frontend's copy is bundled.
+COPY core-ui/package.json core-ui/package-lock.json core-ui/.npmrc /build/core-ui/
+RUN --mount=type=cache,target=/root/.npm \
+    cd /build/core-ui && npm ci --prefer-offline
 COPY core-ui/ /build/core-ui/
 
-# Cache dependencies — rewrite workspace dep to local file ref
-COPY flasharr/frontend/package.json ./
-RUN sed -i 's|"@media-set/core-ui": "\*"|"@media-set/core-ui": "file:./core-ui"|' package.json
+# Cache dependencies (lockfile resolves native modules for the build platform)
+COPY frontend/package.json frontend/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
-    npm install --prefer-offline
-
-# Rebuild native modules for current platform (fixes lightningcss issue)
-RUN npm rebuild lightningcss --platform=linux --arch=x64
+    npm ci --prefer-offline
 
 # Build frontend
-COPY flasharr/frontend/ ./
+COPY frontend/ ./
 RUN npm run build
 
 # Final runtime stage
@@ -85,7 +86,7 @@ WORKDIR /app
 COPY --from=backend-builder /build/flasharr-binary /app/flasharr
 
 # Copy frontend static files
-COPY --from=frontend-builder /build/build /app/static
+COPY --from=frontend-builder /build/frontend/build /app/static
 
 # Add version metadata (must be before LABEL)
 ARG VERSION
@@ -113,7 +114,7 @@ RUN mkdir -p /appData/config /appData/data /appData/downloads /appData/logs && \
     chown -R flasharr:flasharr /appData /app
 
 # Copy entrypoint script
-COPY flasharr/docker-entrypoint.sh /app/docker-entrypoint.sh
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
 # Note: Container starts as root, entrypoint fixes volume permissions
@@ -121,6 +122,10 @@ RUN chmod +x /app/docker-entrypoint.sh
 
 # Set environment variables
 ENV FLASHARR_APPDATA_DIR=/appData \
+    PUID=911 \
+    PGID=911 \
+    UMASK=002 \
+    FLASHARR_RUN_AS_ROOT=false \
     RUST_LOG=flasharr=info,tower_http=info
 
 # Expose application port

@@ -9,10 +9,13 @@ pub mod client;
 pub use artifact_manager::{ArrArtifactManager, ArtifactStatus};
 pub use client::{
     ArrClient,
-    // Sonarr types
-    SonarrSeries, SonarrEpisode, SonarrCalendarEntry,
+    // Shared types
+    DiskSpace,
+    HealthCheck,
     // Radarr types
     RadarrMovie,
-    // Shared types
-    DiskSpace, HealthCheck,
+    SonarrCalendarEntry,
+    SonarrEpisode,
+    // Sonarr types
+    SonarrSeries,
 };

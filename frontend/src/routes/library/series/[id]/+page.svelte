@@ -1,6 +1,7 @@
 <script lang="ts">
   import { page } from "$app/stores";
   import { onMount } from "svelte";
+  import { ErrorState } from "@media-set/core-ui";
   import {
     fetchAllSeries,
     formatDiskSize,
@@ -23,6 +24,7 @@
   let series = $state<SonarrSeries | null>(null);
   let episodes = $state<SonarrEpisode[]>([]);
   let loading = $state(true);
+  let loadError = $state<string | null>(null);
   let activeSeason: number | "all" = $state("all");
 
   onMount(async () => {
@@ -39,22 +41,26 @@
       `;
     }
 
+    await loadSeries();
+  });
+
+  async function loadSeries() {
+    loading = true;
+    loadError = null;
     try {
-      // Fetch series data
       const allSeries = await fetchAllSeries();
       series = allSeries.find((s) => s.id === seriesId) || null;
 
-      // Fetch episodes
       const res = await fetch(`/api/arr/episodes?series_id=${seriesId}`);
-      if (res.ok) {
-        episodes = await res.json();
-      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      episodes = await res.json();
     } catch (e) {
       console.error("Failed to load series detail:", e);
+      loadError = "Could not load series details.";
     } finally {
       loading = false;
     }
-  });
+  }
 
   // Available seasons
   let seasons = $derived(() => {
@@ -118,14 +124,14 @@
       <div class="pulse-ring"></div>
       <span>LOADING SERIES DATA...</span>
     </div>
-  {:else if !series}
-    <div class="loading-state">
-      <span class="material-icons" style="font-size: 48px; opacity: 0.2;"
-        >error</span
-      >
-      <span>SERIES NOT FOUND</span>
-    </div>
-  {:else}
+  {:else if loadError}
+    <ErrorState
+      title="Series unavailable"
+      message={loadError}
+      showRetry
+      onRetry={loadSeries}
+    />
+  {:else if series}
     <!-- Hero Section -->
     <div
       class="hero"
@@ -249,6 +255,13 @@
           <p>No episodes found</p>
         </div>
       {/each}
+    </div>
+  {:else}
+    <div class="loading-state">
+      <span class="material-icons" style="font-size: 48px; opacity: 0.2;"
+        >error</span
+      >
+      <span>SERIES NOT FOUND</span>
     </div>
   {/if}
 </div>
@@ -434,6 +447,7 @@
     line-height: 1.5;
     max-width: 600px;
     display: -webkit-box;
+    line-clamp: 3;
     -webkit-line-clamp: 3;
     -webkit-box-orient: vertical;
     overflow: hidden;

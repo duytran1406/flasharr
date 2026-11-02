@@ -2,7 +2,24 @@
 //!
 //! Reusable functions for batch progress calculation and aggregation.
 
-use crate::downloader::{DownloadTask, DownloadState};
+use crate::downloader::{DownloadState, DownloadTask};
+
+pub fn canonical_tv_batch(
+    tvdb_id: Option<i64>,
+    tmdb_id: Option<i64>,
+    title: Option<&str>,
+) -> anyhow::Result<(String, String)> {
+    let batch_id = match (tvdb_id.filter(|id| *id > 0), tmdb_id.filter(|id| *id > 0)) {
+        (Some(id), _) => format!("media:tv:{id}"),
+        (None, Some(id)) => format!("media:tv-tmdb:{id}"),
+        (None, None) => anyhow::bail!("TV download requires a positive tvdb_id or tmdb_id"),
+    };
+    let batch_name = title
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("TV download requires a show title"))?;
+    Ok((batch_id, batch_name.to_string()))
+}
 
 /// Aggregate batch state from individual task states
 /// Returns the most representative state for display
@@ -11,13 +28,26 @@ pub fn aggregate_batch_state(tasks: &[DownloadTask]) -> DownloadState {
     if tasks.is_empty() {
         return DownloadState::Queued;
     }
-    
-    let downloading = tasks.iter().any(|t| matches!(t.state, DownloadState::Downloading | DownloadState::Starting));
-    let failed = tasks.iter().any(|t| matches!(t.state, DownloadState::Failed));
-    let paused = tasks.iter().any(|t| matches!(t.state, DownloadState::Paused));
-    let queued = tasks.iter().any(|t| matches!(t.state, DownloadState::Queued | DownloadState::Waiting));
-    let all_completed = tasks.iter().all(|t| matches!(t.state, DownloadState::Completed));
-    
+
+    let downloading = tasks.iter().any(|t| {
+        matches!(
+            t.state,
+            DownloadState::Downloading | DownloadState::Starting
+        )
+    });
+    let failed = tasks
+        .iter()
+        .any(|t| matches!(t.state, DownloadState::Failed));
+    let paused = tasks
+        .iter()
+        .any(|t| matches!(t.state, DownloadState::Paused));
+    let queued = tasks
+        .iter()
+        .any(|t| matches!(t.state, DownloadState::Queued | DownloadState::Waiting));
+    let all_completed = tasks
+        .iter()
+        .all(|t| matches!(t.state, DownloadState::Completed));
+
     if downloading {
         DownloadState::Downloading
     } else if all_completed {
@@ -50,32 +80,58 @@ impl BatchStats {
     /// Calculate stats from a slice of tasks
     pub fn from_tasks(tasks: &[DownloadTask]) -> Self {
         let total_items = tasks.len();
-        let completed_items = tasks.iter().filter(|t| matches!(t.state, DownloadState::Completed)).count();
-        let failed_items = tasks.iter().filter(|t| matches!(t.state, DownloadState::Failed)).count();
-        let downloading_items = tasks.iter()
-            .filter(|t| matches!(t.state, DownloadState::Downloading | DownloadState::Starting))
+        let completed_items = tasks
+            .iter()
+            .filter(|t| matches!(t.state, DownloadState::Completed))
             .count();
-        let paused_items = tasks.iter().filter(|t| matches!(t.state, DownloadState::Paused)).count();
-        let queued_items = tasks.iter()
+        let failed_items = tasks
+            .iter()
+            .filter(|t| matches!(t.state, DownloadState::Failed))
+            .count();
+        let downloading_items = tasks
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.state,
+                    DownloadState::Downloading | DownloadState::Starting
+                )
+            })
+            .count();
+        let paused_items = tasks
+            .iter()
+            .filter(|t| matches!(t.state, DownloadState::Paused))
+            .count();
+        let queued_items = tasks
+            .iter()
             .filter(|t| matches!(t.state, DownloadState::Queued | DownloadState::Waiting))
             .count();
-        
+
         let total_size: u64 = tasks.iter().map(|t| t.size).sum();
-        let downloaded_size: u64 = tasks.iter()
-            .map(|t| ((t.progress as f64 / 100.0) * t.size as f64) as u64)
+        let downloaded_size: u64 = tasks
+            .iter()
+            .map(|t| {
+                if matches!(t.state, DownloadState::Completed) {
+                    t.size
+                } else if t.downloaded > 0 {
+                    t.downloaded.min(t.size)
+                } else {
+                    ((t.progress as f64 / 100.0) * t.size as f64) as u64
+                }
+            })
             .sum();
-        
+
         let progress = if total_size > 0 {
             (downloaded_size as f64 / total_size as f64 * 100.0) as f32
         } else {
             0.0
         };
-        
-        let speed: f64 = tasks.iter()
+
+        let speed: f64 = tasks
+            .iter()
             .filter(|t| matches!(t.state, DownloadState::Downloading))
             .map(|t| t.speed)
             .sum();
-        
+
         Self {
             total_items,
             completed_items,
@@ -89,7 +145,7 @@ impl BatchStats {
             speed,
         }
     }
-    
+
     /// Calculate estimated time remaining in seconds
     pub fn eta(&self) -> f64 {
         let remaining = self.total_size.saturating_sub(self.downloaded_size);
@@ -104,32 +160,53 @@ impl BatchStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn make_task(state: DownloadState, size: u64, progress: f32) -> DownloadTask {
         DownloadTask {
             id: uuid::Uuid::new_v4(),
             state,
             size,
             progress,
-            speed: if matches!(state, DownloadState::Downloading) { 1000.0 } else { 0.0 },
+            speed: if matches!(state, DownloadState::Downloading) {
+                1000.0
+            } else {
+                0.0
+            },
             ..Default::default()
         }
     }
-    
+
+    #[test]
+    fn canonical_tv_batch_prefers_tvdb_and_ignores_season() {
+        assert_eq!(
+            canonical_tv_batch(Some(42), Some(84), Some("Test Series")).unwrap(),
+            ("media:tv:42".into(), "Test Series".into())
+        );
+    }
+
+    #[test]
+    fn canonical_tv_batch_requires_identity_and_title() {
+        assert!(canonical_tv_batch(None, None, Some("Test Series")).is_err());
+        assert!(canonical_tv_batch(Some(42), None, Some(" ")).is_err());
+    }
+
     #[test]
     fn test_aggregate_empty() {
         assert!(matches!(aggregate_batch_state(&[]), DownloadState::Queued));
     }
-    
+
     #[test]
     fn test_aggregate_all_completed() {
         let tasks = vec![
             make_task(DownloadState::Completed, 100, 100.0),
             make_task(DownloadState::Completed, 100, 100.0),
         ];
-        assert!(matches!(aggregate_batch_state(&tasks), DownloadState::Completed));
+        assert!(matches!(
+            aggregate_batch_state(&tasks),
+            DownloadState::Completed
+        ));
     }
-    
+
     #[test]
     fn test_aggregate_downloading_priority() {
         let tasks = vec![
@@ -137,9 +214,12 @@ mod tests {
             make_task(DownloadState::Downloading, 100, 50.0),
             make_task(DownloadState::Failed, 100, 0.0),
         ];
-        assert!(matches!(aggregate_batch_state(&tasks), DownloadState::Downloading));
+        assert!(matches!(
+            aggregate_batch_state(&tasks),
+            DownloadState::Downloading
+        ));
     }
-    
+
     #[test]
     fn test_batch_stats() {
         let tasks = vec![
@@ -147,7 +227,7 @@ mod tests {
             make_task(DownloadState::Downloading, 1000, 50.0),
         ];
         let stats = BatchStats::from_tasks(&tasks);
-        
+
         assert_eq!(stats.total_items, 2);
         assert_eq!(stats.completed_items, 1);
         assert_eq!(stats.downloading_items, 1);

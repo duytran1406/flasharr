@@ -2,15 +2,15 @@
 //!
 //! Configuration struct for the download engine with sensible defaults.
 
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Smart segment calculation constants
 /// **DEPRECATED**: Multi-segment downloads are no longer used
 #[allow(dead_code)]
-pub const MIN_SEGMENT_SIZE: u64 = 50 * 1024 * 1024;   // 50 MB minimum per segment
+pub const MIN_SEGMENT_SIZE: u64 = 50 * 1024 * 1024; // 50 MB minimum per segment
 #[allow(dead_code)]
-pub const MAX_SEGMENT_SIZE: u64 = 200 * 1024 * 1024;  // 200 MB maximum per segment
+pub const MAX_SEGMENT_SIZE: u64 = 200 * 1024 * 1024; // 200 MB maximum per segment
 #[allow(dead_code)]
 pub const MIN_SEGMENTS: u32 = 1;
 #[allow(dead_code)]
@@ -23,25 +23,32 @@ pub const SMALL_FILE_THRESHOLD: u64 = 100 * 1024 * 1024; // Files < 100MB use si
 pub struct DownloadConfig {
     /// Maximum concurrent file downloads (default: 2)
     pub max_concurrent: usize,
-    
+
     /// Default number of segments per download (default: 4)
     pub segments_per_download: usize,
-    
+
     /// Chunk size for reading from network (default: 1MB)
     pub chunk_size: usize,
-    
+
     /// Number of retry attempts for failed segments (default: 3)
     pub retry_attempts: u32,
-    
+
     /// Base retry backoff in seconds (default: 30)
     pub retry_backoff_base: u64,
-    
+
     /// Maximum retry wait time in seconds (default: 300)
     pub retry_max_wait: u64,
-    
-    /// Download directory path
+
+    /// Download directory path (container-internal)
     pub download_dir: PathBuf,
-    
+
+    /// Real (host-visible) base path for symlinks placed in the media library.
+    /// When set, replaces the `download_dir` prefix in symlink targets so that
+    /// Sonarr/Radarr containers (which share the same NFS/bind-mount but at a
+    /// different in-container path) can actually resolve the symlink.
+    /// Set via env var FLASHARR_SYMLINK_REAL_BASE, e.g. /data/flasharr-download
+    pub symlink_real_base: Option<PathBuf>,
+
     /// Retry configuration for failed downloads
     pub retry: RetryConfig,
 }
@@ -56,6 +63,9 @@ impl Default for DownloadConfig {
             retry_backoff_base: 30,
             retry_max_wait: 300,
             download_dir: PathBuf::from("/downloads"),
+            symlink_real_base: std::env::var("FLASHARR_SYMLINK_REAL_BASE")
+                .ok()
+                .map(PathBuf::from),
             retry: RetryConfig::default(),
         }
     }
@@ -66,16 +76,16 @@ impl Default for DownloadConfig {
 pub struct RetryConfig {
     /// Maximum number of retry attempts (default: 3)
     pub max_retries: u32,
-    
+
     /// Base delay in seconds for exponential backoff (default: 2)
     pub base_delay_secs: u64,
-    
+
     /// Maximum delay in seconds (default: 300 = 5 minutes)
     pub max_delay_secs: u64,
-    
+
     /// Base delay in milliseconds (for compatibility)
     pub base_delay_ms: u32,
-    
+
     /// Maximum delay in milliseconds (for compatibility)
     pub max_delay_ms: u32,
 }
@@ -86,8 +96,8 @@ impl Default for RetryConfig {
             max_retries: 3,
             base_delay_secs: 2,
             max_delay_secs: 300,
-            base_delay_ms: 1000,  // 1 second
-            max_delay_ms: 60000,  // 60 seconds
+            base_delay_ms: 1000, // 1 second
+            max_delay_ms: 60000, // 60 seconds
         }
     }
 }
@@ -114,19 +124,19 @@ impl DownloadConfig {
 pub fn calculate_optimal_segments(file_size: u64, user_max: u32) -> u32 {
     // Validate user_max
     let user_max = user_max.clamp(MIN_SEGMENTS, MAX_SEGMENTS);
-    
+
     if file_size == 0 {
         return 1;
     }
-    
+
     // Small files: single stream is more efficient
     if file_size < SMALL_FILE_THRESHOLD {
         return 1;
     }
-    
+
     // Calculate based on target segment size
     let optimal = (file_size / MIN_SEGMENT_SIZE) as u32;
-    
+
     // Clamp to reasonable range based on file size
     let optimal = if file_size < 500 * 1024 * 1024 {
         // < 500MB
@@ -137,7 +147,7 @@ pub fn calculate_optimal_segments(file_size: u64, user_max: u32) -> u32 {
     } else {
         optimal
     };
-    
+
     // Never exceed user's configured maximum, ensure at least 1
     optimal.clamp(1, user_max)
 }

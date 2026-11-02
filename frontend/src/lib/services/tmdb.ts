@@ -198,6 +198,31 @@ export async function getMovieDetails(id: string | number): Promise<TMDBMovieDet
 }
 
 /**
+ * Result of GET /api/tmdb/tv/resolve/:id — maps a /tv/[id] route param
+ * (legacy TMDB id or canonical TVDB id) to both identities.
+ */
+export interface TvRouteResolution {
+  canonical_tvdb_id: number;
+  legacy_tmdb_id: number;
+  /** true when the route id already was the TVDB id */
+  is_canonical_tv_route: boolean;
+}
+
+/**
+ * Resolve a TV route id to its TVDB-canonical identity (null on 404/error).
+ */
+export async function resolveTvRoute(id: string | number): Promise<TvRouteResolution | null> {
+  try {
+    const response = await fetch(`${API_BASE}/tv/resolve/${id}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    console.error(`[TMDB] Failed to resolve TV route id ${id}:`, error);
+    return null;
+  }
+}
+
+/**
  * Get TV show details
  */
 export async function getTVShowDetails(id: string | number): Promise<TMDBTVShowDetails | null> {

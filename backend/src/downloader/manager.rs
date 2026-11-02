@@ -3,13 +3,13 @@
 //! Simple task manager for in-memory task storage.
 //! Note: The DownloadEngine handles the actual download logic and persistence.
 
+use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use uuid::Uuid;
-use chrono::Utc;
 
-use super::task::{DownloadTask, DownloadState};
 use super::stats::EngineStats;
+use super::task::{DownloadState, DownloadTask};
 
 /// Thread-safe download task manager (in-memory only)
 pub struct DownloadTaskManager {
@@ -33,7 +33,7 @@ impl DownloadTaskManager {
         let mut tasks = self.tasks.write().await;
         tasks.insert(task.id, task);
     }
-    
+
     /// Restore multiple tasks from database (used on startup)
     /// Loads QUEUED/PAUSED tasks into HashMap so resume/pause operations work
     pub async fn restore_tasks(&self, tasks_to_restore: Vec<DownloadTask>) -> usize {
@@ -46,7 +46,6 @@ impl DownloadTaskManager {
         count
     }
 
-
     /// Get all tasks (deprecated - use get_active_tasks for real-time + DB for full list)
     pub async fn get_tasks(&self) -> Vec<DownloadTask> {
         let tasks = self.tasks.read().await;
@@ -57,8 +56,17 @@ impl DownloadTaskManager {
     /// This is the primary method for merging real-time data with DB queries
     pub async fn get_active_tasks(&self) -> Vec<DownloadTask> {
         let tasks = self.tasks.read().await;
-        tasks.values()
-            .filter(|t| matches!(t.state, DownloadState::Downloading | DownloadState::Starting))
+        tasks
+            .values()
+            .filter(|t| {
+                matches!(
+                    t.state,
+                    DownloadState::Downloading
+                        | DownloadState::Starting
+                        | DownloadState::Extracting
+                        | DownloadState::Importing
+                )
+            })
             .cloned()
             .collect()
     }
@@ -76,7 +84,15 @@ impl DownloadTaskManager {
     }
 
     /// Update task progress including speed, ETA, and total size
-    pub async fn update_task_progress(&self, id: Uuid, downloaded: u64, size: u64, speed: f64, eta: f64, progress: f32) {
+    pub async fn update_task_progress(
+        &self,
+        id: Uuid,
+        downloaded: u64,
+        size: u64,
+        speed: f64,
+        eta: f64,
+        progress: f32,
+    ) {
         let mut tasks = self.tasks.write().await;
         if let Some(task) = tasks.get_mut(&id) {
             task.downloaded = downloaded;
@@ -92,7 +108,7 @@ impl DownloadTaskManager {
         let mut tasks = self.tasks.write().await;
         tasks.remove(&id)
     }
-    
+
     /// Delete a task (alias for remove_task, returns bool)
     /// Also deletes the downloaded file if it exists
     pub async fn delete_task(&self, id: Uuid) -> bool {
@@ -107,14 +123,17 @@ impl DownloadTaskManager {
                     tracing::info!("Deleted file: {:?}", file_path);
                 }
             } else {
-                tracing::debug!("File not found (already deleted or never existed): {:?}", file_path);
+                tracing::debug!(
+                    "File not found (already deleted or never existed): {:?}",
+                    file_path
+                );
             }
             true
         } else {
             false
         }
     }
-    
+
     /// Pause a task
     /// This stops the active download by cancelling the cancel_token.
     /// The download can be resumed later and will continue from where it left off.
@@ -162,7 +181,7 @@ impl DownloadTaskManager {
         }
         None
     }
-    
+
     /// Retry a failed task
     pub async fn retry_task(&self, id: Uuid) -> Option<DownloadTask> {
         let mut tasks = self.tasks.write().await;
@@ -220,7 +239,7 @@ impl DownloadTaskManager {
         tracing::info!("Resumed {} downloads", count);
         count
     }
-    
+
     /// Get task count
     pub async fn count(&self) -> usize {
         let tasks = self.tasks.read().await;
@@ -243,7 +262,9 @@ impl DownloadTaskManager {
             if task.state == DownloadState::Downloading || task.state == DownloadState::Starting {
                 active += 1;
                 total_speed += task.speed;
-            } else if task.state == DownloadState::Extracting {
+            } else if task.state == DownloadState::Extracting
+                || task.state == DownloadState::Importing
+            {
                 active += 1;
             } else if task.state == DownloadState::Queued || task.state == DownloadState::Waiting {
                 queued += 1;
@@ -271,9 +292,9 @@ impl DownloadTaskManager {
 
         stats
     }
-    
-    /// Pop next queued task (for worker processing)
-    /// This atomically claims the task by changing its state to Starting
+
+    /// Pop next queued task (for worker processing).
+    /// Claims through `processing_tasks`; the worker owns QUEUED -> STARTING.
     /// Also checks for Waiting tasks whose wait_until time has passed
     pub async fn pop_next_queued(&self) -> Option<DownloadTask> {
         let now = Utc::now();
@@ -285,24 +306,28 @@ impl DownloadTaskManager {
             // Note: No clone needed - use reference directly
 
             // Check for waiting tasks
-            let waiting_id = tasks.values()
+            let waiting_id = tasks
+                .values()
                 .find(|t| {
-                    t.state == DownloadState::Waiting &&
-                    t.wait_until.map(|until| now >= until).unwrap_or(true) &&
-                    !processing.contains(&t.id)
+                    t.state == DownloadState::Waiting
+                        && t.wait_until.map(|until| now >= until).unwrap_or(true)
+                        && !processing.contains(&t.id)
                 })
                 .map(|t| t.id);
 
             // Collect queued task data for sorting (ID, priority, remaining_bytes, progress, created_at)
-            let queued: Vec<(Uuid, i32, u64, f32, chrono::DateTime<Utc>)> = tasks.values()
+            let queued: Vec<(Uuid, i32, u64, f32, chrono::DateTime<Utc>)> = tasks
+                .values()
                 .filter(|t| t.state == DownloadState::Queued && !processing.contains(&t.id))
-                .map(|t| (
-                    t.id,
-                    t.priority,
-                    t.size.saturating_sub(t.downloaded),
-                    t.progress,
-                    t.created_at
-                ))
+                .map(|t| {
+                    (
+                        t.id,
+                        t.priority,
+                        t.size.saturating_sub(t.downloaded),
+                        t.progress,
+                        t.created_at,
+                    )
+                })
                 .collect();
 
             (waiting_id, queued)
@@ -351,7 +376,7 @@ impl DownloadTaskManager {
             let mut tasks = self.tasks.write().await;
             let mut processing = self.processing_tasks.write().await;
 
-            if let Some(task) = tasks.get_mut(task_id) {
+            if let Some(task) = tasks.get(task_id) {
                 // CRITICAL: Re-check state since another worker may have claimed it
                 // between our read and this write
                 if task.state != DownloadState::Queued {
@@ -369,11 +394,15 @@ impl DownloadTaskManager {
                 }
 
                 tracing::debug!(
-                    "Claiming task {} (current state: {:?}, changing to Starting)",
+                    "Claiming task {} (current state: {:?})",
                     task_id,
                     task.state
                 );
-                task.state = DownloadState::Starting;
+                tracing::info!(
+                    task_id = %task_id,
+                    state_before = ?task.state,
+                    "qB lifecycle: queue claim"
+                );
                 processing.insert(*task_id);
                 tracing::debug!("Added task {} to processing set (from Queued)", task_id);
                 return Some(task.clone());
@@ -382,11 +411,17 @@ impl DownloadTaskManager {
 
         None
     }
-    
+
+    /// Release a worker claim when a task leaves active processing (for example WAITING retry).
+    pub async fn release_processing(&self, id: Uuid) {
+        self.processing_tasks.write().await.remove(&id);
+    }
+
     /// Get tasks by state
     pub async fn get_tasks_by_state(&self, state: DownloadState) -> Vec<DownloadTask> {
         let tasks = self.tasks.read().await;
-        tasks.values()
+        tasks
+            .values()
             .filter(|t| t.state == state)
             .cloned()
             .collect()
@@ -438,6 +473,64 @@ impl DownloadTaskManager {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn queued_claim_preserves_fresh_state_and_prevents_duplicate_claim() {
+        let manager = DownloadTaskManager::new();
+        let task = DownloadTask::new(
+            "magnet:?xt=urn:btih:test".into(),
+            "movie.mkv".into(),
+            "qbittorrent".into(),
+            "movies".into(),
+        );
+        let task_id = task.id;
+        manager.add_task(task).await;
+
+        let claimed = manager.pop_next_queued().await.expect("fresh task claimed");
+
+        assert_eq!(claimed.state, DownloadState::Queued);
+        assert_eq!(
+            manager
+                .get_task(task_id)
+                .await
+                .expect("task retained")
+                .state,
+            DownloadState::Queued
+        );
+        assert!(manager.pop_next_queued().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn expired_waiting_task_is_reclaimed_after_worker_releases_claim() {
+        let manager = DownloadTaskManager::new();
+        let task = DownloadTask::new(
+            "https://example.invalid/file".into(),
+            "episode.mkv".into(),
+            "fshare".into(),
+            "tv".into(),
+        );
+        let task_id = task.id;
+        manager.add_task(task).await;
+        manager.pop_next_queued().await.expect("initial claim");
+
+        let mut waiting = manager.get_task(task_id).await.expect("task retained");
+        waiting.state = DownloadState::Waiting;
+        waiting.wait_until = Some(Utc::now() - chrono::Duration::seconds(1));
+        manager.update_task(waiting).await;
+        manager.release_processing(task_id).await;
+
+        let reclaimed = manager
+            .pop_next_queued()
+            .await
+            .expect("expired retry reclaimed");
+        assert_eq!(reclaimed.id, task_id);
+        assert_eq!(reclaimed.state, DownloadState::Starting);
+    }
+}
+
 impl Default for DownloadTaskManager {
     fn default() -> Self {
         Self::new()
@@ -457,7 +550,7 @@ impl DownloadTaskManager {
     ) {
         tokio::spawn(async move {
             tracing::info!("TaskManager event listener started (Phase 4)");
-            
+
             while let Ok(event) = event_rx.recv().await {
                 match event {
                     super::events::TaskEvent::Created { task, .. } => {
@@ -465,7 +558,11 @@ impl DownloadTaskManager {
                         self.add_task(task).await;
                     }
                     super::events::TaskEvent::StateChanged { task, .. } => {
-                        tracing::debug!("Event: Task state changed {} -> {:?}", task.id, task.state);
+                        tracing::debug!(
+                            "Event: Task state changed {} -> {:?}",
+                            task.id,
+                            task.state
+                        );
                         self.update_task(task).await;
                     }
                     super::events::TaskEvent::Completed { task, .. } => {
@@ -478,7 +575,10 @@ impl DownloadTaskManager {
                         tokio::spawn(async move {
                             tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
                             if manager.remove_task(task_id).await.is_some() {
-                                tracing::info!("Auto-evicted completed task {} from cache", task_id);
+                                tracing::info!(
+                                    "Auto-evicted completed task {} from cache",
+                                    task_id
+                                );
                             }
                         });
                     }
@@ -503,21 +603,21 @@ impl DownloadTaskManager {
                     _ => {}
                 }
             }
-            
+
             tracing::warn!("TaskManager event listener stopped");
         });
     }
-    
+
     /// Start background cleanup loop (additional safety mechanism)
     /// Periodically evicts old completed/failed tasks that might have been missed by events
     pub fn start_cleanup_loop(self: Arc<Self>) {
         tokio::spawn(async move {
             tracing::info!("TaskManager background cleanup loop started");
-            
+
             loop {
                 // Run cleanup every 10 minutes
                 tokio::time::sleep(tokio::time::Duration::from_secs(600)).await;
-                
+
                 let mut evicted_count = 0;
                 let now = Utc::now();
 

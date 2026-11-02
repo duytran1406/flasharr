@@ -26,6 +26,16 @@
   :global(body) {
     margin: 0;
     padding: 0;
+    min-height: 100vh;
+    min-height: 100dvh;
     overflow: hidden;
+  }
+
+  :global(.setup-container),
+  :global(.setup-page) {
+    min-height: 100vh;
+    min-height: 100dvh;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 </style>

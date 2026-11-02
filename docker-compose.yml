@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   flasharr:
     build:
@@ -15,13 +13,19 @@ services:
     volumes:
       # AppData volume for persistence
       - ./appData:/appData
-      
-      # Optional: Separate downloads volume
-      # - /path/to/downloads:/appData/downloads
-    
+
+      # Shared download staging folder visible to Flasharr and Sonarr/Radarr
+      # - /path/to/flasharr-download:/downloads
+      # - /path/to/flasharr-download:/data/flasharr-download
+
     environment:
       # AppData directory
       - FLASHARR_APPDATA_DIR=/appData
+      - FLASHARR_SYMLINK_REAL_BASE=/data/flasharr-download
+      - PUID=911
+      - PGID=911
+      - UMASK=002
+      - FLASHARR_RUN_AS_ROOT=false
       
       # Logging level
       - RUST_LOG=flasharr=info,tower_http=info

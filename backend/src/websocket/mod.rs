@@ -2,15 +2,36 @@
 //!
 //! Provides WebSocket endpoint for broadcasting download progress and task updates.
 
+use crate::downloader::{DownloadTask, EngineStats};
+use crate::torrent::instance_manager::QbitEvent;
+use crate::AppState;
 use axum::{
-    extract::{ws::{Message, WebSocket, WebSocketUpgrade}, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        State,
+    },
     response::IntoResponse,
 };
-use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use crate::AppState;
-use crate::downloader::{DownloadTask, EngineStats};
+use std::sync::Arc;
+
+fn resolve_info_path(tmdb_id: Option<i64>, media_type: Option<&str>) -> Option<String> {
+    match (tmdb_id, media_type) {
+        (Some(tmdb_id), Some("tv")) => Some(format!("/tv/{}", tmdb_id)),
+        (Some(tmdb_id), Some("movie")) => Some(format!("/movie/{}", tmdb_id)),
+        _ => None,
+    }
+}
+
+fn enrich_task(mut task: DownloadTask) -> DownloadTask {
+    task.info_path = resolve_info_path(task.tmdb_id, task.media_type.as_deref());
+    task
+}
+
+fn enrich_tasks(tasks: Vec<DownloadTask>) -> Vec<DownloadTask> {
+    tasks.into_iter().map(enrich_task).collect()
+}
 
 /// WebSocket message types sent to clients
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,26 +40,112 @@ pub enum WsMessage {
     /// Initial sync of all tasks on connection
     #[serde(rename = "SYNC_ALL")]
     SyncAll { tasks: Vec<DownloadTask> },
-    
+
     /// Task was added
     #[serde(rename = "TASK_ADDED")]
     TaskAdded { task: DownloadTask },
-    
+
     /// Task was updated (progress, state change)
     #[serde(rename = "TASK_UPDATED")]
     TaskUpdated { task: DownloadTask },
-    
+
     /// Batch of task updates (sent every 500ms to reduce message spam)
     #[serde(rename = "TASK_BATCH_UPDATE")]
     TaskBatchUpdate { tasks: Vec<DownloadTask> },
-    
+
     /// Task was removed
     #[serde(rename = "TASK_REMOVED")]
     TaskRemoved { task_id: String },
-    
+
     /// Engine statistics update
     #[serde(rename = "ENGINE_STATS")]
     EngineStats { stats: EngineStats },
+
+    #[serde(rename = "QBIT_SYNC_INIT")]
+    QbitSyncInit {
+        instance_id: String,
+        torrents: Vec<crate::api::downloads::UnifiedTorrentRow>,
+        full_update: bool,
+        replaces_instance: bool,
+    },
+
+    #[serde(rename = "QBIT_TORRENT_UPSERT")]
+    QbitTorrentUpsert {
+        instance_id: String,
+        torrent: crate::api::downloads::UnifiedTorrentRow,
+    },
+
+    #[serde(rename = "QBIT_TORRENT_REMOVED")]
+    QbitTorrentRemoved { instance_id: String, hash: String },
+
+    #[serde(rename = "QBIT_TRANSFER_INFO")]
+    QbitTransferInfo {
+        instance_id: String,
+        info: crate::torrent::qbittorrent::QBittorrentTransferInfo,
+    },
+
+    #[serde(rename = "QBIT_ERROR")]
+    QbitError {
+        instance_id: String,
+        message: String,
+    },
+
+    #[serde(rename = "QBIT_HEARTBEAT")]
+    QbitHeartbeat { instance_id: String },
+
+    #[serde(rename = "INTEGRATION_SETTINGS_CHANGED")]
+    IntegrationSettingsChanged,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn qbit_sync_init_is_explicit_full_replacement() {
+        let value = serde_json::to_value(WsMessage::QbitSyncInit {
+            instance_id: "qbit".into(),
+            torrents: vec![],
+            full_update: true,
+            replaces_instance: true,
+        })
+        .unwrap();
+        assert_eq!(value["type"], "QBIT_SYNC_INIT");
+        assert_eq!(value["full_update"], true);
+        assert_eq!(value["replaces_instance"], true);
+    }
+
+    #[test]
+    fn task_event_json_preserves_legacy_and_semantic_fields() {
+        let mut task = DownloadTask::default();
+        task.url = "magnet:?xt=secret".into();
+        task.original_url = "https://signed.example/secret".into();
+        task.destination = "/private/media/path".into();
+        task.state = crate::downloader::DownloadState::Paused;
+        task.task_state = Some("PAUSED".into());
+        task.qbit_state = Some("pausedDL".into());
+        task.sync_health = Some("stale".into());
+        task.last_sync_at = Some("2026-07-16T00:00:00Z".into());
+        task.transfer_state = Some("paused".into());
+        task.transfer_active = false;
+        let value = serde_json::to_value(WsMessage::TaskUpdated { task }).unwrap();
+        assert_eq!(value["task"]["state"], "PAUSED");
+        assert_eq!(value["task"]["qbit_state"], "pausedDL");
+        assert_eq!(value["task"]["sync_health"], "stale");
+        assert_eq!(value["task"]["transfer_active"], false);
+        assert!(value["task"].get("url").is_none());
+        assert!(value["task"].get("original_url").is_none());
+        assert!(value["task"].get("destination").is_none());
+    }
+
+    #[test]
+    fn integration_settings_event_contains_no_configuration() {
+        let value = serde_json::to_value(WsMessage::IntegrationSettingsChanged).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({ "type": "INTEGRATION_SETTINGS_CHANGED" })
+        );
+    }
 }
 
 pub async fn handler(
@@ -50,14 +157,26 @@ pub async fn handler(
 
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let (mut sender, mut receiver) = socket.split();
-    
+
     tracing::debug!("WebSocket client connected");
-    
+
     // Send initial SYNC_ALL message with only active tasks (DOWNLOADING/STARTING)
     // Historical tasks should be loaded via API with pagination
-    let tasks = state.download_orchestrator.task_manager().get_active_tasks().await;
-    let sync_msg = WsMessage::SyncAll { tasks };
-    
+    let tasks = state
+        .download_orchestrator
+        .task_manager()
+        .get_active_tasks()
+        .await;
+    let (qbit_rows, qbit_instances) = crate::api::downloads::qbit_task_mirrors(&state);
+    let sync_msg = WsMessage::SyncAll {
+        tasks: tasks
+            .into_iter()
+            .map(|task| {
+                crate::api::downloads::enrich_task_semantics(task, &qbit_rows, &qbit_instances)
+            })
+            .collect(),
+    };
+
     if let Ok(json) = serde_json::to_string(&sync_msg) {
         if sender.send(Message::Text(json)).await.is_err() {
             tracing::warn!("Failed to send SYNC_ALL to new client");
@@ -65,16 +184,51 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         }
         tracing::debug!("Sent SYNC_ALL to client");
     }
-    
+
+    if let Ok(snapshot) = state.db.qbit_snapshot_full() {
+        let managed_tasks = state.db.get_all_tasks().unwrap_or_default();
+        let metadata = state
+            .db
+            .list_qbit_instances()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|i| (i.id.clone(), i))
+            .collect::<std::collections::HashMap<_, _>>();
+        for (instance_id, torrents) in snapshot {
+            let meta = metadata.get(&instance_id);
+            let msg = WsMessage::QbitSyncInit {
+                instance_id,
+                torrents: crate::api::downloads::project_managed_torrents(
+                    managed_tasks.clone(),
+                    torrents,
+                    &metadata,
+                ),
+                full_update: true,
+                replaces_instance: true,
+            };
+            if let Ok(json) = serde_json::to_string(&msg) {
+                if sender.send(Message::Text(json)).await.is_err() {
+                    tracing::warn!("Failed to send QBIT_SYNC_INIT to new client");
+                    return;
+                }
+            }
+        }
+    }
+
     // Subscribe to task events from the event bus (event-driven architecture)
     let mut event_rx = state.download_orchestrator.subscribe_events();
-    
+
     // ALSO subscribe to legacy progress channel (for download progress updates)
     let mut progress_rx = state.download_orchestrator.subscribe_progress();
-    
+
+    let mut qbit_rx = state.qbit_manager.subscribe();
+    let mut integration_settings_rx = state.integration_settings_tx.subscribe();
+
     // Clone state for the send task
     let orchestrator = state.download_orchestrator.clone();
-    
+    let (mut task_qbit_rows, task_qbit_instances) =
+        crate::api::downloads::qbit_task_mirrors(&state);
+
     // Spawn a task to handle incoming messages (ping/pong, client commands)
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
@@ -102,28 +256,31 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let mut send_task = tokio::spawn(async move {
         // Send periodic stats updates (check every 2 seconds)
         let mut stats_interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
-        
+
         // Batch update interval (500ms)
         let mut batch_interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
-        
+
         // Track last sent stats to avoid sending duplicates
         let mut last_stats: Option<EngineStats> = None;
-        
+
         // Pending task updates to batch (use HashMap to deduplicate by task_id)
-        let mut pending_updates: std::collections::HashMap<uuid::Uuid, DownloadTask> = std::collections::HashMap::new();
-        
+        let mut pending_updates: std::collections::HashMap<uuid::Uuid, DownloadTask> =
+            std::collections::HashMap::new();
+
         loop {
             tokio::select! {
                 result = event_rx.recv() => {
                     match result {
                         Ok(event) => {
                             use crate::downloader::events::TaskEvent as TE;
-                            
+
                             // Route message based on event type
                             match event {
                                 TE::Created { task } => {
                                     // Send TASK_ADDED immediately (not batched)
-                                    let msg = WsMessage::TaskAdded { task };
+                                    let msg = WsMessage::TaskAdded {
+                                        task: crate::api::downloads::enrich_task_semantics(task, &task_qbit_rows, &task_qbit_instances),
+                                    };
                                     if let Ok(json) = serde_json::to_string(&msg) {
                                         if sender.send(Message::Text(json)).await.is_err() {
                                             tracing::debug!("WebSocket client disconnected during event broadcast");
@@ -131,8 +288,22 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                         }
                                     }
                                 }
-                                TE::StateChanged { task, .. } => {
-                                    // Batch state changes
+                                TE::StateChanged { task, .. } |
+                                TE::Completed { task, .. } |
+                                TE::Failed { task, .. } => {
+                                    // Send TASK_UPDATED immediately (not batched) for state transitions
+                                    let msg = WsMessage::TaskUpdated {
+                                        task: crate::api::downloads::enrich_task_semantics(task.clone(), &task_qbit_rows, &task_qbit_instances),
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&msg) {
+                                        if sender.send(Message::Text(json)).await.is_err() {
+                                            tracing::debug!("WebSocket client disconnected during event broadcast");
+                                            break;
+                                        }
+                                    }
+
+                                    // Also insert into pending_updates to ensure the next batch
+                                    // has the latest data (percentage, speed) reconciled
                                     pending_updates.insert(task.id, task);
                                 }
                                 TE::ProgressUpdated { task_id, .. } => {
@@ -140,14 +311,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     if let Some(task) = orchestrator.get_task_unified(task_id).await {
                                         pending_updates.insert(task.id, task);
                                     }
-                                }
-                                TE::Failed { task, .. } => {
-                                    // Batch failures
-                                    pending_updates.insert(task.id, task);
-                                }
-                                TE::Completed { task, .. } => {
-                                    // Batch completions
-                                    pending_updates.insert(task.id, task);
                                 }
                                 TE::Removed { task_id, .. } => {
                                     // Send TASK_REMOVED immediately (not batched)
@@ -172,7 +335,56 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         }
                     }
                 }
-                
+
+                result = integration_settings_rx.recv() => {
+                    match result {
+                        Ok(()) => {
+                            if let Ok(json) = serde_json::to_string(&WsMessage::IntegrationSettingsChanged) {
+                                if sender.send(Message::Text(json)).await.is_err() {
+                                    tracing::debug!("WebSocket client disconnected during integration invalidation");
+                                    break;
+                                }
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+
+                result = qbit_rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            let msg = match event {
+                                QbitEvent::TorrentUpsert { instance_id, torrent } => {
+                                    task_qbit_rows.insert((instance_id.clone(), torrent.hash.to_ascii_lowercase()), torrent.clone());
+                                    let tasks = orchestrator.task_manager().get_tasks().await;
+                                    let mut projected = crate::api::downloads::project_managed_torrents(
+                                        tasks,
+                                        [torrent],
+                                        &task_qbit_instances,
+                                    );
+                                    let Some(torrent) = projected.pop() else { continue; };
+                                    WsMessage::QbitTorrentUpsert { instance_id, torrent }
+                                },
+                                QbitEvent::TorrentRemoved { instance_id, hash } => WsMessage::QbitTorrentRemoved { instance_id, hash },
+                                QbitEvent::TransferInfo { instance_id, info } => WsMessage::QbitTransferInfo { instance_id, info },
+                                QbitEvent::Error { instance_id, message } => WsMessage::QbitError { instance_id, message },
+                                QbitEvent::Heartbeat { instance_id } => WsMessage::QbitHeartbeat { instance_id },
+                            };
+                            if let Ok(json) = serde_json::to_string(&msg) {
+                                if sender.send(Message::Text(json)).await.is_err() {
+                                    tracing::debug!("WebSocket client disconnected during qBittorrent event");
+                                    break;
+                                }
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                            tracing::debug!("qBittorrent channel lagged, skipped {} messages", count);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+
                 // Handle legacy progress updates (download progress, speed, ETA)
                 result = progress_rx.recv() => {
                     match result {
@@ -193,15 +405,18 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         }
                     }
                 }
-                
+
                 // Batch interval tick - send all pending updates
                 _ = batch_interval.tick() => {
                     if !pending_updates.is_empty() {
-                        let tasks: Vec<DownloadTask> = pending_updates.drain().map(|(_, task)| task).collect();
+                        let tasks: Vec<DownloadTask> = pending_updates
+                            .drain()
+                            .map(|(_, task)| crate::api::downloads::enrich_task_semantics(task, &task_qbit_rows, &task_qbit_instances))
+                            .collect();
                         let count = tasks.len();
-                        
+
                         let msg = WsMessage::TaskBatchUpdate { tasks };
-                        
+
                         if let Ok(json) = serde_json::to_string(&msg) {
                             if sender.send(Message::Text(json)).await.is_err() {
                                 tracing::debug!("WebSocket client disconnected during batch update");
@@ -211,27 +426,27 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         }
                     }
                 }
-                
+
                 // Check stats periodically, but only send if changed
                 _ = stats_interval.tick() => {
                     let stats = orchestrator.get_stats().await;
-                    
+
                     // Only send if stats have changed
                     let should_send = match &last_stats {
                         None => true, // First time, always send
                         Some(prev) => prev != &stats, // Only send if different
                     };
-                    
+
                     if should_send {
                         let msg = WsMessage::EngineStats { stats: stats.clone() };
-                        
+
                         if let Ok(json) = serde_json::to_string(&msg) {
                             if sender.send(Message::Text(json)).await.is_err() {
                                 tracing::debug!("WebSocket client disconnected during stats update");
                                 break;
                             }
                         }
-                        
+
                         // Update last sent stats
                         last_stats = Some(stats);
                     }
@@ -245,6 +460,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         _ = (&mut recv_task) => send_task.abort(),
         _ = (&mut send_task) => recv_task.abort(),
     }
-    
+
     tracing::debug!("WebSocket connection closed");
 }

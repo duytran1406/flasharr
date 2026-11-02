@@ -3,13 +3,13 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use crate::db::media::{MediaEpisode, MediaItem};
 use crate::AppState;
-use crate::db::media::{MediaItem, MediaEpisode};
 
 #[derive(Serialize)]
 pub struct MediaItemResponse {
@@ -62,9 +62,29 @@ pub struct MediaDownloadsResponse {
 #[derive(Deserialize)]
 pub struct SmartGrabRequest {
     pub tmdb_id: i64,
-    pub media_type: String, // "movie" or "tv"
+    #[serde(default, alias = "tvdbId")]
+    pub tvdb_id: Option<i64>,
+    pub media_type: String,
     pub title: String,
     pub year: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct SmartGrabResponse {
+    pub success: bool,
+    pub tmdb_id: i64,
+    pub media_type: String,
+    pub status: String,
+    pub message: String,
+}
+
+#[derive(Serialize)]
+pub struct SmartGrabErrorResponse {
+    pub success: bool,
+    pub tmdb_id: Option<i64>,
+    pub media_type: Option<String>,
+    pub status: String,
+    pub message: String,
 }
 
 pub fn router() -> Router<Arc<AppState>> {
@@ -82,12 +102,15 @@ pub fn router() -> Router<Arc<AppState>> {
 async fn list_media(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<MediaItemResponse>>, (axum::http::StatusCode, String)> {
-    let items = state.db.get_all_media_items_async().await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {}", e)))?;
-    
-    let counts = state.db.get_media_download_counts()
-        .unwrap_or_default();
-    
+    let items = state.db.get_all_media_items_async().await.map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            format!("DB error: {}", e),
+        )
+    })?;
+
+    let counts = state.db.get_media_download_counts().unwrap_or_default();
+
     let response: Vec<MediaItemResponse> = items
         .into_iter()
         .map(|item| {
@@ -98,7 +121,7 @@ async fn list_media(
             }
         })
         .collect();
-    
+
     Ok(Json(response))
 }
 
@@ -107,21 +130,35 @@ async fn get_media_detail(
     State(state): State<Arc<AppState>>,
     Path(tmdb_id): Path<i64>,
 ) -> Result<Json<MediaDetailResponse>, (axum::http::StatusCode, String)> {
-    let result = state.db.get_media_with_downloads_async(tmdb_id).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {}", e)))?;
-    
+    let result = state
+        .db
+        .get_media_with_downloads_async(tmdb_id)
+        .await
+        .map_err(|e| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DB error: {}", e),
+            )
+        })?;
+
     match result {
         Some((item, downloads)) => {
-            let episodes = state.db.get_episodes_for_series_async(tmdb_id).await
+            let episodes = state
+                .db
+                .get_episodes_for_series_async(tmdb_id)
+                .await
                 .unwrap_or_default();
-            
+
             Ok(Json(MediaDetailResponse {
                 item,
                 episodes,
                 downloads,
             }))
         }
-        None => Err((axum::http::StatusCode::NOT_FOUND, format!("Media item with TMDB ID {} not found", tmdb_id))),
+        None => Err((
+            axum::http::StatusCode::NOT_FOUND,
+            format!("Media item with TMDB ID {} not found", tmdb_id),
+        )),
     }
 }
 
@@ -130,9 +167,17 @@ async fn get_media_episodes(
     State(state): State<Arc<AppState>>,
     Path(tmdb_id): Path<i64>,
 ) -> Result<Json<Vec<MediaEpisode>>, (axum::http::StatusCode, String)> {
-    let episodes = state.db.get_episodes_for_series_async(tmdb_id).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {}", e)))?;
-    
+    let episodes = state
+        .db
+        .get_episodes_for_series_async(tmdb_id)
+        .await
+        .map_err(|e| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DB error: {}", e),
+            )
+        })?;
+
     Ok(Json(episodes))
 }
 
@@ -153,13 +198,35 @@ async fn get_media_downloads(
     };
 
     // Step 2: Query downloads directly by tmdb_id (no media_items join needed)
-    let downloads = state.db.get_downloads_by_tmdb_id_async(tmdb_id).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {}", e)))?;
+    let downloads = state
+        .db
+        .get_downloads_by_tmdb_id_async(tmdb_id)
+        .await
+        .map_err(|e| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DB error: {}", e),
+            )
+        })?;
 
-    let total = downloads.len();
     let mut episodes: HashMap<String, Vec<DownloadInstance>> = HashMap::new();
 
     for dl in downloads {
+        let active = matches!(
+            dl.state,
+            crate::downloader::DownloadState::Queued
+                | crate::downloader::DownloadState::Starting
+                | crate::downloader::DownloadState::Downloading
+                | crate::downloader::DownloadState::Paused
+                | crate::downloader::DownloadState::Waiting
+                | crate::downloader::DownloadState::Importing
+        );
+        if !active
+            && tokio::fs::metadata(&dl.destination).await.is_err()
+            && tokio::fs::symlink_metadata(&dl.destination).await.is_err()
+        {
+            continue;
+        }
         let key = match (dl.tmdb_season, dl.tmdb_episode) {
             (Some(s), Some(e)) => format!("S{:02}E{:02}", s, e),
             _ => "movie".to_string(),
@@ -180,6 +247,7 @@ async fn get_media_downloads(
         });
     }
 
+    let total = episodes.values().map(Vec::len).sum();
     Ok(Json(MediaDownloadsResponse {
         tmdb_id,
         media_type,
@@ -193,15 +261,72 @@ async fn get_media_downloads(
 async fn smart_grab(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<SmartGrabRequest>,
-) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
-    state.discovery_service.smart_grab(
-        payload.tmdb_id,
-        &payload.media_type,
-        &payload.title,
-        payload.year,
-    ).await
-    .map(Json)
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e))
+) -> Result<Json<Value>, (axum::http::StatusCode, Json<SmartGrabErrorResponse>)> {
+    let media_type = payload.media_type.trim().to_lowercase();
+    let title = payload.title.trim();
+
+    if payload.tmdb_id <= 0 {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(SmartGrabErrorResponse {
+                success: false,
+                tmdb_id: Some(payload.tmdb_id),
+                media_type: Some(media_type),
+                status: "failed".to_string(),
+                message: "tmdb_id must be a positive integer".to_string(),
+            }),
+        ));
+    }
+
+    if media_type != "movie" && media_type != "tv" {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(SmartGrabErrorResponse {
+                success: false,
+                tmdb_id: Some(payload.tmdb_id),
+                media_type: Some(media_type),
+                status: "failed".to_string(),
+                message: "media_type must be 'movie' or 'tv'".to_string(),
+            }),
+        ));
+    }
+
+    if title.is_empty() {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(SmartGrabErrorResponse {
+                success: false,
+                tmdb_id: Some(payload.tmdb_id),
+                media_type: Some(media_type),
+                status: "failed".to_string(),
+                message: "title is required".to_string(),
+            }),
+        ));
+    }
+
+    state
+        .discovery_service
+        .smart_grab(
+            payload.tmdb_id,
+            payload.tvdb_id,
+            &media_type,
+            title,
+            payload.year,
+        )
+        .await
+        .map(Json)
+        .map_err(|(status_code, status, message)| {
+            (
+                status_code,
+                Json(SmartGrabErrorResponse {
+                    success: false,
+                    tmdb_id: Some(payload.tmdb_id),
+                    media_type: Some(media_type),
+                    status,
+                    message,
+                }),
+            )
+        })
 }
 
 /// GET /api/media/history — Get download history
@@ -209,9 +334,17 @@ async fn get_media_history(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<crate::downloader::task::DownloadTask>>, (axum::http::StatusCode, String)> {
     let host = std::env::var("FLASHARR_HOST").unwrap_or_else(|_| "flasharr".to_string());
-    state.db.get_history_async(&host).await
+    state
+        .db
+        .get_history_async(&host)
+        .await
         .map(Json)
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, format!("DB error: {}", e)))
+        .map_err(|e| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DB error: {}", e),
+            )
+        })
 }
 
 /// POST /api/media/sync — Trigger library synchronization manually
@@ -219,7 +352,7 @@ async fn trigger_sync(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, (axum::http::StatusCode, String)> {
     let sync_service = Arc::clone(&state.library_sync_service);
-    
+
     // Run sync in a background task so it doesn't timeout the HTTP request
     tokio::spawn(async move {
         if let Err(e) = sync_service.sync_all().await {
@@ -228,7 +361,7 @@ async fn trigger_sync(
             tracing::info!("[API] Manual library sync completed");
         }
     });
-    
+
     Ok(Json(serde_json::json!({
         "status": "success",
         "message": "Library synchronization started in background"
